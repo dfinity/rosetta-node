@@ -1,0 +1,158 @@
+//! Non-interactive DKG types.
+pub use crate::encrypt::forward_secure::{
+    CspFsEncryptionPok, CspFsEncryptionPublicKey, FsEncryptionPublicKey,
+};
+use phantom_newtype::AmountOf;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::hash::Hash;
+use strum_macros::IntoStaticStr;
+
+/// Input for threshold signature key material
+#[derive(Clone, Debug, Eq, IntoStaticStr, PartialEq, Hash, Serialize, Deserialize)]
+#[allow(non_camel_case_types)]
+pub enum CspNiDkgDealing {
+    Groth20_Bls12_381(ni_dkg_groth20_bls12_381::Dealing),
+}
+impl CspNiDkgDealing {
+    /// Generates an instance of a dealing, for use in stub implementations.
+    /// TODO: Delete when stub implementations are complete.
+    pub fn placeholder_to_delete(seed: u8) -> Self {
+        use ni_dkg_groth20_bls12_381 as scheme;
+        fn fr(seed: u8) -> scheme::Fr {
+            scheme::Fr([seed; scheme::Fr::SIZE])
+        }
+        fn g1(seed: u8) -> scheme::G1 {
+            scheme::G1([seed; scheme::G1::SIZE])
+        }
+        fn g2(seed: u8) -> scheme::G2 {
+            scheme::G2([seed; scheme::G2::SIZE])
+        }
+        const NUM_RECEIVERS: usize = 1;
+        CspNiDkgDealing::Groth20_Bls12_381(scheme::Dealing {
+            public_coefficients: scheme::PublicCoefficients {
+                coefficients: Vec::new(),
+            },
+            ciphertexts: scheme::EncryptedShares {
+                rand_r: [g1(seed); scheme::NUM_CHUNKS],
+                rand_s: [g1(seed); scheme::NUM_CHUNKS],
+                rand_z: [g2(seed); scheme::NUM_CHUNKS],
+                ciphertext_chunks: (0..NUM_RECEIVERS)
+                    .map(|i| [g1(seed ^ (i as u8)); scheme::NUM_CHUNKS])
+                    .collect(),
+            },
+            zk_proof_decryptability: ni_dkg_groth20_bls12_381::ZKProofDec {
+                // TODO(CRP-530): Populate this when it has been defined in the spec.
+                first_move_y0: g1(seed),
+                first_move_b: [g1(seed); scheme::NUM_ZK_REPETITIONS],
+                first_move_c: [g1(seed); scheme::NUM_ZK_REPETITIONS],
+                second_move_d: (0..NUM_RECEIVERS + 1)
+                    .map(|i| g1(seed ^ (i as u8)))
+                    .collect(),
+                second_move_y: g1(seed),
+                response_z_r: (0..NUM_RECEIVERS).map(|i| fr(seed | (i as u8))).collect(),
+                response_z_s: [fr(seed); scheme::NUM_ZK_REPETITIONS],
+                response_z_b: fr(seed),
+            },
+            zk_proof_correct_sharing: ni_dkg_groth20_bls12_381::ZKProofShare {
+                first_move_f: g1(seed),
+                first_move_a: g2(seed),
+                first_move_y: g1(seed),
+                response_z_r: fr(seed),
+                response_z_a: fr(seed),
+            },
+        })
+    }
+}
+
+/// All the public data needed for threshold key derivation.
+#[derive(Clone, Debug, Eq, IntoStaticStr, PartialEq, Hash, Serialize, Deserialize)]
+#[allow(non_camel_case_types)]
+pub enum CspNiDkgTranscript {
+    Groth20_Bls12_381(ni_dkg_groth20_bls12_381::Transcript),
+}
+impl CspNiDkgTranscript {
+    /// Generates an instance of a transcript, for use in stub implementations.
+    /// TODO: Delete when stub implementations are complete.
+    pub fn placeholder_to_delete() -> Self {
+        use crate::sign::threshold_sig::public_key::bls12_381::PublicKeyBytes;
+        CspNiDkgTranscript::Groth20_Bls12_381(ni_dkg_groth20_bls12_381::Transcript {
+            public_coefficients: ni_dkg_groth20_bls12_381::PublicCoefficients {
+                coefficients: vec![PublicKeyBytes([0; PublicKeyBytes::SIZE])],
+            },
+            receiver_data: BTreeMap::new(),
+        })
+    }
+}
+
+/// A unit of DKG time.
+pub struct EpochTag;
+#[allow(unused)]
+pub type Epoch = AmountOf<EpochTag, u32>;
+
+pub mod ni_dkg_groth20_bls12_381 {
+    //! Data types for the Groth20 non-interactive distributed key generation
+    //! scheme.
+
+    use serde::{Deserialize, Serialize};
+    use std::collections::BTreeMap;
+
+    // These are all the types used together with this scheme, made public in one
+    // place for ease of use:
+    pub use super::Epoch;
+    pub use crate::curves::bls12_381::{Fr, G1, G2};
+    pub use crate::encrypt::forward_secure::groth20_bls12_381::{
+        Chunk, FsEncryptionCiphertext, FsEncryptionPlaintext, FsEncryptionPok,
+        FsEncryptionPublicKey, NUM_CHUNKS,
+    };
+    pub use crate::sign::eddsa::ed25519::{PublicKey, Signature};
+    pub use crate::sign::threshold_sig::public_coefficients::bls12_381::PublicCoefficients;
+    pub use crate::NodeIndex;
+
+    /// Threshold signature key material with proofs of correctness.
+    #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+    pub struct Dealing {
+        pub public_coefficients: PublicCoefficients,
+        pub ciphertexts: EncryptedShares,
+        pub zk_proof_decryptability: ZKProofDec,
+        pub zk_proof_correct_sharing: ZKProofShare,
+    }
+
+    /// Threshold signature key material.
+    pub use FsEncryptionCiphertext as EncryptedShares;
+
+    pub const NUM_ZK_REPETITIONS: usize = 10; // TODO: decide on value
+
+    /// A zero knowledge proof that the encrypted shares can be decrypted by the
+    /// corresponding receivers.
+    #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+    pub struct ZKProofDec {
+        pub first_move_y0: G1,
+        pub first_move_b: [G1; NUM_ZK_REPETITIONS],
+        pub first_move_c: [G1; NUM_ZK_REPETITIONS],
+        pub second_move_d: Vec<G1>, // Has length #receivers+1
+        pub second_move_y: G1,
+        pub response_z_r: Vec<Fr>,
+        pub response_z_s: [Fr; NUM_ZK_REPETITIONS],
+        pub response_z_b: Fr,
+    }
+
+    /// A zero knowledge proof that the shares are indeed valid points on the
+    /// curve.
+    #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+    pub struct ZKProofShare {
+        pub first_move_f: G1,
+        pub first_move_a: G2,
+        pub first_move_y: G1,
+        pub response_z_r: Fr,
+        pub response_z_a: Fr,
+    }
+
+    /// All the public data needed for threshold key derivation.
+    #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+    pub struct Transcript {
+        pub public_coefficients: PublicCoefficients,
+        /// NodeIndex is for the dealer who computed the encrypted shares
+        pub receiver_data: BTreeMap<NodeIndex, EncryptedShares>,
+    }
+}

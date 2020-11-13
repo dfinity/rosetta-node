@@ -1,0 +1,66 @@
+use ic_types::{replica_version::ReplicaVersion, NodeId, Time};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug)]
+pub enum ArtifactPoolError {
+    /// Error if not enough quota for a peer in the unvalidated pool for an
+    /// artifact.
+    InsufficientQuotaError,
+    /// Message has expired.
+    MessageExpired,
+    /// Message expiry is too far in the future.
+    MessageExpiryTooLong,
+    /// Error when artifact version is not accepted.
+    ArtifactReplicaVersionError(ReplicaVersionMismatch),
+}
+
+/// Describe expected version and artifact version when there is a mismatch.
+#[derive(Debug)]
+pub struct ReplicaVersionMismatch {
+    pub expected: ReplicaVersion,
+    pub artifact: ReplicaVersion,
+}
+
+/// Validated artifact
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidatedArtifact<T> {
+    pub msg: T,
+    pub timestamp: Time,
+}
+
+impl<T> AsRef<T> for ValidatedArtifact<T> {
+    fn as_ref(&self) -> &T {
+        &self.msg
+    }
+}
+
+/// Unvalidated artifact
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnvalidatedArtifact<T> {
+    pub message: T,
+    pub peer_id: NodeId,
+    pub timestamp: Time,
+}
+
+impl<T> AsRef<T> for UnvalidatedArtifact<T> {
+    fn as_ref(&self) -> &T {
+        &self.message
+    }
+}
+
+/// A trait to get timestamp.
+pub trait HasTimestamp {
+    fn timestamp(&self) -> Time;
+}
+
+impl<T> HasTimestamp for ValidatedArtifact<T> {
+    fn timestamp(&self) -> Time {
+        self.timestamp
+    }
+}
+
+impl<T> HasTimestamp for UnvalidatedArtifact<T> {
+    fn timestamp(&self) -> Time {
+        self.timestamp
+    }
+}

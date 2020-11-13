@@ -1,0 +1,47 @@
+syntax = "proto3";
+package registry.node.v1;
+
+// A connection endpoint, corresponding to an ip/port pair.
+// Each machine might have different NICs so we might choose
+// to run different services in different ips/ports.
+message ConnectionEndpoint {
+  // There is a canonical string representation for ipv4/6
+  // strings. We can later replace this with a
+  // oneof {ipv4, ipv6}.
+  string ip_addr = 1;
+  uint32 port = 2;
+}
+
+message FlowEndpoint {
+  // The flow identifier (tag). This has to be unique per NodeRecord.
+  uint32 flow_tag = 1;
+
+  // The IP/port for this flow.
+  ConnectionEndpoint endpoint = 2;
+}
+
+// A node: one machine running a replica instance.
+message NodeRecord {
+  // WHAT HAPPENED TO FIELD 1? WHY IS THAT NOT RESERVED?
+  reserved 2;
+  reserved "gossip_advert";
+  reserved 3;
+  reserved "gossip_request";
+  reserved 4;
+  reserved "gossip_artifact";
+
+  // The id of the dc operator that added this node.
+  bytes dcop_principal_id = 9;
+
+  // The endpoint where this node receives xnet messages.
+  ConnectionEndpoint xnet = 5;
+  // The endpoint where this node receives http requests.
+  ConnectionEndpoint http = 6;
+  // The node's TLS certificate in PEM format. This is used for
+  // the P2P/transport connections.
+  string  transport_tls_certificate = 7;
+  // The P2P flow end points.
+  repeated FlowEndpoint p2p_flow_endpoints = 8;
+  // Endpoint where the node provides Prometheus format metrics over HTTP
+  ConnectionEndpoint prometheus_metrics_http = 10;
+}

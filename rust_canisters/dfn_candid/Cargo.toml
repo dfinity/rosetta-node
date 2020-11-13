@@ -1,0 +1,24 @@
+[package]
+name = "dfn_candid"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+serde = "1.0.99"
+candid = "0.6.3"
+on_wire = { path = "../on_wire" }
+dfn_core = { path = "../dfn_core" }
+ic-base-types = {path="../../types/base_types"}
+
+[[bin]]
+name = "wasm"
+path = "test/wasm.rs"
+test = false
+doc = false
+
+[dev-dependencies]
+canister-test = { path = "../canister_test" }
+
+[[test]]
+name = "test"
+path = "test/test.rs"

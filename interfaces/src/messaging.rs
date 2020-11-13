@@ -1,0 +1,61 @@
+use crate::consensus::{PayloadValidationError, ValidationResult};
+use ic_types::{
+    batch::{Batch, ValidationContext, XNetPayload},
+    Height, NumBytes,
+};
+
+/// Errors that `MessageRouting` may return.
+#[derive(Debug, PartialEq, Eq)]
+pub enum MessageRoutingError {
+    /// The batch was not delivered because the batch queue is full.
+    QueueIsFull,
+    /// The batch is ignored because its number is not the one we
+    /// expected.
+    Ignored {
+        expected_height: Height,
+        actual_height: Height,
+    },
+}
+
+/// The public interface for the MessageRouting layer.
+pub trait MessageRouting: Send + Sync {
+    /// Delivers a finalized `Batch` for deterministic processing.
+    ///
+    /// Repeated calls with the same batch result in
+    /// `MessageRoutingError::Ignored`.
+    ///
+    /// This function is asynchronous: it returns immediately after enqueuing
+    /// the batch for processing and doesn't wait for execution of the batch to
+    /// complete.
+    fn deliver_batch(&self, b: Batch) -> Result<(), MessageRoutingError>;
+
+    /// Returns the height of the next expected batch.
+    fn expected_batch_height(&self) -> Height;
+}
+
+/// Interface for selecting `Streams` for inclusion into a `Payload`.
+pub trait XNetPayloadBuilder: Send + Sync {
+    /// Produces an `XNetPayload` of maximum byte size `max_bytes` that is valid
+    /// given a `ValidationContext` (certified height plus registry version) and
+    /// `past_payloads` (the `XNetPayloads` from all blocks above the certified
+    /// height, in descending block height order).
+    fn get_xnet_payload(
+        &self,
+        validation_context: &ValidationContext,
+        past_payloads: &[&XNetPayload],
+        byte_limit: NumBytes,
+    ) -> XNetPayload;
+
+    /// Checks whether the provided `XNetPayload` is valid given a
+    /// `ValidationContext` (certified height and registry version) and
+    /// `past_payloads` (the `XNetPayloads` from all blocks above the certified
+    /// height, in descending block height order); and whether its size in bytes
+    /// does not exceed `byte_limit`.
+    fn validate_xnet_payload(
+        &self,
+        payload: &XNetPayload,
+        validation_context: &ValidationContext,
+        past_payloads: &[&XNetPayload],
+        byte_limit: NumBytes,
+    ) -> ValidationResult<PayloadValidationError>;
+}

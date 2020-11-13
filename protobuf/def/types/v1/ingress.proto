@@ -1,0 +1,25 @@
+syntax = "proto3";
+package types.v1;
+
+message HttpRequestArr {
+	repeated HttpRequestVal values = 1;
+}
+
+message HttpRequestVal {
+	oneof val {
+		bytes raw_bytes = 1;
+		string str = 2;
+		uint64 u64 = 3;
+		HttpRequestArr array = 4;
+	}
+}
+
+message HttpRequestKV {
+	string key = 1;
+	HttpRequestVal value = 2;
+}
+
+message SignedIngress {
+	bytes signature = 1;
+	repeated HttpRequestKV content = 2;
+}

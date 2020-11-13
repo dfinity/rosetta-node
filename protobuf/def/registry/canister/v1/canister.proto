@@ -1,0 +1,9 @@
+syntax = "proto3";
+package registry.canister.v1;
+
+// Registry information for a canister.
+message CanisterRecord {
+  // The subnet hosting this canister.
+  reserved 1;   // this is from subnet_id being a uint64
+  bytes subnet_id = 2;
+}

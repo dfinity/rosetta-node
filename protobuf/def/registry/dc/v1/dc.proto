@@ -1,0 +1,21 @@
+syntax = "proto3";
+package registry.dc.v1;
+
+// A record for a data center. Each data center is associated with a
+// unique dc operator principal id, a.k.a. DCID.
+//
+// Note that while a physical data center might host nodes for more than
+// one funding parter, its dcop_principal_id must be unique.
+//
+// TODO: Add funding partners once we'll have them (right now dc/fp pairs
+// are the only entity that exists).
+message DCRecord {
+  // The principal id of the data-center operator that is associated with
+  // this DC. This principal is the entity that is able to add and remove
+  // nodes from a data center.
+  //
+  // This must be unique across DCRecords.
+  bytes dcop_principal_id = 1;
+  // The maximum number of nodes that can be added under this DCRecord.
+  uint64 node_cap = 2;
+}

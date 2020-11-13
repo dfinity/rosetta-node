@@ -1,0 +1,16 @@
+[package]
+name = "ic-protobuf"
+version = "0.1.0"
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+erased-serde = "0.3.11"
+prost = "0.6"
+serde = { version = "1.0", features = ["derive"] }
+slog = {version = "2.5", features = ["nested-values"]}
+serde_json = "1.0"
+
+[build-dependencies]
+prost-build = "0.6"

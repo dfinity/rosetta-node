@@ -1,0 +1,9 @@
+[package]
+name = "ic-error-types"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+candid = "0.6.3"
+ic-protobuf = { path = "../../protobuf" }
+serde = { version = "1.0.99", features = ["derive", "rc"] }
