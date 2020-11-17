@@ -1,6 +1,7 @@
 use lazy_static::lazy_static;
+use reqwest::Url;
 
-use crate::ledger_canister::{self, Block, CanisterID, HashedBlock, Transaction, UserID};
+use crate::ledger_canister::{self, Block, CanisterID, Hash, HashedBlock, Transaction, UserID};
 use crate::models::*;
 use ic_types::{CanisterId, PrincipalId};
 
@@ -93,8 +94,12 @@ impl Default for TestLedger {
 }
 
 impl LedgerAccess for TestLedger {
-    fn blocks<'a>(&'a self) -> Box<dyn Deref<Target = Blocks> + 'a> {
+    fn read_blocks<'a>(&'a self) -> Box<dyn Deref<Target = Blocks> + 'a> {
         Box::new(&self.blockchain)
+    }
+
+    fn sync_blocks(&mut self, _tip: Option<Hash>) -> Result<(), ApiError> {
+        Ok(())
     }
 
     fn ledger_canister_id(&self) -> &CanisterId {
@@ -107,6 +112,10 @@ impl LedgerAccess for TestLedger {
         } else {
             panic!("Reqwest client not available");
         }
+    }
+
+    fn testnet_url(&self) -> &Url {
+        panic!("Testnet url not available");
     }
 }
 
@@ -156,9 +165,8 @@ impl Scribe {
         }
     }
 
-    fn add_block(&mut self, block: Block) {
-        let hash = block.hash(self.blockchain.back().map(|x| x.hash));
-        self.blockchain.push_back(HashedBlock { block, hash });
+    pub fn add_block(&mut self, block: Block) {
+        self.blockchain.push_back(HashedBlock::hash_block(block));
     }
 
     pub fn buy(&mut self, uid: UserID, amount: u64) {
@@ -172,6 +180,8 @@ impl Scribe {
             },
             timestamp: self.time(),
             transaction_id: self.next_transaction_id(),
+            index: self.next_transaction_id() as usize,
+            parent_hash: self.blockchain.back().map(|hb| hb.hash),
         };
         self.balance_history.push_back(self.balance_book.clone());
         self.add_block(block);
@@ -189,6 +199,8 @@ impl Scribe {
             },
             timestamp: self.time(),
             transaction_id: self.next_transaction_id(),
+            index: self.next_transaction_id() as usize,
+            parent_hash: self.blockchain.back().map(|hb| hb.hash),
         };
         self.balance_history.push_back(self.balance_book.clone());
         self.add_block(block);
@@ -208,6 +220,8 @@ impl Scribe {
             },
             timestamp: self.time(),
             transaction_id: self.next_transaction_id(),
+            index: self.next_transaction_id() as usize,
+            parent_hash: self.blockchain.back().map(|hb| hb.hash),
         };
         self.balance_history.push_back(self.balance_book.clone());
         self.add_block(block);
@@ -246,7 +260,11 @@ impl Default for Scribe {
     }
 }
 
-pub async fn get_balance(ledger: &impl LedgerAccess, height: Option<usize>, uid: u64) -> u64 {
+pub async fn get_balance(
+    ledger: &mut impl LedgerAccess,
+    height: Option<usize>,
+    uid: u64,
+) -> Result<u64, ApiError> {
     let block_id = height.map(|h| PartialBlockIdentifier {
         index: Some(h as i64),
         hash: None,
@@ -256,12 +274,12 @@ pub async fn get_balance(ledger: &impl LedgerAccess, height: Option<usize>, uid:
         crate::convert::account_identifier(&to_uid(uid)),
     );
     msg.block_identifier = block_id;
-    let resp = crate::account_balance(msg, ledger).await.unwrap();
-    resp.balances[0].value.parse().unwrap()
+    let resp = crate::account_balance(msg, ledger).await?;
+    Ok(resp.balances[0].value.parse().unwrap())
 }
 
 #[actix_rt::test]
-async fn balnces_test() {
+async fn balances_test() {
     let mut ledger = TestLedger::new();
     let mut scribe = Scribe::new();
 
@@ -271,11 +289,11 @@ async fn balnces_test() {
     }
 
     assert_eq!(
-        get_balance(&ledger, None, 0).await,
+        get_balance(&mut ledger, None, 0).await.unwrap(),
         *scribe.balance_book.get(&to_uid(0)).unwrap()
     );
     assert_eq!(
-        get_balance(&ledger, None, 1).await,
+        get_balance(&mut ledger, None, 1).await.unwrap(),
         *scribe.balance_book.get(&to_uid(1)).unwrap()
     );
 
@@ -285,11 +303,11 @@ async fn balnces_test() {
         .add_block(scribe.blockchain.back().unwrap().clone())
         .ok();
     assert_eq!(
-        get_balance(&ledger, None, 0).await,
+        get_balance(&mut ledger, None, 0).await.unwrap(),
         *scribe.balance_book.get(&to_uid(0)).unwrap()
     );
     assert_eq!(
-        get_balance(&ledger, None, 1).await,
+        get_balance(&mut ledger, None, 1).await.unwrap(),
         *scribe.balance_book.get(&to_uid(1)).unwrap()
     );
 
@@ -301,11 +319,11 @@ async fn balnces_test() {
         .add_block(scribe.blockchain.back().unwrap().clone())
         .ok();
     assert_eq!(
-        get_balance(&ledger, None, 0).await,
+        get_balance(&mut ledger, None, 0).await.unwrap(),
         *scribe.balance_book.get(&to_uid(0)).unwrap()
     );
     assert_eq!(
-        get_balance(&ledger, None, 1).await,
+        get_balance(&mut ledger, None, 1).await.unwrap(),
         *scribe.balance_book.get(&to_uid(1)).unwrap()
     );
 
@@ -315,23 +333,26 @@ async fn balnces_test() {
         .add_block(scribe.blockchain.back().unwrap().clone())
         .ok();
     assert_eq!(
-        get_balance(&ledger, None, 0).await,
+        get_balance(&mut ledger, None, 0).await.unwrap(),
         *scribe.balance_book.get(&to_uid(0)).unwrap()
     );
     assert_eq!(
-        get_balance(&ledger, None, 1).await,
+        get_balance(&mut ledger, None, 1).await.unwrap(),
         *scribe.balance_book.get(&to_uid(1)).unwrap()
     );
 
     // and test if we can access arbitrary block
-    assert_eq!(get_balance(&ledger, Some(2), 0).await, after_buy_balance);
+    assert_eq!(
+        get_balance(&mut ledger, Some(2), 0).await.unwrap(),
+        after_buy_balance
+    );
 }
 
 #[actix_rt::test]
 async fn blocks_test() {
     let mut ledger = TestLedger::new();
     let mut scribe = Scribe::new();
-    let num_transactions = 100;
+    let num_transactions: usize = 100;
     let num_accounts = 10;
 
     scribe.gen_accounts(num_accounts, 1_000_000);
@@ -346,7 +367,7 @@ async fn blocks_test() {
     let h = num_accounts as usize + 17;
     for i in 0..num_accounts {
         assert_eq!(
-            get_balance(&ledger, Some(h), i).await,
+            get_balance(&mut ledger, Some(h), i).await.unwrap(),
             *scribe.balance_history[h].get(&to_uid(i)).unwrap()
         );
     }
@@ -409,14 +430,14 @@ async fn simple_ic_test() {
         .with_subnet(Subnet::new().add_nodes(5))
         .start()
         .await;
-    let ic = ic.ready().await;
+    let ic = ic.ready().await.expect("Not ready yet");
     let _ledger = TestLedger::new().with_ic(ic);
 }
 
 #[actix_rt::test]
 async fn hello_world() {
     let mut scribe = Scribe::new();
-    let num_transactions = 1000;
+    let num_transactions: usize = 1000;
     let num_accounts = 100;
 
     scribe.gen_accounts(num_accounts, 1_000_000);
@@ -431,12 +452,12 @@ async fn hello_world() {
 
     assert_eq!(
         scribe.blockchain.len(),
-        ledger.blockchain.last().unwrap().index + 1
+        ledger.blockchain.last().unwrap().unwrap().block.index + 1
     );
 
     for i in 0..num_accounts {
         assert_eq!(
-            get_balance(&ledger, None, i).await,
+            get_balance(&mut ledger, None, i).await.unwrap(),
             *scribe.balance_book.get(&to_uid(i)).unwrap()
         );
     }
@@ -470,7 +491,7 @@ async fn hello_world() {
     let res = crate::account_balance(msg, &ledger).await;
     println!("Account balance : {:?}", res);
     println!(
-        "From balnce book: {}",
+        "From balance book: {}",
         scribe.balance_book.get(&to_uid(0)).unwrap()
     );
 }

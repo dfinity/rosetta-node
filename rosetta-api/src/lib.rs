@@ -2,8 +2,10 @@ pub mod convert;
 pub mod ledger_canister;
 pub mod ledger_client;
 pub mod models;
+pub mod sync;
 use crate::convert::account_from_public_key;
 use crate::convert::operations;
+use crate::ledger_canister::HashedBlock;
 use crate::ledger_canister::UserID;
 use ic_interfaces::crypto::DOMAIN_IC_REQUEST;
 use ic_types::messages::{
@@ -23,7 +25,7 @@ use crate::convert::{
     transaction_id, transaction_identifier,
 };
 use crate::ledger_canister::{Hash, Transaction};
-use crate::ledger_client::{BlockInfo, LedgerAccess};
+use crate::ledger_client::LedgerAccess;
 use serde_json::{json, map::Map};
 use std::convert::TryFrom;
 use std::time::Duration;
@@ -55,20 +57,18 @@ fn verify_network_id(canister_id: &CanisterId, net_id: &NetworkIdentifier) -> Re
 // For the first block, we return the block itself as its parent
 fn create_parent_block_id(
     blocks: &ledger_client::Blocks,
-    block: &BlockInfo,
+    block: &HashedBlock,
 ) -> Result<BlockIdentifier, ApiError> {
-    let idx = std::cmp::max(0, to_index(block.index)? - 1);
+    let idx = std::cmp::max(0, to_index(block.block.index)? - 1);
 
-    let parent = blocks
-        .get_at(idx as usize)
-        .ok_or(ApiError::InternalError(true, None))?;
+    let parent = blocks.get_at(idx as usize)?;
     Ok(convert::block_id(&parent)?)
 }
 
 fn get_block(
     blocks: &ledger_client::Blocks,
     block_id: Option<PartialBlockIdentifier>,
-) -> Result<&BlockInfo, ApiError> {
+) -> Result<HashedBlock, ApiError> {
     let block = match block_id {
         Some(PartialBlockIdentifier {
             index: Some(block_height),
@@ -79,12 +79,12 @@ fn get_block(
                 return Err(ApiError::InvalidBlockId(false, None));
             }
             let idx = block_height as usize;
-            let block = blocks
-                .get_at(idx)
-                .ok_or(ApiError::InvalidBlockId(false, None))?;
+            let block = blocks.get_at(idx)?;
+
             if block.hash != hash {
                 return Err(ApiError::InvalidBlockId(false, None));
             }
+
             block
         }
         Some(PartialBlockIdentifier {
@@ -95,27 +95,22 @@ fn get_block(
                 return Err(ApiError::InvalidBlockId(false, None));
             }
             let idx = block_height as usize;
-            blocks
-                .get_at(idx)
-                .ok_or(ApiError::InvalidBlockId(false, None))?
+            blocks.get_at(idx)?
         }
         Some(PartialBlockIdentifier {
             index: None,
             hash: Some(block_hash),
         }) => {
             let hash: ledger_canister::Hash = convert::to_hash(&block_hash)?;
-            blocks
-                .get(hash)
-                .ok_or(ApiError::InvalidBlockId(false, None))?
+            blocks.get(hash)?
         }
         Some(PartialBlockIdentifier {
             index: None,
             hash: None,
         })
-        | None => {
-            // TODO add a new error here maybe (blockchain empty?)
-            blocks.last().ok_or(ApiError::InvalidBlockId(false, None))?
-        }
+        | None => blocks
+            .last()?
+            .ok_or(ApiError::BlockchainEmpty(false, None))?,
     };
 
     Ok(block)
@@ -134,11 +129,11 @@ pub async fn account_balance(
         .and_then(|x| CanisterId::try_from(x).ok())
         .ok_or(ApiError::InvalidAccountId(false, None))?;
 
-    let blocks = ledger.blocks();
+    let blocks = ledger.read_blocks();
     let block = get_block(&blocks, msg.block_identifier)?;
 
-    let icp = *block
-        .balances
+    let icp = blocks
+        .get_balances(block.hash)?
         .get(ledger_canister::UserID(canister_id.get().to_vec()))
         .ok_or(ApiError::InvalidAccountId(true, None))?;
     let amount = convert::amount_(icp)?;
@@ -153,10 +148,10 @@ pub async fn block(
 ) -> Result<BlockResponse, ApiError> {
     verify_network_id(ledger.ledger_canister_id(), &msg.network_identifier)?;
 
-    let blocks = ledger.blocks();
+    let blocks = ledger.read_blocks();
     let b = get_block(&blocks, Some(msg.block_identifier))?;
     let b_id = convert::block_id(&b)?;
-    let parent_id = create_parent_block_id(&blocks, b)?;
+    let parent_id = create_parent_block_id(&blocks, &b)?;
 
     let t_id = convert::transaction_identifier(&b.block.transaction_id);
     let transactions = vec![convert::transaction(&b.block.payment, t_id)?];
@@ -179,7 +174,7 @@ pub async fn block_transaction(
     ledger: &impl LedgerAccess,
 ) -> Result<BlockTransactionResponse, ApiError> {
     verify_network_id(ledger.ledger_canister_id(), &msg.network_identifier)?;
-    let blocks = ledger.blocks();
+    let blocks = ledger.read_blocks();
     let b_id = Some(PartialBlockIdentifier {
         index: Some(msg.block_identifier.index),
         hash: Some(msg.block_identifier.hash),
@@ -424,6 +419,9 @@ pub async fn construction_preprocess(
 }
 
 /// Submit a Signed Transaction
+// Normally we'd just use the canister client Agent for this but because this
+// request is constructed in such an odd way it's easier to just do it from
+// scratch
 pub async fn construction_submit(
     msg: models::ConstructionSubmitRequest,
     ledger: &impl LedgerAccess,
@@ -575,14 +573,14 @@ pub async fn network_status(
     ledger: &impl LedgerAccess,
 ) -> Result<NetworkStatusResponse, ApiError> {
     verify_network_id(ledger.ledger_canister_id(), &msg.network_identifier)?;
-    let blocks = ledger.blocks();
-    let tip = blocks.last().ok_or(ApiError::BlockchainEmpty(true, None))?;
+    let blocks = ledger.read_blocks();
+    let tip = blocks
+        .last()?
+        .ok_or(ApiError::BlockchainEmpty(true, None))?;
     let tip_id = convert::block_id(&tip)?;
     let tip_timestamp = convert::timestamp(tip.block.timestamp)?;
     // Block at index 0 has to be there if tip was present
-    let genesis_block = blocks
-        .get_at(0)
-        .ok_or(ApiError::InternalError(true, None))?;
+    let genesis_block = blocks.get_at(0)?;
     let genesis_block_id = convert::block_id(&genesis_block)?;
     let peers = vec![];
 

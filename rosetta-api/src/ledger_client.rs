@@ -1,58 +1,74 @@
-use crate::convert::into_error;
-use crate::ledger_canister::Block;
+use crate::convert::{internal_error, invalid_block_id};
 use crate::ledger_canister::{Amount, Hash, HashedBlock, Transaction, UserID};
 use crate::models::ApiError;
-
-use std::collections::{HashMap, VecDeque};
-use std::ops::Deref;
-use std::sync::RwLock;
-
+use crate::sync::{read_fs, LedgerCanister};
+use core::ops::Deref;
+use ic_types::CanisterId;
 use im::OrdMap;
-
-use ic_types::{CanisterId, PrincipalId};
-use std::convert::TryFrom;
+use reqwest::Url;
+use std::collections::HashMap;
+use std::sync::RwLock;
 
 pub trait LedgerAccess {
     // Maybe we should just return RwLockReadGuard explicitly and drop the Box
-    fn blocks<'a>(&'a self) -> Box<dyn Deref<Target = Blocks> + 'a>;
+    fn read_blocks<'a>(&'a self) -> Box<dyn Deref<Target = Blocks> + 'a>;
+    fn sync_blocks(&mut self, _tip: Option<Hash>) -> Result<(), ApiError>;
     fn ledger_canister_id(&self) -> &CanisterId;
     fn reqwest_client(&self) -> &reqwest::Client;
+    fn testnet_url(&self) -> &Url;
 }
 
 pub struct LedgerClient {
     blockchain: RwLock<Blocks>,
     canister_id: CanisterId,
-    client: reqwest::Client,
+    pub canister: LedgerCanister,
+    reqwest_client: reqwest::Client,
+    testnet_url: Url,
 }
 
 impl LedgerClient {
-    pub fn create() -> Result<Self, ApiError> {
-        let client = reqwest::Client::new();
-        // TODO plug in the real canister id here
-        let canister_id =
-            CanisterId::new(PrincipalId::try_from(&[0, 0, 0, 0, 0, 0, 4, 210][..]).unwrap())
-                .unwrap();
+    pub fn create(testnet_url: Url, canister_id: CanisterId) -> Result<Self, ApiError> {
+        let in_memory = Blocks::default();
+        Self::create_with_blocks(in_memory, testnet_url, canister_id)
+    }
 
-        let bs = Blocks::default();
+    pub fn create_on_disk(testnet_url: Url, canister_id: CanisterId) -> Result<Self, ApiError> {
+        let on_disk = Blocks::new_on_disk();
+        Self::create_with_blocks(on_disk, testnet_url, canister_id)
+    }
 
-        // let ts = read_ledger_transactions();
-        // for block in ts.into_iter() {
-        //     bs.add_block(block)?;
-        // }
-
+    pub fn create_with_blocks(
+        bs: Blocks,
+        testnet_url: Url,
+        canister_id: CanisterId,
+    ) -> Result<Self, ApiError> {
         let blockchain = RwLock::new(bs);
+
+        let reqwest_client = reqwest::Client::new();
+
+        let canister =
+            LedgerCanister::new(reqwest_client.clone(), testnet_url.clone(), canister_id);
 
         Ok(Self {
             blockchain,
             canister_id,
-            client,
+            canister,
+            reqwest_client,
+            testnet_url,
         })
     }
 }
 
 impl LedgerAccess for LedgerClient {
-    fn blocks(&self) -> Box<dyn Deref<Target = Blocks> + '_> {
+    fn read_blocks(&self) -> Box<dyn Deref<Target = Blocks> + '_> {
         Box::new(self.blockchain.read().unwrap())
+    }
+
+    fn sync_blocks(&mut self, tip: Option<Hash>) -> Result<(), ApiError> {
+        match tip {
+            Some(tip) => self.blockchain.write().unwrap().sync_to(tip),
+            None => Ok(()),
+        }
     }
 
     fn ledger_canister_id(&self) -> &CanisterId {
@@ -60,7 +76,11 @@ impl LedgerAccess for LedgerClient {
     }
 
     fn reqwest_client(&self) -> &reqwest::Client {
-        &self.client
+        &self.reqwest_client
+    }
+
+    fn testnet_url(&self) -> &Url {
+        &self.testnet_url
     }
 }
 
@@ -87,6 +107,7 @@ fn read_ledger_transactions() -> Vec<HashedBlock> {
 /// This mirrors Balances in the canister code, but is immutable so it can be
 /// more easily queried
 #[must_use = "`Balances` are immutable, if you don't use it you'll lose your changes"]
+#[derive(Clone)]
 pub struct Balances {
     pub inner: OrdMap<UserID, Amount>,
 }
@@ -95,8 +116,8 @@ pub struct Balances {
 // polymorphic over mutability, so I think this is how it's going to have to be
 // Perhaps I can break this up in the future to reduce duplication
 impl Balances {
-    pub fn get(&self, id: UserID) -> Option<&Amount> {
-        self.inner.get(&id)
+    pub fn get(&self, id: UserID) -> Option<Amount> {
+        self.inner.get(&id).cloned()
     }
 
     pub fn add_payment(&self, payment: &Transaction) -> Result<Self, String> {
@@ -141,60 +162,147 @@ impl Default for Balances {
     }
 }
 
-pub struct BlockInfo {
-    pub balances: Balances,
-    pub block: Block,
-    pub hash: Hash,
-    pub index: usize,
+// This is a crutch, we need to write some traits to dedup our code and simplify
+// testing
+enum BlockStore {
+    OnDisk,
+    InMemory(HashMap<Hash, HashedBlock>),
 }
 
 pub struct Blocks {
-    blocks: VecDeque<BlockInfo>,
-    index_map: HashMap<Hash, usize>,
+    balances: HashMap<Hash, Balances>,
+    block_order: Vec<Hash>,
+    block_store: BlockStore,
 }
 
 impl Blocks {
-    pub fn get_at(&self, index: usize) -> Option<&BlockInfo> {
-        self.blocks.get(index)
-    }
-
-    pub fn get(&self, hash: Hash) -> Option<&BlockInfo> {
-        self.index_map.get(&hash).and_then(|idx| self.get_at(*idx))
-    }
-
-    pub fn last(&self) -> Option<&BlockInfo> {
-        self.blocks.back()
-    }
-
-    /// Blocks must be added starting from the genesis block, followed by the
-    /// last blocks child
-    pub fn add_block(&mut self, HashedBlock { hash, block }: HashedBlock) -> Result<(), ApiError> {
-        let balances = match self.last() {
-            Some(p) => p.balances.add_payment(&block.payment),
-            None => Balances::default().add_payment(&block.payment),
+    pub fn new_on_disk() -> Blocks {
+        Blocks {
+            block_store: BlockStore::OnDisk,
+            ..Blocks::default()
         }
-        .map_err(|e| ApiError::InvalidTransaction(false, into_error(e)))?;
+    }
 
-        // TODO validate
+    pub fn get_at(&self, index: usize) -> Result<HashedBlock, ApiError> {
+        let hash = *self
+            .block_order
+            .get(index)
+            .ok_or_else(|| invalid_block_id(format!("Block number out of bounds {}", index)))?;
+        self.get(hash)
+    }
 
-        let index = self.blocks.len();
-        let block_info = BlockInfo {
-            balances,
-            block,
-            hash,
-            index,
+    pub fn get_balances_at(&self, index: usize) -> Result<Balances, ApiError> {
+        let hash = *self
+            .block_order
+            .get(index)
+            .ok_or_else(|| invalid_block_id(format!("Block number out of bounds {}", index)))?;
+        self.get_balances(hash)
+    }
+
+    pub fn get(&self, hash: Hash) -> Result<HashedBlock, ApiError> {
+        match &self.block_store {
+            BlockStore::OnDisk => read_fs(hash).map_err(internal_error)?,
+            BlockStore::InMemory(hm) => hm.get(&hash).cloned(),
+        }
+        .ok_or_else(|| invalid_block_id(format!("Block not found: {:?}", hash)))
+    }
+
+    pub fn get_balances(&self, hash: Hash) -> Result<Balances, ApiError> {
+        self.balances
+            .get(&hash)
+            .cloned()
+            .ok_or_else(|| internal_error("Balances not found"))
+    }
+
+    /// Add a block to the block_store data structure, the parent_hash must
+    /// match the end of the chain
+    pub(crate) fn add_block(&mut self, hb: HashedBlock) -> Result<(), ApiError> {
+        let HashedBlock { block, hash, .. } = hb.clone();
+        let last_hash = self.block_order.last();
+        assert_eq!(
+            block.parent_hash.as_ref(),
+            last_hash,
+            "When adding a block the parent_hash must match the last added block"
+        );
+
+        let parent_balances = match last_hash {
+            // This is the first block being added
+            None => Balances::default(),
+            Some(hash) => self
+                .balances
+                .get(hash)
+                .ok_or_else(|| {
+                    internal_error("Balances must be populated for all hashes in Blocks")
+                })?
+                .clone(),
         };
-        self.index_map.insert(block_info.hash, index);
-        self.blocks.push_back(block_info);
+        let new_balances = parent_balances
+            .add_payment(&block.payment)
+            .map_err(internal_error)?;
+
+        self.block_order.push(hash);
+        self.balances.insert(hash, new_balances);
+        if let BlockStore::InMemory(hm) = &mut self.block_store {
+            hm.insert(hash, hb);
+        }
         Ok(())
+    }
+
+    fn contains(&self, hash: &Hash) -> bool {
+        self.balances.contains_key(hash)
+    }
+
+    /// Ensure that this data structure is updated to at least this hash
+    pub fn sync_to(&mut self, target: Hash) -> Result<(), ApiError> {
+        // List all the ancestors of the target that don't exist in this data structure
+        // starting with the target
+        let missing_values = itertools::unfold(Some(target), |mut_hash| {
+            let current_hash = match mut_hash {
+                // The last block was the genesis block so we're done
+                None => return None,
+                Some(x) => x,
+            };
+            if self.contains(current_hash) {
+                // This block is inside Blocks so we're done
+                None
+            } else {
+                let res = self
+                    .get(*current_hash)
+                    .map(|HashedBlock { hash, block, .. }| {
+                        *mut_hash = block.parent_hash;
+                        hash
+                    });
+                Some(res)
+            }
+        })
+        .collect::<Result<Vec<Hash>, ApiError>>()?;
+
+        // Add the missing block_store starting with the oldest one
+        for hash in missing_values.into_iter().rev() {
+            let hb = self.get(hash)?;
+            self.add_block(hb)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn last(&self) -> Result<Option<HashedBlock>, ApiError> {
+        match self.block_order.last().cloned() {
+            Some(last_hash) => {
+                let last = self.get(last_hash)?;
+                Ok(Some(last))
+            }
+            None => Ok(None),
+        }
     }
 }
 
 impl Default for Blocks {
     fn default() -> Blocks {
         Blocks {
-            blocks: VecDeque::default(),
-            index_map: HashMap::default(),
+            balances: HashMap::default(),
+            block_order: Vec::default(),
+            block_store: BlockStore::InMemory(HashMap::default()),
         }
     }
 }

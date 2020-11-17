@@ -223,7 +223,7 @@ impl Agent {
         let request = self.prepare_cbor_post_request_body(url, body);
 
         let bytes = request
-            .timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(10))
             .send()
             .await
             .map_err(|e| format!("Sending CUP request failed: {:?}", e))?
@@ -589,7 +589,7 @@ mod tests {
                 ingress_expiry: expiry_time.as_nanos_since_unix_epoch(),
             },
         };
-        let sender = Sender::KeyPair(ClonableKeyPair::new(&keypair));
+        let sender = Sender::from_keypair(&keypair);
         let (submit, id) = sign_submit(content.clone(), &sender).unwrap();
 
         // The wrapped content is content, without modification
@@ -661,7 +661,7 @@ mod tests {
         )
         .unwrap();
 
-        let sender = Sender::KeyPair(ClonableKeyPair::new(&keypair));
+        let sender = Sender::from_keypair(&keypair);
         let read = sign_read(content, &sender).unwrap();
 
         // The wrapped content is content, without modification
@@ -709,7 +709,7 @@ mod tests {
         )
         .unwrap();
 
-        let sender = Sender::KeyPair(ClonableKeyPair::new(&keypair));
+        let sender = Sender::from_keypair(&keypair);
         let read = sign_read(content, &sender).unwrap();
 
         // The wrapped content is content, without modification

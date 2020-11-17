@@ -1,9 +1,8 @@
-use crate::ledger_canister::{Hash, Transaction, UserID};
-use crate::ledger_client::BlockInfo;
+use crate::ledger_canister::{Hash, HashedBlock, Transaction, UserID};
 use crate::models;
 use crate::models::{
-    AccountBalanceResponse, AccountIdentifier, Amount, ApiError, BlockIdentifier, Currency,
-    Operation, Timestamp, TransactionIdentifier,
+    AccountIdentifier, Amount, ApiError, BlockIdentifier, Currency, Operation, Timestamp,
+    TransactionIdentifier,
 };
 use core::fmt::Display;
 
@@ -246,8 +245,8 @@ pub fn icp() -> Currency {
     Currency::new("ICP".to_string(), DECIMAL_PLACES)
 }
 
-pub fn block_id(block: &BlockInfo) -> Result<BlockIdentifier, ApiError> {
-    let idx = i64::try_from(block.index).map_err(|_| ApiError::InternalError(true, None))?;
+pub fn block_id(block: &HashedBlock) -> Result<BlockIdentifier, ApiError> {
+    let idx = i64::try_from(block.block.index).map_err(internal_error)?;
     Ok(BlockIdentifier::new(idx, from_hash(&block.hash)))
 }
 
@@ -268,13 +267,6 @@ pub fn user_id(aid: &AccountIdentifier) -> Result<UserID, String> {
             aid.address, e
         )),
     }
-}
-
-pub fn account_balance(amount: u64, block: &BlockInfo) -> Result<AccountBalanceResponse, ApiError> {
-    Ok(AccountBalanceResponse::new(
-        block_id(block)?,
-        vec![amount_(amount)?],
-    ))
 }
 
 const LAST_HASH: &str = "last_hash";
@@ -328,6 +320,10 @@ pub fn transaction_id(signed_transaction: &str) -> Result<TransactionIdentifier,
 
 pub fn internal_error<D: Display>(msg: D) -> ApiError {
     ApiError::InternalError(false, into_error(format!("{}", msg)))
+}
+
+pub fn invalid_block_id<D: Display>(msg: D) -> ApiError {
+    ApiError::InvalidBlockId(false, into_error(format!("{}", msg)))
 }
 
 pub fn account_from_public_key(pk: models::PublicKey) -> Result<AccountIdentifier, ApiError> {

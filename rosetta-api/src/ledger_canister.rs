@@ -6,13 +6,11 @@ use dfn_core::bytes;
 use dfn_core::FutureResult;
 use dfn_macro::{query, update};
 use lazy_static::lazy_static;
-use serde::{Deserialize, Serialize};
+use serde::{de::Error, Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::sync::RwLock;
 use std::time::SystemTime;
-
-type BlockIndex = usize;
 
 // #[derive(Serialize, Deserialize, Clone, Copy)]
 // pub struct Hash {inner: [u8; 32]}
@@ -22,7 +20,7 @@ pub type Hash = u64;
 pub type Amount = u64;
 
 /// This can either be a person or a canister
-#[derive(Serialize, Deserialize, Hash, PartialEq, Eq, Clone, PartialOrd, Ord)]
+#[derive(Serialize, Deserialize, Hash, PartialEq, Eq, Clone, PartialOrd, Ord, Debug)]
 pub struct UserID(pub Vec<u8>);
 
 impl UserID {
@@ -32,7 +30,7 @@ impl UserID {
 }
 
 // Remove this after the chron canister is merged
-#[derive(Serialize, Deserialize, Hash, PartialEq, Eq, Clone)]
+#[derive(Serialize, Deserialize, Hash, PartialEq, Eq, Clone, Debug)]
 pub struct CanisterID(pub Vec<u8>);
 
 impl CanisterID {
@@ -46,7 +44,7 @@ impl CanisterID {
     }
 }
 
-type Certification = Hash;
+pub type Certification = Hash;
 
 /// Describes the state of users accounts at the tip of the chain
 #[derive(Default)]
@@ -86,7 +84,7 @@ impl Balances {
     }
 }
 
-#[derive(Serialize, Hash, Clone)]
+#[derive(Serialize, Deserialize, Hash, Debug, PartialEq, Eq, Clone)]
 pub enum Transaction {
     Burn {
         from: UserID,
@@ -105,71 +103,129 @@ pub enum Transaction {
     },
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Block {
     pub payment: Transaction,
     pub timestamp: SystemTime,
     pub transaction_id: Hash,
+    pub parent_hash: Option<Hash>,
+    pub index: usize,
 }
 
 impl Block {
-    // TODO This is not a hashing function
-    pub fn hash(&self, parent_hash: Option<Hash>) -> Hash {
-        parent_hash.unwrap_or(0) + 1
-    }
-}
-
-#[derive(Serialize, Clone)]
-pub struct HashedBlock {
-    pub hash: Hash,
-    pub block: Block,
-}
-
-impl HashedBlock {
-    pub fn new(
-        parent_block: Option<&HashedBlock>,
-        transaction_id: Hash,
+    fn new(
         payment: Transaction,
-    ) -> HashedBlock {
+        transaction_id: Hash,
+        parent_hash: Option<Hash>,
+        index: usize,
+    ) -> Block {
         let timestamp = dfn_core::api::now();
-        let block = Block {
+        Block {
             payment,
             timestamp,
             transaction_id,
-        };
-        let parent_hash = parent_block.map(|b| b.hash);
-        let hash = block.hash(parent_hash);
-        HashedBlock { block, hash }
+            parent_hash,
+            index,
+        }
+    }
+
+    fn hash(&self) -> Hash {
+        // TODO hash properly
+        self.parent_hash.unwrap_or(0) + 1
+    }
+}
+
+// We do this manually here because we want to prevent construction in the
+// crate, whereas non_exhaustive only protects other crates from constructing
+// things
+#[allow(clippy::manual_non_exhaustive)]
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct HashedBlock {
+    pub block: Block,
+    pub hash: Hash,
+    #[serde(skip_serializing)]
+    __inner: (),
+}
+
+mod hidden {
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    pub struct HashedBlock {
+        pub block: super::Block,
+        pub hash: super::Hash,
+    }
+}
+
+impl HashedBlock {
+    pub fn hash_block(block: Block) -> HashedBlock {
+        HashedBlock {
+            hash: block.hash(),
+            block,
+            __inner: (),
+        }
+    }
+}
+
+/// We have this custom implementation make sure that the HashedBlock is always
+/// constructed correctly
+impl<'de> Deserialize<'de> for HashedBlock {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let hidden::HashedBlock { block, hash } = Deserialize::deserialize(deserializer)?;
+        if block.hash() != hash {
+            return Err(Error::custom(
+                "The block failed do deserialize, hash checking failed",
+            ));
+        }
+        Ok(HashedBlock {
+            block,
+            hash,
+            __inner: (),
+        })
     }
 }
 
 /// Stores a chain of transactions with their metadata
 #[derive(Default)]
 pub struct BlockChain {
-    pub inner: Vec<HashedBlock>,
+    pub inner: HashMap<Hash, Block>,
+    pub last_hash: Option<Hash>,
 }
 
 impl BlockChain {
     pub fn add_payment(&mut self, transaction_id: Hash, payment: Transaction) {
-        let last = self.last_block();
-        let block = HashedBlock::new(last, transaction_id, payment);
-        self.inner.push(block)
+        let parent_hash = self.last_block_hash();
+        let this_index = match self.last_block() {
+            Some(last_block) => last_block.block.index + 1,
+            None => 0,
+        };
+        let block = Block::new(payment, transaction_id, parent_hash.cloned(), this_index);
+
+        let block_hash = block.hash();
+        self.last_hash = Some(block_hash);
+        let res = self.inner.insert(block_hash, block);
+        assert_eq!(res, None);
     }
 
-    pub fn get(&self, index: BlockIndex) -> Option<&HashedBlock> {
-        self.inner.get(index)
+    pub fn get(&self, hash: Hash) -> Option<HashedBlock> {
+        let block = self.inner.get(&hash)?.clone();
+        Some(HashedBlock {
+            block,
+            hash,
+            __inner: (),
+        })
     }
 
-    pub fn last_block_index(&self) -> Option<BlockIndex> {
-        if self.inner.is_empty() {
-            None
-        } else {
-            Some(self.inner.len() - 1)
-        }
+    pub fn last_block_hash(&self) -> Option<&Hash> {
+        self.last_hash.as_ref()
     }
 
-    pub fn last_block(&self) -> Option<&HashedBlock> {
-        self.inner.last()
+    pub fn last_block(&self) -> Option<HashedBlock> {
+        let last = self.last_block_hash()?;
+        self.get(*last)
     }
 }
 
@@ -211,6 +267,7 @@ fn deposit(transaction_id: Hash, to: UserID) {
 /// equivalent amount of ICP to the receiver canister
 /// Any amount refunded is re-added to the ledger
 // TODO put limits on the payload before it gets loaded into memory
+// TODO replace this completely when we have implemented the ERC-30
 #[update]
 async fn withdraw(
     transaction_id: Hash,
@@ -258,17 +315,16 @@ fn send(transaction_id: Hash, amount: Amount, to: UserID) {
 
 /// Certification isn't implemented yet
 #[query]
-fn tip_of_chain() -> Option<(Certification, BlockIndex)> {
+fn tip_of_chain() -> Option<(Certification, Hash)> {
     let transactions = &STATE.read().unwrap().transactions;
-    let ind = transactions.last_block_index()?;
-    let hash = transactions.last_block()?.hash;
-    Some((hash, ind))
+    let hash = transactions.last_block_hash()?;
+    Some((*hash, *hash))
 }
 
 #[query]
-fn block(block_index: BlockIndex) -> Option<HashedBlock> {
+fn block(block_hash: Hash) -> Option<HashedBlock> {
     let transactions = &STATE.read().unwrap().transactions;
-    transactions.get(block_index).cloned()
+    transactions.get(block_hash)
 }
 
 fn burn(transaction_id: Hash, to: UserID, amount: Amount) {
