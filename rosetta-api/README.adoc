@@ -15,7 +15,13 @@ Building Docker image requires GitHub token with `repository` permissions in ord
 docker build . \
     --build-arg GITHUB_TOKEN=$(cat github-token.txt) \
     --file Dockerfile \
-    --tag dfinity/rosetta-node
+    --tag dfinity/rosetta-node/rosetta-api \
+    --target rosetta-api
+docker build . \
+    --build-arg GITHUB_TOKEN=$(cat github-token.txt) \
+    --file Dockerfile \
+    --tag dfinity/rosetta-node/ledger-canister \
+    --target ledger-canister
 ....
 
 Once the image is built, start Rosetta API server with
@@ -27,7 +33,18 @@ docker run \
     --tty \
     --publish 8080:8080 \
     --rm \
-    dfinity/rosetta-node
+    dfinity/rosetta-node/rosetta-api
+....
+
+and ledger canister with
+
+[source,bash]
+....
+docker run \
+    --interactive \
+    --tty \
+    --rm \
+    dfinity/rosetta-node/ledger-canister
 ....
 
 == Things that are not implemented
