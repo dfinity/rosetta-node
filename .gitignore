@@ -43,6 +43,7 @@ README.html
 !.gitattributes
 !.cargo
 !.gitignore
+!.gitlab-ci.yml
 ,*
 *~
 *.bak

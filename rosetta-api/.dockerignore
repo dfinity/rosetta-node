@@ -1,1 +1,3 @@
 target
+!target/release/ic-ledger-canister
+!target/release/ic-rosetta-api

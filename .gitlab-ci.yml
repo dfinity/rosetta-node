@@ -1,0 +1,40 @@
+stages:
+  - build
+  - docker
+
+build:
+  image: rust:1.47.0
+  stage: build
+  before_script:
+    - apt-get update
+    - apt-get install -y --no-install-recommends clang build-essential cmake libbz2-dev libclang-dev liblz4-dev librocksdb-dev libsnappy-dev libzstd-dev
+  script:
+    - pushd rosetta-api
+    - cargo build --release --package ic-rosetta-api
+  variables:
+    CARGO_HOME: "$CI_PROJECT_DIR/.cargo-home"
+    LLVM_CONFIG_PATH: "/usr/bin/llvm-config-7"
+    ROCKSDB_LIB_DIR: "/usr/lib"
+  cache:
+    paths:
+      - .cargo-home/bin
+      - .cargo-home/git/db
+      - .cargo-home/registry/cache
+      - .cargo-home/registry/index
+      - rosetta-api/target
+  artifacts:
+    expire_in: 1 day
+    paths:
+      - rosetta-api/target/release/ic-ledger-canister
+      - rosetta-api/target/release/ic-rosetta-api
+
+docker:
+  stage: docker
+  image:
+    name: gcr.io/kaniko-project/executor:debug
+    entrypoint: [""]
+  script:
+    - mkdir -p /kaniko/.docker
+    - echo "{\"auths\":{\"$CI_REGISTRY\":{\"username\":\"$CI_REGISTRY_USER\",\"password\":\"$CI_REGISTRY_PASSWORD\"}}}" > /kaniko/.docker/config.json
+    - /kaniko/executor --context $CI_PROJECT_DIR/rosetta-api --dockerfile $CI_PROJECT_DIR/rosetta-api/Dockerfile --destination $CI_REGISTRY_IMAGE/ledger-canister:$CI_COMMIT_TAG --target ledger-canister
+    - /kaniko/executor --context $CI_PROJECT_DIR/rosetta-api --dockerfile $CI_PROJECT_DIR/rosetta-api/Dockerfile --destination $CI_REGISTRY_IMAGE/rosetta-api:$CI_COMMIT_TAG --target rosetta-api
