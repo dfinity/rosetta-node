@@ -2,7 +2,7 @@ FROM rust:1.47.0 as builder
 ARG GITHUB_ORG=dfinity-lab
 ARG GITHUB_REPO=rosetta-node
 ARG GITHUB_TOKEN
-ARG RELEASE=master
+ARG RELEASE=main
 WORKDIR /usr/src
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
