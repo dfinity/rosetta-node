@@ -1,6 +1,4 @@
 FROM rust:1.47.0 as builder
-ARG GITHUB_ORG=dfinity-lab
-ARG GITHUB_REPO=rosetta-node
 ARG GITHUB_TOKEN
 ARG RELEASE=main
 WORKDIR /usr/src
@@ -19,16 +17,16 @@ ENV LLVM_CONFIG_PATH=/usr/bin/llvm-config-7
 ENV ROCKSDB_LIB_DIR=/usr/lib
 RUN curl \
         --header "Authorization: token $GITHUB_TOKEN" \
-        --location https://api.github.com/repos/$GITHUB_ORG/$GITHUB_REPO/tarball/$RELEASE \
+        --location https://api.github.com/repos/dfinity-lab/rosetta-node/tarball/$RELEASE \
         --output tarball.tar.gz && \
-    mkdir dfinity && \
-    tar xzf tarball.tar.gz --directory dfinity --strip-components=1 && \
-    cd dfinity/rs && \
+    mkdir rosetta-node && \
+    tar xzf tarball.tar.gz --directory rosetta-node --strip-components=1 && \
+    cd rosetta-node/rosetta-api && \
     cargo build --release --package ic-rosetta-api
 
 FROM ubuntu:latest
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         libssl1.1
-COPY --from=builder /usr/src/dfinity/rs/target/release/ic-rosetta-api /usr/local/bin/ic-rosetta-api
+COPY --from=builder /usr/src/rosetta-node/rosetta-api/target/release/ic-rosetta-api /usr/local/bin/ic-rosetta-api
 ENTRYPOINT ["/usr/local/bin/ic-rosetta-api"]
