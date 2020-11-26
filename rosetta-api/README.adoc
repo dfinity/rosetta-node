@@ -8,7 +8,7 @@ The Rosetta API uses slightly different terminology to us:
 * Mempools are the ingress queue
 
 == Building and running Docker image
-Building Docker image requires GitHub token `repository` permissions in order to download tarball with the sources via GitHub API. The command below assumes that the token is available in `github-token.txt` in the current working directory.
+Building Docker image requires GitHub token with `repository` permissions in order to download tarball with the sources via GitHub API. The command below assumes that the token is available in `github-token.txt` in the current working directory.
 
 [source,bash]
 ....
