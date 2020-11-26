@@ -15,7 +15,7 @@ Building Docker image requires GitHub token `repository` permissions in order to
 docker build . \
     --build-arg GITHUB_TOKEN=$(cat github-token.txt) \
     --file Dockerfile \
-    --tag dfinity/rosetta-api
+    --tag dfinity/rosetta-node
 ....
 
 Once the image is built, start Rosetta API server with
@@ -27,7 +27,7 @@ docker run \
     --tty \
     --publish 8080:8080 \
     --rm \
-    dfinity/rosetta-api
+    dfinity/rosetta-node
 ....
 
 == Things that are not implemented

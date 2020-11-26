@@ -1,6 +1,6 @@
 FROM rust:1.47.0 as builder
 ARG GITHUB_ORG=dfinity-lab
-ARG GITHUB_REPO=dfinity
+ARG GITHUB_REPO=rosetta-node
 ARG GITHUB_TOKEN
 ARG RELEASE=master
 WORKDIR /usr/src
