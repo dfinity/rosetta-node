@@ -28,8 +28,8 @@ FROM ubuntu:latest as ledger-canister
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         libssl1.1
-COPY --from=builder /usr/src/rosetta-node/rosetta-api/target/release/ledger_canister /usr/local/bin/ledger-canister
-ENTRYPOINT ["/usr/local/bin/ledger-canister"]
+COPY --from=builder /usr/src/rosetta-node/rosetta-api/target/release/ic-ledger-canister /usr/local/bin/ic-ledger-canister
+ENTRYPOINT ["/usr/local/bin/ic-ledger-canister"]
 
 FROM ubuntu:latest as rosetta-api
 RUN apt-get update && \

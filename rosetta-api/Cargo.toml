@@ -37,5 +37,5 @@ thread_local = "1.0.1"
 # ic-scenario-tests = { path = "../scenario_tests" }
 
 [[bin]]
-name = "ledger_canister"
+name = "ic-ledger-canister"
 path = "src/ledger_canister.rs"
