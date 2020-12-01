@@ -8,14 +8,20 @@ The Rosetta API uses slightly different terminology to us:
 * Mempools are the ingress queue
 
 == Building and running Docker image
-Building Docker image requires GitHub token `repository` permissions in order to download tarball with the sources via GitHub API. The command below assumes that the token is available in `github-token.txt` in the current working directory.
+Building Docker image requires GitHub token with `repository` permissions in order to download tarball with the sources via GitHub API. The command below assumes that the token is available in `github-token.txt` in the current working directory.
 
 [source,bash]
 ....
 docker build . \
     --build-arg GITHUB_TOKEN=$(cat github-token.txt) \
     --file Dockerfile \
-    --tag dfinity/rosetta-api
+    --tag dfinity/rosetta-node/rosetta-api \
+    --target rosetta-api
+docker build . \
+    --build-arg GITHUB_TOKEN=$(cat github-token.txt) \
+    --file Dockerfile \
+    --tag dfinity/rosetta-node/ledger-canister \
+    --target ledger-canister
 ....
 
 Once the image is built, start Rosetta API server with
@@ -27,7 +33,18 @@ docker run \
     --tty \
     --publish 8080:8080 \
     --rm \
-    dfinity/rosetta-api
+    dfinity/rosetta-node/rosetta-api
+....
+
+and ledger canister with
+
+[source,bash]
+....
+docker run \
+    --interactive \
+    --tty \
+    --rm \
+    dfinity/rosetta-node/ledger-canister
 ....
 
 == Things that are not implemented

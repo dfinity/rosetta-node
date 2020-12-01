@@ -39,9 +39,11 @@ README.html
 
 ### Working files ###
 .*
+!.dockerignore
 !.gitattributes
 !.cargo
 !.gitignore
+!.gitlab-ci.yml
 ,*
 *~
 *.bak

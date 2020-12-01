@@ -36,5 +36,5 @@ rand_distr = "0.3.0"
 thread_local = "1.0.1"
 
 [[bin]]
-name = "ledger_canister"
+name = "ic-ledger-canister"
 path = "src/ledger_canister.rs"
