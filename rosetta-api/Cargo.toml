@@ -34,7 +34,6 @@ thread_local = "1.0.1"
 actix-rt = "*"
 rand_distr = "0.3.0"
 thread_local = "1.0.1"
-# ic-scenario-tests = { path = "../scenario_tests" }
 
 [[bin]]
 name = "ledger_canister"
