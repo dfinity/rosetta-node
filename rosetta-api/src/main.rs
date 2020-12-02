@@ -13,9 +13,13 @@ struct Opt {
     listen_address: String,
     #[structopt(short = "p", long = "port", default_value = "8080")]
     listen_port: u16,
+    #[structopt(
+        short = "c",
+        long = "canister-id",
+        default_value = "ctudu-yiaaa-aaaaa-qacla-cai"
+    )]
+    ic_canister_id: String,
 }
-
-static IC_CANISTER_ID: &str = "3z2ve-waaaa-aaaab-qacmq-cai";
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -23,7 +27,8 @@ async fn main() -> std::io::Result<()> {
     println!("Listening on {}:{}", opt.listen_address, opt.listen_port);
     let addr = format!("{}:{}", opt.listen_address, opt.listen_port);
 
-    let canister_id = CanisterId::new(PrincipalId::from_str(IC_CANISTER_ID).unwrap()).unwrap();
+    let canister_id =
+        CanisterId::new(PrincipalId::from_str(&opt.ic_canister_id[..]).unwrap()).unwrap();
 
     let url = reqwest::Url::parse("https://gw.dfinity.network").unwrap();
 
