@@ -80,6 +80,23 @@ pub enum ArtifactTag {
     StateSyncArtifact,
 }
 
+impl std::fmt::Display for ArtifactTag {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                ArtifactTag::ConsensusArtifact => "Consensus",
+                ArtifactTag::IngressArtifact => "Ingress",
+                ArtifactTag::CertificationArtifact => "Certification",
+                ArtifactTag::DkgArtifact => "DKG",
+                ArtifactTag::FileTreeSyncArtifact => "FileTreeSync",
+                ArtifactTag::StateSyncArtifact => "StateSync",
+            }
+        )
+    }
+}
+
 impl From<&ArtifactId> for ArtifactTag {
     fn from(id: &ArtifactId) -> ArtifactTag {
         match id {

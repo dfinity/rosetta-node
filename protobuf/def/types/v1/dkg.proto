@@ -31,11 +31,24 @@ message Summary {
 	repeated TaggedNiDkgTranscript current_transcripts = 5;
 	repeated TaggedNiDkgTranscript next_transcripts = 6;
 	repeated NiDkgConfig configs = 7;
+	repeated IdedNiDkgTranscript transcripts_for_new_subnets = 8;
 }
 
 message TaggedNiDkgTranscript {
 	NiDkgTranscript transcript = 1;
 	NiDkgTag tag = 2;
+}
+
+message IdedNiDkgTranscript {
+	NiDkgId dkg_id = 1;
+	NiDkgTranscriptResult transcript_result = 2;
+}
+
+message NiDkgTranscriptResult {
+	oneof val {
+		NiDkgTranscript transcript = 1;
+		bytes error_string = 2;
+	}
 }
 
 message NiDkgTranscript {

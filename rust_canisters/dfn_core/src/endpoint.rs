@@ -39,6 +39,19 @@ where
     })
 }
 
+/// Useful for writing the canister_init function because it doesn't return
+/// anything
+pub fn over_init<In, F>(f: F)
+where
+    In: FromWire + NewType,
+    F: FnOnce(In),
+{
+    over_bytes_init(|inp| {
+        let input = In::from_bytes(inp).expect("Deserialization Failed");
+        f(input)
+    })
+}
+
 /// Like over, but `reject`s the call when the function `f` given as argument
 /// returns an `Err`. If `f` returns an `Ok`, it calls `reply`.
 pub fn over_may_reject<In, Out, F, Witness>(_: Witness, f: F)
@@ -149,6 +162,17 @@ where
         Ok(output) => reply(&output),
         Err(msg) => reject(msg.as_str()),
     }
+}
+
+pub fn over_bytes_init<F>(f: F)
+where
+    F: FnOnce(Vec<u8>),
+{
+    setup::START.call_once(|| {
+        printer::hook();
+    });
+    let bs = arg_data();
+    f(bs);
 }
 
 pub fn over_async_bytes<F, Fut>(f: F)

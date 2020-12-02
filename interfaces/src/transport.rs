@@ -7,7 +7,7 @@ use ic_types::transport::{
     FlowId, FlowTag, TransportClientContext, TransportClientType, TransportErrorCode,
     TransportPayload, TransportStateChange,
 };
-use ic_types::NodeId;
+use ic_types::{NodeId, RegistryVersion};
 
 /// Transport layer APIs.
 pub trait Transport: Send + Sync {
@@ -34,6 +34,7 @@ pub trait Transport: Send + Sync {
         client_context: &TransportClientContext,
         peer: &NodeId,
         node_record: &NodeRecord,
+        registry_version: RegistryVersion,
     ) -> Result<(), TransportErrorCode>;
 
     /// Remove the peer from the set of valid neighbors, and tear down the
@@ -43,6 +44,7 @@ pub trait Transport: Send + Sync {
         &self,
         client_context: &TransportClientContext,
         peer_id: &NodeId,
+        registry_version: RegistryVersion,
     ) -> Result<(), TransportErrorCode>;
 
     /// Send the message to the specified peer. The message will be enqueued

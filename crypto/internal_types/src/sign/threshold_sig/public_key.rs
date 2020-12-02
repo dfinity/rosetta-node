@@ -53,6 +53,11 @@ pub mod bls12_381 {
 
     impl PublicKeyBytes {
         pub const SIZE: usize = 96;
+
+        #[inline]
+        pub fn as_bytes(&self) -> &[u8; PublicKeyBytes::SIZE] {
+            &self.0
+        }
     }
 
     /// These conversions are used for the CLI only

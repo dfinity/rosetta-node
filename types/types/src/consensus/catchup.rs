@@ -1,127 +1,134 @@
 use crate::{
     consensus::{
-        Block, Committee, HasCommittee, HasHeight, HasVersion, RandomBeacon, ThresholdSignature,
-        ThresholdSignatureShare,
+        Block, BlockPayload, Committee, HasCommittee, HasHeight, HasVersion, HashedBlock,
+        HashedRandomBeacon, RandomBeacon, ThresholdSignature, ThresholdSignatureShare,
     },
     crypto::threshold_sig::ni_dkg::NiDkgId,
     crypto::*,
     CryptoHashOfState, Height, RegistryVersion, ReplicaVersion,
 };
 use ic_protobuf::types::v1 as pb;
+use prost::Message;
 use serde::{Deserialize, Serialize};
 use std::cmp::{Ordering, PartialOrd};
 use std::convert::TryFrom;
 
 /// CatchUpContent contains all necessary data to bootstrap a subnet's
 /// participant.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
-pub struct CatchUpContent {
+pub type CatchUpContent = CatchUpContentT<HashedBlock>;
+
+/// A generic struct shared between CatchUpContent and CatchUpContentShare.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Ord, Hash)]
+pub struct CatchUpContentT<T> {
+    version: ReplicaVersion,
     /// A finalized Block that contains DKG summary. We call its height the
     /// catchup height.
-    pub block: Block,
+    pub block: T,
     /// The RandomBeacon that is used at the catchup height.
-    pub random_beacon: RandomBeacon,
+    pub random_beacon: HashedRandomBeacon,
     /// Hash of the subnet execution state that has been fully computed at the
     /// catchup height.
     pub state_hash: CryptoHashOfState,
-    /// Hash of Block. Only used to implement PartialOrd/Ord.
-    pub block_hash: CryptoHashOf<Block>,
-    /// Hash of RandomBeacon. Only used to implement PartialOrd/Ord.
-    pub random_beacon_hash: CryptoHashOf<RandomBeacon>,
 }
 
 impl CatchUpContent {
+    pub fn new(
+        block: HashedBlock,
+        random_beacon: HashedRandomBeacon,
+        state_hash: CryptoHashOfState,
+    ) -> Self {
+        Self {
+            version: block.version().clone(),
+            block,
+            random_beacon,
+            state_hash,
+        }
+    }
     /// Return the registry version as recorded in the DKG summary of
     /// the block contained in the CatchUpContent.
     pub fn registry_version(&self) -> RegistryVersion {
-        self.block.dkg_payload.summary().registry_version
+        self.block
+            .as_ref()
+            .payload
+            .as_ref()
+            .as_summary()
+            .registry_version
+    }
+
+    pub fn from_share_content(share: CatchUpShareContent, block: Block) -> Self {
+        Self {
+            version: share.version,
+            block: HashedBlock {
+                hash: share.block,
+                value: block,
+            },
+            random_beacon: share.random_beacon,
+            state_hash: share.state_hash,
+        }
     }
 }
 
 impl From<&CatchUpContent> for pb::CatchUpContent {
     fn from(content: &CatchUpContent) -> Self {
         Self {
-            block: Some(pb::Block::from(&content.block)),
-            random_beacon: Some(pb::RandomBeacon::from(&content.random_beacon)),
+            block: Some(pb::Block::from(content.block.as_ref())),
+            random_beacon: Some(pb::RandomBeacon::from(content.random_beacon.as_ref())),
+            block_hash: content.block.get_hash().clone().get().0,
+            random_beacon_hash: content.random_beacon.get_hash().clone().get().0,
             state_hash: content.state_hash.clone().get().0,
-            block_hash: content.block_hash.clone().get().0,
-            random_beacon_hash: content.random_beacon_hash.clone().get().0,
         }
     }
 }
 
 pub fn catch_up_content_from_protobuf<
-    F: FnOnce(&crate::batch::BatchPayload) -> CryptoHashOf<crate::batch::BatchPayload>
-        + Send
-        + 'static,
+    F: FnOnce(&BlockPayload) -> CryptoHashOf<BlockPayload> + Send + 'static,
 >(
     hash_func: F,
     content: pb::CatchUpContent,
 ) -> Result<CatchUpContent, String> {
-    Ok(CatchUpContent {
-        block: super::block_from_protobuf(
-            hash_func,
-            content
-                .block
-                .ok_or_else(|| String::from("Error: CUP missing block"))?,
-        )?,
-        random_beacon: RandomBeacon::try_from(
-            content
-                .random_beacon
-                .ok_or_else(|| String::from("Error: CUP missing block"))?,
-        )?,
-        state_hash: CryptoHashOf::from(CryptoHash(content.state_hash)),
-        block_hash: CryptoHashOf::from(CryptoHash(content.block_hash)),
-        random_beacon_hash: CryptoHashOf::from(CryptoHash(content.random_beacon_hash)),
-    })
+    let block = super::block_from_protobuf(
+        hash_func,
+        content
+            .block
+            .ok_or_else(|| String::from("Error: CUP missing block"))?,
+    )?;
+    let random_beacon = RandomBeacon::try_from(
+        content
+            .random_beacon
+            .ok_or_else(|| String::from("Error: CUP missing block"))?,
+    )?;
+    Ok(CatchUpContent::new(
+        HashedBlock {
+            hash: CryptoHashOf::from(CryptoHash(content.block_hash)),
+            value: block,
+        },
+        HashedRandomBeacon {
+            hash: CryptoHashOf::from(CryptoHash(content.random_beacon_hash)),
+            value: random_beacon,
+        },
+        CryptoHashOf::from(CryptoHash(content.state_hash)),
+    ))
 }
 
 impl SignedBytesWithoutDomainSeparator for CatchUpContent {
     fn as_signed_bytes_without_domain_separator(&self) -> Vec<u8> {
-        serde_cbor::to_vec(&self).unwrap()
+        pb::CatchUpContent::from(self).as_protobuf_vec()
     }
 }
 
-impl HasVersion for CatchUpContent {
+impl<T> HasVersion for CatchUpContentT<T> {
     fn version(&self) -> &ReplicaVersion {
-        self.block.version()
+        &self.version
     }
 }
 
-/// To avoid imposing PartiaOrd trait on Block type, we implement a custom
-/// PartialOrd trait instance for CatchUpContent.
-impl PartialOrd for CatchUpContent {
-    fn partial_cmp(&self, other: &CatchUpContent) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-/// To avoid imposing Ord trait on Block type, we implement a custom
-/// Ord trait instance for CatchUpContent.
-///
-/// TODO(CON-318): Remove the Ord trait requirement for share aggregation.
-impl Ord for CatchUpContent {
-    fn cmp(&self, other: &CatchUpContent) -> Ordering {
-        match self.height().cmp(&other.height()) {
-            Ordering::Equal => {
-                (&self.block_hash, &self.state_hash, &self.random_beacon_hash).cmp(&(
-                    &other.block_hash,
-                    &other.state_hash,
-                    &other.random_beacon_hash,
-                ))
-            }
-            result => result,
-        }
-    }
-}
-
-impl HasHeight for CatchUpContent {
+impl<T> HasHeight for CatchUpContentT<T> {
     fn height(&self) -> Height {
-        self.block.height()
+        self.random_beacon.height()
     }
 }
 
-impl HasCommittee for CatchUpContent {
+impl<T> HasCommittee for CatchUpContentT<T> {
     fn committee() -> Committee {
         Committee::HighThreshold
     }
@@ -135,43 +142,60 @@ impl HasCommittee for CatchUpContent {
 /// clearer picture of what the key should be, where it is stored, etc.
 pub type CatchUpPackage = Signed<CatchUpContent, ThresholdSignature<CatchUpContent>>;
 
+pub type CatchUpContentHash = CryptoHashOf<CatchUpContent>;
+
 impl From<&CatchUpPackage> for pb::CatchUpPackage {
     fn from(cup: &CatchUpPackage) -> Self {
         Self {
             signer: Some(pb::NiDkgId::from(cup.signature.signer)),
             signature: cup.signature.signature.clone().get().0,
-            content: Some(pb::CatchUpContent::from(&cup.content)),
+            content: pb::CatchUpContent::from(&cup.content).as_protobuf_vec(),
         }
     }
 }
 
 pub fn catch_up_package_from_protobuf<
-    F: FnOnce(&crate::batch::BatchPayload) -> CryptoHashOf<crate::batch::BatchPayload>
-        + Send
-        + 'static,
+    F: FnOnce(&BlockPayload) -> CryptoHashOf<BlockPayload> + Send + 'static,
 >(
     hash_func: F,
-    cup: pb::CatchUpPackage,
+    cup: &pb::CatchUpPackage,
 ) -> Result<CatchUpPackage, String> {
     Ok(CatchUpPackage {
         content: catch_up_content_from_protobuf(
             hash_func,
-            cup.content.ok_or("Error: cup content missing")?,
+            pb::CatchUpContent::decode(&cup.content[..])
+                .map_err(|e| format!("CatchUpContent failed to decode {:?}", e))?,
         )?,
         signature: ThresholdSignature {
-            signature: CombinedThresholdSigOf::new(CombinedThresholdSig(cup.signature)),
+            signature: CombinedThresholdSigOf::new(CombinedThresholdSig(cup.signature.clone())),
             signer: NiDkgId::try_from(
                 cup.signer
-                    .ok_or_else(|| String::from("Error: CUP signer not present"))?,
+                    .as_ref()
+                    .ok_or_else(|| String::from("Error: CUP signer not present"))?
+                    .clone(),
             )
             .map_err(|e| format!("Unable to decode CUP signer {:?}", e))?,
         },
     })
 }
 
+/// Content of CatchUpPackageShare use the block hash to keep its size small.
+pub type CatchUpShareContent = CatchUpContentT<CryptoHashOf<Block>>;
+
+impl From<&CatchUpContent> for CatchUpShareContent {
+    fn from(content: &CatchUpContent) -> Self {
+        Self {
+            version: content.version().clone(),
+            block: content.block.get_hash().clone(),
+            random_beacon: content.random_beacon.clone(),
+            state_hash: content.state_hash.clone(),
+        }
+    }
+}
+
 /// CatchUpPackageShare is signed by individual members in a threshold
 /// committee.
-pub type CatchUpPackageShare = Signed<CatchUpContent, ThresholdSignatureShare<CatchUpContent>>;
+pub type CatchUpPackageShare = Signed<CatchUpShareContent, ThresholdSignatureShare<CatchUpContent>>;
 
 /// The parameters used to request `CatchUpPackage` (by nodemanager).
 ///
@@ -206,6 +230,33 @@ impl From<&CatchUpPackage> for CatchUpPackageParam {
             height: catch_up_package.height(),
             registry_version: catch_up_package.content.registry_version(),
         }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
+pub struct CatchUpContentProtobufBytes(pub Vec<u8>);
+
+pub struct CUPWithOriginalProtobuf {
+    pub cup: CatchUpPackage,
+    pub protobuf: pb::CatchUpPackage,
+}
+
+impl CUPWithOriginalProtobuf {
+    pub fn from_cup(cup: CatchUpPackage) -> Self {
+        let protobuf = pb::CatchUpPackage::from(&cup);
+        Self { cup, protobuf }
+    }
+}
+
+impl From<&CUPWithOriginalProtobuf> for CatchUpPackageParam {
+    fn from(c: &CUPWithOriginalProtobuf) -> Self {
+        Self::from(&c.cup)
+    }
+}
+
+impl SignedBytesWithoutDomainSeparator for CatchUpContentProtobufBytes {
+    fn as_signed_bytes_without_domain_separator(&self) -> Vec<u8> {
+        self.0.clone()
     }
 }
 

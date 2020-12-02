@@ -268,6 +268,36 @@ where
     }
 }
 
+/// ```
+/// use phantom_newtype::Id;
+/// use candid::{Decode, Encode};
+///
+/// enum User {}
+/// type UserId = Id<User, u64>;
+///
+/// let id = UserId::from(3);
+/// let bytes = Encode!(&id).unwrap();
+/// let decoded = Decode!(&bytes, UserId).unwrap();
+/// assert_eq!(id, decoded);
+/// ```
+impl<Entity, Repr> candid::CandidType for Id<Entity, Repr>
+where
+    Repr: candid::CandidType,
+{
+    fn id() -> candid::types::TypeId {
+        Repr::id()
+    }
+    fn _ty() -> candid::types::Type {
+        Repr::_ty()
+    }
+    fn idl_serialize<S>(&self, serializer: S) -> Result<(), S::Error>
+    where
+        S: candid::types::Serializer,
+    {
+        self.0.idl_serialize(serializer)
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 impl<Entity, Repr: fmt::Debug + Arbitrary> Arbitrary for Id<Entity, Repr> {
     type Parameters = Repr::Parameters;

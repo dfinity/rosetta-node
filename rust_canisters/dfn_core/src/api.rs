@@ -12,7 +12,7 @@ cfg_if::cfg_if! {
 pub mod futures;
 pub use self::futures::kickstart;
 use self::futures::{CallFuture, FutureResult, RefCounted};
-use ic_base_types::PrincipalId;
+pub use ic_base_types::{CanisterId, PrincipalId};
 use on_wire::{FromWire, IntoWire, NewType};
 use std::convert::TryFrom;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -36,8 +36,6 @@ impl Funds {
         }
     }
 }
-
-pub type CanisterId = ic_base_types::CanisterId;
 
 /// This is the raw system API as documented by the dfinity public spec
 /// I would advise not using this as it's difficult to use and likely to change
@@ -87,6 +85,7 @@ pub mod ic0 {
         );
         pub fn call_data_append(src: u32, size: u32);
         pub fn call_funds_add(unit_src: u32, unit_size: u32, amount: u64);
+        pub fn call_cycles_add(amount: u64);
         pub fn call_perform() -> i32;
         pub fn stable_size() -> u32;
         pub fn stable_grow(additional_pages: u32) -> i32;
@@ -94,12 +93,17 @@ pub mod ic0 {
         pub fn stable_write(offset: u32, src: u32, size: u32);
         pub fn time() -> u64;
         pub fn canister_balance(unit_src: u32, unit_size: u32) -> u64;
+        pub fn canister_cycle_balance() -> u64;
         pub fn msg_funds_available(unit_src: u32, unit_size: u32) -> u64;
         pub fn msg_funds_refunded(unit_src: u32, unit_size: u32) -> u64;
+        pub fn msg_cycles_available() -> u64;
+        pub fn msg_cycles_refunded() -> u64;
+        pub fn msg_cycles_accept(amount: u64) -> u64;
         pub fn certified_data_set(src: u32, size: u32);
         pub fn data_certificate_present() -> u32;
         pub fn data_certificate_size() -> u32;
         pub fn data_certificate_copy(dst: u32, offset: u32, size: u32);
+        pub fn canister_status() -> u32;
     }
 }
 
@@ -207,6 +211,10 @@ pub mod ic0 {
         wrong_arch("call_funds_add")
     }
 
+    pub unsafe fn call_cycles_add(_amount: u64) {
+        wrong_arch("call_cycles_add")
+    }
+
     pub unsafe fn call_perform() -> i32 {
         wrong_arch("call_perform")
     }
@@ -238,6 +246,10 @@ pub mod ic0 {
         wrong_arch("canister_balance")
     }
 
+    pub unsafe fn canister_cycle_balance() -> u64 {
+        wrong_arch("canister_cycle_balance")
+    }
+
     pub unsafe fn msg_funds_available(_unit_src: u32, _unit_size: u32) -> u64 {
         wrong_arch("msg_funds_available")
     }
@@ -245,6 +257,19 @@ pub mod ic0 {
     pub unsafe fn msg_funds_refunded(_unit_src: u32, _unit_size: u32) -> u64 {
         wrong_arch("msg_funds_refunded")
     }
+
+    pub unsafe fn msg_cycles_available() -> u64 {
+        wrong_arch("msg_cycles_available")
+    }
+
+    pub unsafe fn msg_cycles_refunded() -> u64 {
+        wrong_arch("msg_cycles_refunded")
+    }
+
+    pub unsafe fn msg_cycles_accept(_amount: u64) -> u64 {
+        wrong_arch("msg_cycles_accept")
+    }
+
     pub unsafe fn certified_data_set(_src: u32, _size: u32) {
         wrong_arch("certified_data_set")
     }
@@ -259,6 +284,10 @@ pub mod ic0 {
 
     pub unsafe fn data_certificate_copy(_dst: u32, _offset: u32, _size: u32) {
         wrong_arch("data_certificate_copy")
+    }
+
+    pub unsafe fn canister_status() -> u32 {
+        wrong_arch("canister_status")
     }
 }
 
@@ -289,10 +318,7 @@ pub fn call_raw(
         );
         ic0::call_data_append(data.as_ptr() as u32, data.len() as u32);
         if funds.cycles > 0 {
-            call_funds_add(TokenUnit::Cycles, funds.cycles);
-        }
-        if funds.icpts > 0 {
-            call_funds_add(TokenUnit::ICP, funds.icpts);
+            call_cycles_add(funds.cycles);
         }
         ic0::call_perform()
     }
@@ -441,7 +467,7 @@ where
     ReturnType: FromWire + NewType,
 {
     let bytes: Vec<u8> = payload.into_bytes().map_err(|e| (None, e))?;
-    let res: Vec<u8> = call_bytes(id, method, &bytes, funds).await.unwrap();
+    let res: Vec<u8> = call_bytes(id, method, &bytes, funds).await?;
     ReturnType::from_bytes(res).map_err(|e| (None, e))
 }
 
@@ -469,6 +495,12 @@ pub fn call_funds_add(unit: TokenUnit, amount: u64) {
     }
 }
 
+pub fn call_cycles_add(amount: u64) {
+    unsafe {
+        ic0::call_cycles_add(amount);
+    }
+}
+
 /// Returns the argument extracted from the message payload.
 pub fn arg_data() -> Vec<u8> {
     let len: u32 = unsafe { ic0::msg_arg_data_size() };
@@ -480,13 +512,13 @@ pub fn arg_data() -> Vec<u8> {
 }
 
 /// Returns the caller of the current call.
-pub fn caller() -> Vec<u8> {
+pub fn caller() -> PrincipalId {
     let len: u32 = unsafe { ic0::msg_caller_size() };
     let mut bytes = vec![0; len as usize];
     unsafe {
         ic0::msg_caller_copy(bytes.as_mut_ptr() as u32, 0, len);
     }
-    bytes
+    PrincipalId::try_from(bytes).unwrap()
 }
 
 /// Returns this canister's id as a blob.
@@ -571,7 +603,7 @@ pub fn now() -> SystemTime {
     UNIX_EPOCH + duration
 }
 
-/// Represents the diffent token units that are available on canisters.
+/// Represents the different token units that are available on canisters.
 pub enum TokenUnit {
     Cycles = 0,
     ICP = 1,
@@ -594,6 +626,11 @@ pub fn canister_balance(unit: TokenUnit) -> u64 {
     unsafe { ic0::canister_balance(unit_blob.as_ptr() as u32, unit_blob.len() as u32) }
 }
 
+/// Returns the amount of cycles in the canister's account.
+pub fn canister_cycle_balance() -> u64 {
+    unsafe { ic0::canister_cycle_balance() }
+}
+
 /// Returns the amount of funds available in this current message.
 pub fn msg_funds_available(unit: TokenUnit) -> u64 {
     let unit_blob: Vec<u8> = unit.into();
@@ -604,6 +641,21 @@ pub fn msg_funds_available(unit: TokenUnit) -> u64 {
 pub fn msg_funds_refunded(unit: TokenUnit) -> u64 {
     let unit_blob: Vec<u8> = unit.into();
     unsafe { ic0::msg_funds_refunded(unit_blob.as_ptr() as u32, unit_blob.len() as u32) }
+}
+
+/// Returns the cycles available in this current message.
+pub fn msg_cycles_available() -> u64 {
+    unsafe { ic0::msg_cycles_available() }
+}
+
+/// Returns the amount of cycles refunded with a response.
+pub fn msg_cycles_refunded() -> u64 {
+    unsafe { ic0::msg_cycles_refunded() }
+}
+
+/// Indicates that `amount` of cycles should be accepted in the current message.
+pub fn msg_cycles_accept(amount: u64) -> u64 {
+    unsafe { ic0::msg_cycles_accept(amount) }
 }
 
 /// Sets the certified data of this canister.
@@ -630,4 +682,20 @@ pub fn data_certificate() -> Option<Vec<u8>> {
         ic0::data_certificate_copy(buf.as_mut_ptr() as u32, 0u32, n);
     }
     Some(buf)
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum CanisterStatus {
+    Running,
+    Stopping,
+    Stopped,
+}
+
+pub fn canister_status() -> CanisterStatus {
+    match unsafe { ic0::canister_status() } {
+        1 => CanisterStatus::Running,
+        2 => CanisterStatus::Stopping,
+        3 => CanisterStatus::Stopped,
+        other => panic!("Weird canister status: {}", other),
+    }
 }

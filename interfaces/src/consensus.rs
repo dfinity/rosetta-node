@@ -1,15 +1,14 @@
 use crate::{
-    consensus_pool::{ChangeAction, ChangeSet, ConsensusPool},
+    consensus_pool::{ChangeSet, ConsensusPool},
     crypto::ErrorReplication,
     ingress_manager::IngressSelectorError,
     ingress_pool::IngressPoolSelect,
 };
 use ic_types::{
     artifact::{ConsensusArtifact, ConsensusMessageFilter, PriorityFn},
-    consensus::CatchUpPackage,
     crypto::{CryptoError, CryptoResult},
     registry::RegistryClientError,
-    Height, NodeId, Time,
+    Height, NodeId,
 };
 
 /// Consensus artifact processing interface.
@@ -47,45 +46,12 @@ pub trait ConsensusGossip: Send + Sync {
     fn get_filter(&self) -> ConsensusMessageFilter;
 }
 
-/// Reader of consensus related states.
-pub trait ConsensusStateReader: Send + Sync {
-    /// Return the height of the latest/highest finalized block.
-    fn finalized_height(&self) -> Height;
-
-    /// Return the time as recorded in the latest/highest finalized block.
-    /// Return None if there has not been any finalized block since genesis.
-    fn consensus_time(&self) -> Option<Time>;
-
-    /// Return the latest/highest CatchUpPackage.
-    fn catch_up_package(&self) -> CatchUpPackage;
-}
-
-/// Things that can be updated in the consensus cache.
-#[derive(Debug, PartialEq, Eq)]
-pub enum CacheUpdateAction {
-    Finalization,
-    CatchUpPackage,
-}
-
-/// Consensus cache interface.
-pub trait ConsensusCache: ConsensusStateReader {
-    /// Check if the cache has to be updated given the set of ChangeActions
-    /// to be applied to the ConsensusPool.
-    ///
-    /// Return a list of CacheUpdateAction.
-    fn prepare(&self, change_set: &[ChangeAction]) -> Vec<CacheUpdateAction>;
-
-    /// Update the cache with the list of CacheUpdateAction.
-    fn update(&self, pool: &dyn ConsensusPool, updates: Vec<CacheUpdateAction>);
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum MembershipError {
     RandomBeaconNotFound,
     NodeNotFound(NodeId),
     RegistryClientError(RegistryClientError),
-    UnableToRetrieveRegistryVersion(Height),
-    UnableToRetrieveDkgTranscript(Height),
+    UnableToRetrieveDkgSummary(Height),
 }
 
 #[derive(Debug)]
@@ -116,7 +82,7 @@ pub enum ValidatorError {
     MembershipError(MembershipError),
     PayloadValidationError(PayloadValidationError),
     DkgMessageValidatorError(DkgMessageValidatorError),
-    DkgTranscriptNotFound(Height),
+    DkgSummaryNotFound(Height),
     DkgPayloadValidationError(String),
     OtherTransientError(String),
 }

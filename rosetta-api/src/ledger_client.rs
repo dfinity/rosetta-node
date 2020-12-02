@@ -1,21 +1,29 @@
 use crate::convert::{internal_error, invalid_block_id};
-use crate::ledger_canister::{Amount, Hash, HashedBlock, Transaction, UserID};
 use crate::models::ApiError;
 use crate::sync::{read_fs, LedgerCanister};
+use async_trait::async_trait;
 use core::ops::Deref;
-use ic_types::CanisterId;
+use core::time::Duration;
+use ic_types::messages::{HttpRequestEnvelope, HttpSubmitContent};
+use ic_types::{CanisterId, PrincipalId};
 use im::OrdMap;
+use ledger_canister::{Hash, HashedBlock, ICPTs, Transaction};
 use reqwest::Url;
 use std::collections::HashMap;
 use std::sync::RwLock;
 
+#[async_trait]
 pub trait LedgerAccess {
     // Maybe we should just return RwLockReadGuard explicitly and drop the Box
     fn read_blocks<'a>(&'a self) -> Box<dyn Deref<Target = Blocks> + 'a>;
-    fn sync_blocks(&mut self, _tip: Option<Hash>) -> Result<(), ApiError>;
+    async fn sync_blocks(&self) -> Result<(), ApiError>;
     fn ledger_canister_id(&self) -> &CanisterId;
     fn reqwest_client(&self) -> &reqwest::Client;
     fn testnet_url(&self) -> &Url;
+    async fn submit(
+        &self,
+        _envelope: HttpRequestEnvelope<HttpSubmitContent>,
+    ) -> Result<Hash, ApiError>;
 }
 
 pub struct LedgerClient {
@@ -35,6 +43,19 @@ impl LedgerClient {
     pub fn create_on_disk(testnet_url: Url, canister_id: CanisterId) -> Result<Self, ApiError> {
         let on_disk = Blocks::new_on_disk();
         Self::create_with_blocks(on_disk, testnet_url, canister_id)
+    }
+
+    #[cfg(test)]
+    pub fn create_with_sample_data(
+        sample_data: Vec<HashedBlock>,
+        testnet_url: Url,
+        canister_id: CanisterId,
+    ) -> Result<Self, ApiError> {
+        let mut bs = Blocks::default();
+        for block in sample_data.into_iter() {
+            bs.add_block(block)?;
+        }
+        Self::create_with_blocks(bs, testnet_url, canister_id)
     }
 
     pub fn create_with_blocks(
@@ -59,15 +80,34 @@ impl LedgerClient {
     }
 }
 
+#[async_trait]
 impl LedgerAccess for LedgerClient {
     fn read_blocks(&self) -> Box<dyn Deref<Target = Blocks> + '_> {
         Box::new(self.blockchain.read().unwrap())
     }
 
-    fn sync_blocks(&mut self, tip: Option<Hash>) -> Result<(), ApiError> {
+    async fn sync_blocks(&self) -> Result<(), ApiError> {
+        // First sync to disc
+        let tip = self.canister.sync().await.map_err(|e| {
+            internal_error(format!(
+                "Error in reading blocks from the canister: {:?}",
+                e
+            ))
+        })?;
+
+        // Now sync to memory
         match tip {
-            Some(tip) => self.blockchain.write().unwrap().sync_to(tip),
             None => Ok(()),
+            Some(tip) => {
+                if let Err(err) = self.blockchain.write().unwrap().sync_to(tip) {
+                    Err(internal_error(format!(
+                        "Error in reading blocks from the file system: {:?}",
+                        err
+                    )))
+                } else {
+                    Ok(())
+                }
+            }
         }
     }
 
@@ -82,25 +122,64 @@ impl LedgerAccess for LedgerClient {
     fn testnet_url(&self) -> &Url {
         &self.testnet_url
     }
-}
 
-/// This is the entry point for the Rosetta API
-#[cfg(test)]
-fn read_ledger_transactions() -> Vec<HashedBlock> {
-    use crate::test_utils::Scribe;
-    let mut scribe = Scribe::new();
-    let num_transactions = 3_000;
-    let num_accounts = 100;
+    async fn submit(
+        &self,
+        submit_request: HttpRequestEnvelope<HttpSubmitContent>,
+    ) -> Result<Hash, ApiError> {
+        const UPDATE_PATH: &str = &"api/v1/submit";
 
-    scribe.gen_accounts(num_accounts, 1_000_000);
-    for _i in 0..num_transactions {
-        scribe.gen_transaction();
+        const INGRESS_TIMEOUT: Duration = Duration::from_secs(30);
+
+        // TODO change all serde_json to serde_cbor to avoid this marshaling, but not
+        // right now because JSON is easier to debug
+        let http_body = serde_cbor::to_vec(&submit_request).map_err(|e| {
+            internal_error(format!(
+                "Cannot serialize the submit request in CBOR format because of: {}",
+                e
+            ))
+        })?;
+
+        let cid = self.ledger_canister_id();
+
+        let url = reqwest::Url::parse(&format!("{}.ic0.app", cid)).unwrap();
+
+        let url = url.join(UPDATE_PATH).expect("URL join failed");
+
+        let client = self.reqwest_client();
+
+        let request = client
+            .post(url)
+            .header("Content-Type", "application/cbor")
+            .body(http_body);
+
+        request
+            .timeout(INGRESS_TIMEOUT)
+            .send()
+            .await
+            .map_err(internal_error)?;
+
+        // If we need to debug the response
+        //     .bytes()
+        //     .await
+        //     .map_err(internal_error)?;
+
+        // let cbor = serde_cbor::from_slice(&bytes).map_err(|e| {
+        //     internal_error(format!(
+        //         "Failed to parse result from IC, got: {:?} - error {:?}",
+        //         bytes, e
+        //     ))
+        // })?;
+
+        let arg = match submit_request.content {
+            HttpSubmitContent::Call { update } => update.arg,
+        };
+
+        let (transaction_id, _, _): (Hash, PrincipalId, u64) =
+            serde_json::from_slice(&arg.0).unwrap();
+
+        Ok(transaction_id)
     }
-
-    //scribe.buy(crate::test_utils::to_uid(0), 10);
-    //scribe.sell(crate::test_utils::to_uid(1), 10);
-
-    scribe.blockchain.into()
 }
 
 /// describes the state of users accounts
@@ -109,14 +188,14 @@ fn read_ledger_transactions() -> Vec<HashedBlock> {
 #[must_use = "`Balances` are immutable, if you don't use it you'll lose your changes"]
 #[derive(Clone)]
 pub struct Balances {
-    pub inner: OrdMap<UserID, Amount>,
+    pub inner: OrdMap<PrincipalId, ICPTs>,
 }
 
 // Annoyingly this is code duplication from Balances, I don't think rust can be
 // polymorphic over mutability, so I think this is how it's going to have to be
 // Perhaps I can break this up in the future to reduce duplication
 impl Balances {
-    pub fn get(&self, id: UserID) -> Option<Amount> {
+    pub fn get(&self, id: PrincipalId) -> Option<ICPTs> {
         self.inner.get(&id).cloned()
     }
 
@@ -131,7 +210,7 @@ impl Balances {
         Ok(res)
     }
 
-    fn debit(&self, from: &UserID, amount: Amount) -> Result<Self, String> {
+    fn debit(&self, from: &PrincipalId, amount: ICPTs) -> Result<Self, String> {
         let map = &self.inner;
         let balance = map.get(from).ok_or_else(|| {
             "You tried to withdraw funds from an account that doesn't exist".to_string()
@@ -141,15 +220,15 @@ impl Balances {
                 "You have tried to spend more than the balance of your account".to_string(),
             );
         }
-        let inner = map.update(from.clone(), *balance - amount);
+        let inner = map.update(*from, (*balance - amount)?);
         Ok(Balances { inner })
     }
 
-    fn credit(&self, to: &UserID, amount: Amount) -> Self {
+    fn credit(&self, to: &PrincipalId, amount: ICPTs) -> Self {
         let inner = self
             .inner
             .clone()
-            .update_with(to.clone(), amount, |v, a| v + a);
+            .update_with(*to, amount, |v, a| (v + a).unwrap());
         Balances { inner }
     }
 }
@@ -216,7 +295,7 @@ impl Blocks {
 
     /// Add a block to the block_store data structure, the parent_hash must
     /// match the end of the chain
-    pub(crate) fn add_block(&mut self, hb: HashedBlock) -> Result<(), ApiError> {
+    pub fn add_block(&mut self, hb: HashedBlock) -> Result<(), ApiError> {
         let HashedBlock { block, hash, .. } = hb.clone();
         let last_hash = self.block_order.last();
         assert_eq!(

@@ -1,13 +1,14 @@
-use crate::ledger_canister::{Hash, HashedBlock, Transaction, UserID};
 use crate::models;
 use crate::models::{
     AccountIdentifier, Amount, ApiError, BlockIdentifier, Currency, Operation, Timestamp,
     TransactionIdentifier,
 };
 use core::fmt::Display;
-
+use dfn_candid::Candid;
 use ic_types::messages::{HttpRequestEnvelope, HttpSubmitContent};
 use ic_types::PrincipalId;
+use ledger_canister::{Hash, HashedBlock, ICPTs, SubmitArgs, Transaction, DECIMAL_PLACES};
+use on_wire::{FromWire, IntoWire};
 use serde_json::map::Map;
 use serde_json::{from_value, Value};
 use std::collections::HashMap;
@@ -52,7 +53,8 @@ pub fn operations(transaction: &Transaction) -> Result<Vec<Operation>, ApiError>
         Transaction::Send { from, to, amount } => {
             let from_account = Some(account_identifier(from));
             let to_account = Some(account_identifier(to));
-            let amount = i64::try_from(*amount).map_err(|_| ApiError::InternalError(true, None))?;
+            let amount = i128::try_from(amount.get_doms())
+                .map_err(|_| ApiError::InternalError(true, None))?;
             let db = Operation::new(
                 0,
                 TRANSACTION.to_string(),
@@ -78,7 +80,8 @@ pub fn operations(transaction: &Transaction) -> Result<Vec<Operation>, ApiError>
             vec![op]
         }
         Transaction::Burn { from, amount, .. } => {
-            let amount = i64::try_from(*amount).map_err(|_| ApiError::InternalError(true, None))?;
+            let amount = i128::try_from(amount.get_doms())
+                .map_err(|_| ApiError::InternalError(true, None))?;
             let account = Some(account_identifier(from));
             let amount = Some(signed_amount(-amount));
             let op = Operation::new(0, BURN.to_string(), status, account, amount);
@@ -111,7 +114,7 @@ pub fn from_operations(ops: Vec<Operation>) -> Result<Vec<Transaction>, ApiError
     }
 
     // Check that all values have the same _type and return it
-    fn read_transaction(op: &Operation) -> Result<(i64, UserID), String> {
+    fn read_transaction(op: &Operation) -> Result<(i128, PrincipalId), String> {
         // let id = op.operation_identifier.clone();
 
         // Check the operation looks like part of a transaction
@@ -175,7 +178,7 @@ pub fn from_operations(ops: Vec<Operation>) -> Result<Vec<Transaction>, ApiError
                 }
 
                 let amount = if db_amount > 0 {
-                    db_amount as u64
+                    ICPTs::from_doms(db_amount as u64)
                 } else {
                     return error("Debit amount must be greater than zero");
                 };
@@ -203,13 +206,8 @@ pub fn from_operations(ops: Vec<Operation>) -> Result<Vec<Transaction>, ApiError
         .collect()
 }
 
-const DECIMAL_PLACES: u32 = 8;
-
-/// How many times can ICPs be divided
-// const ICP_SUBDIVIDABLE_BY: i64 = 100_000_000;
-
-pub fn amount_(amount: u64) -> Result<Amount, ApiError> {
-    let amount = i64::try_from(amount).map_err(|_| ApiError::InternalError(true, None))?;
+pub fn amount_(amount: ICPTs) -> Result<Amount, ApiError> {
+    let amount = amount.get_doms();
     Ok(Amount {
         value: format!("{}", amount),
         currency: icp(),
@@ -217,7 +215,7 @@ pub fn amount_(amount: u64) -> Result<Amount, ApiError> {
     })
 }
 
-pub fn signed_amount(amount: i64) -> Amount {
+pub fn signed_amount(amount: i128) -> Amount {
     Amount {
         value: format!("{}", amount),
         currency: icp(),
@@ -225,7 +223,7 @@ pub fn signed_amount(amount: i64) -> Amount {
     }
 }
 
-pub fn from_amount(amount: &Amount) -> Result<i64, String> {
+pub fn from_amount(amount: &Amount) -> Result<i128, String> {
     match amount {
         Amount {
             value,
@@ -239,6 +237,10 @@ pub fn from_amount(amount: &Amount) -> Result<i64, String> {
         }),
         wrong => Err(format!("This value is not icp {:?}", wrong)),
     }
+}
+pub fn ledgeramount_from_amount(amount: &Amount) -> Result<ICPTs, String> {
+    let inner = from_amount(amount)?;
+    Ok(ICPTs::from_doms(inner as u64))
 }
 
 pub fn icp() -> Currency {
@@ -254,14 +256,14 @@ pub fn transaction_identifier(hash: &Hash) -> TransactionIdentifier {
     TransactionIdentifier::new(hex::encode(hash.to_be_bytes()))
 }
 
-pub fn account_identifier(uid: &UserID) -> AccountIdentifier {
-    AccountIdentifier::new(hex::encode(&uid.0))
+pub fn account_identifier(uid: &PrincipalId) -> AccountIdentifier {
+    AccountIdentifier::new(hex::encode(&uid.into_vec()))
 }
 
-pub fn user_id(aid: &AccountIdentifier) -> Result<UserID, String> {
+pub fn user_id(aid: &AccountIdentifier) -> Result<PrincipalId, String> {
     // TODO validate
     match hex::decode(aid.address.clone()) {
-        Ok(vec) => Ok(UserID(vec)),
+        Ok(vec) => Ok(PrincipalId::try_from(vec).map_err(|e| e.to_string())?),
         Err(e) => Err(format!(
             "Account Identifer {} is not hex encoded: {}",
             aid.address, e
@@ -313,9 +315,10 @@ pub fn transaction_id(signed_transaction: &str) -> Result<TransactionIdentifier,
     let arg = match envelope.content {
         HttpSubmitContent::Call { update } => update.arg,
     };
-    let (transaction_id, _, _): (Hash, UserID, u64) = from_arg(&arg.0)?;
+    let (message, _, _, _) = from_arg(arg.0)?;
 
-    Ok(transaction_identifier(&transaction_id))
+    // TODO fix this in the next PR
+    Ok(transaction_identifier(&message.0))
 }
 
 pub fn internal_error<D: Display>(msg: D) -> ApiError {
@@ -328,16 +331,18 @@ pub fn invalid_block_id<D: Display>(msg: D) -> ApiError {
 
 pub fn account_from_public_key(pk: models::PublicKey) -> Result<AccountIdentifier, ApiError> {
     let pid = PrincipalId::new_self_authenticating(&from_hex(pk.hex_bytes)?);
-    Ok(account_identifier(&UserID(pid.to_vec())))
+    Ok(account_identifier(&pid))
 }
 
 // This is so I can keep track of where this conversion is done
-pub fn from_arg(encoded: &[u8]) -> Result<(Hash, UserID, u64), ApiError> {
-    serde_json::from_slice(encoded).map_err(internal_error)
+pub fn from_arg(encoded: Vec<u8>) -> Result<SubmitArgs, ApiError> {
+    Candid::from_bytes(encoded)
+        .map_err(internal_error)
+        .map(|Candid(c)| c)
 }
 
-pub fn to_arg(arg: &(Hash, UserID, u64)) -> Vec<u8> {
-    serde_json::to_vec(arg).expect("Serialization failed")
+pub fn to_arg(args: SubmitArgs) -> Vec<u8> {
+    Candid(args).into_bytes().expect("Serialization failed")
 }
 
 pub fn from_hash(hash: &Hash) -> String {

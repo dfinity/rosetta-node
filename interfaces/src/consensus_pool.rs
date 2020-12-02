@@ -5,9 +5,9 @@ use crate::{
 use ic_types::{
     artifact::ConsensusMessageId,
     consensus::{
-        BlockProposal, CatchUpPackage, CatchUpPackageShare, ConsensusMessage, ContentEq,
-        Finalization, FinalizationShare, Notarization, NotarizationShare, RandomBeacon,
-        RandomBeaconShare, RandomTape, RandomTapeShare,
+        Block, BlockProposal, CatchUpPackage, CatchUpPackageShare, ConsensusMessage, ContentEq,
+        Finalization, FinalizationShare, HasHeight, HashedBlock, Notarization, NotarizationShare,
+        RandomBeacon, RandomBeaconShare, RandomTape, RandomTapeShare,
     },
     time::Time,
     Height,
@@ -124,7 +124,7 @@ pub trait PoolSection<T> {
 
     /// Lookup an artifact by ConsensusMessageId. Return the consensus message
     /// if it exists, or None otherwise.
-    fn get(&self, msg_id: &ConsensusMessageId) -> Option<T>;
+    fn get(&self, msg_id: &ConsensusMessageId) -> Option<ConsensusMessage>;
 
     /// Lookup the timestamp of an artifact by its ConsensusMessageId.
     fn get_timestamp(&self, msg_id: &ConsensusMessageId) -> Option<Time>;
@@ -181,6 +181,9 @@ pub trait ConsensusPool {
 
     /// Return a reference to the unvalidated PoolSection.
     fn unvalidated(&self) -> &dyn PoolSection<UnvalidatedConsensusArtifact>;
+
+    /// Return a reference to the consensus cache (ConsensusPoolCache).
+    fn as_cache(&self) -> &dyn ConsensusPoolCache;
 }
 
 /// Mutation operations on top of ConsensusPool.
@@ -230,3 +233,100 @@ pub trait HeightIndexedPool<T> {
     fn get_highest_iter(&self) -> Box<dyn Iterator<Item = T>>;
 }
 // end::interface[]
+
+/// Reader of consensus related states.
+pub trait ConsensusPoolCache: Send + Sync {
+    /// Return the height of the latest/highest finalized block.
+    fn finalized_height(&self) -> Height;
+
+    /// Return the latest/highest finalized block.
+    fn finalized_block(&self) -> Block;
+
+    /// Return the time as recorded in the latest/highest finalized block.
+    /// Return None if there has not been any finalized block since genesis.
+    fn consensus_time(&self) -> Option<Time>;
+
+    /// Return the height of the latest/highest CatchUpPackage.
+    fn catch_up_height(&self) -> Height;
+
+    /// Return the latest/highest CatchUpPackage.
+    fn catch_up_package(&self) -> CatchUpPackage;
+
+    /// Return the latest/highest finalized block with DKG summary. In a
+    /// situation where we have only finalized the catch-up block but not
+    /// yet made a catch-up package, this will be different than the block
+    /// in the latest catch-up package.
+    fn summary_block(&self) -> Block;
+}
+
+/// An iterator for block ancestors.
+pub struct ChainIterator<'a> {
+    consensus_pool: &'a dyn ConsensusPool,
+    to_block: Option<HashedBlock>,
+    cursor: Option<Block>,
+}
+
+impl<'a> ChainIterator<'a> {
+    /// Return an interator that iterates block acenstors, going backwards
+    /// from the `from_block` to the `to_block` (both inclusive), or until a
+    /// parent is not found in the consensus pool if the `to_block` is not
+    /// specified.
+    pub fn new(
+        consensus_pool: &'a dyn ConsensusPool,
+        from_block: Block,
+        to_block: Option<HashedBlock>,
+    ) -> Self {
+        ChainIterator {
+            consensus_pool,
+            to_block,
+            cursor: Some(from_block),
+        }
+    }
+
+    fn get_parent_block(&self, block: &Block) -> Option<Block> {
+        let height = block.height();
+        if height == Height::from(0) {
+            return None;
+        }
+        let parent_height = height.decrement();
+        let parent_hash = &block.parent;
+        if let Some(to_block) = &self.to_block {
+            match parent_height.cmp(&to_block.height()) {
+                std::cmp::Ordering::Less => {
+                    return None;
+                }
+                std::cmp::Ordering::Equal => {
+                    if parent_hash == to_block.get_hash() {
+                        return Some(to_block.as_ref().clone());
+                    } else {
+                        return None;
+                    }
+                }
+                _ => (),
+            }
+        }
+        self.consensus_pool
+            .validated()
+            .block_proposal()
+            .get_by_height(parent_height)
+            .find_map(|proposal| {
+                if proposal.content.get_hash() == parent_hash {
+                    Some(proposal.content.into_inner())
+                } else {
+                    None
+                }
+            })
+    }
+}
+
+impl<'a> Iterator for ChainIterator<'a> {
+    type Item = Block;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let parent = self
+            .cursor
+            .as_ref()
+            .and_then(|block| self.get_parent_block(block));
+        std::mem::replace(&mut self.cursor, parent)
+    }
+}

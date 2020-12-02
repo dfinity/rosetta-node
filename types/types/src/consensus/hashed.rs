@@ -101,3 +101,9 @@ impl<H, V> Hashed<H, V> {
         self.value
     }
 }
+
+impl<H, T> std::borrow::Borrow<H> for Hashed<H, T> {
+    fn borrow(&self) -> &H {
+        &self.hash
+    }
+}

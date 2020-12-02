@@ -1,4 +1,4 @@
-use crate::{PrincipalId, Time, UserId};
+use crate::{CanisterId, PrincipalId, Time, UserId};
 use ic_error_types::{ErrorCode, UserError};
 use ic_protobuf::{
     proxy::{try_from_option_field, ProxyDecodeError},
@@ -69,6 +69,19 @@ impl IngressStatus {
             IngressStatus::Processing { user_id, .. } => Some(*user_id),
             IngressStatus::Unknown => None,
         }
+    }
+
+    pub fn receiver(&self) -> Option<CanisterId> {
+        match self {
+            IngressStatus::Received { receiver, .. } => Some(*receiver),
+            IngressStatus::Completed { receiver, .. } => Some(*receiver),
+            IngressStatus::Failed { receiver, .. } => Some(*receiver),
+            IngressStatus::Processing { receiver, .. } => Some(*receiver),
+            IngressStatus::Unknown => None,
+        }
+        .map(|receiver| {
+            CanisterId::new(receiver).expect("Receiver in IngressStatus must be a Canister ID.")
+        })
     }
 
     /// Returns the name of this status as specified in the public spec:

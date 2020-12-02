@@ -26,6 +26,38 @@ impl HasHeight for CertificationMessage {
     }
 }
 
+impl TryFrom<CertificationMessage> for Certification {
+    type Error = CertificationMessage;
+    fn try_from(msg: CertificationMessage) -> Result<Self, Self::Error> {
+        match msg {
+            CertificationMessage::Certification(x) => Ok(x),
+            _ => Err(msg),
+        }
+    }
+}
+
+impl TryFrom<CertificationMessage> for CertificationShare {
+    type Error = CertificationMessage;
+    fn try_from(msg: CertificationMessage) -> Result<Self, Self::Error> {
+        match msg {
+            CertificationMessage::CertificationShare(x) => Ok(x),
+            _ => Err(msg),
+        }
+    }
+}
+
+impl From<Certification> for CertificationMessage {
+    fn from(msg: Certification) -> Self {
+        CertificationMessage::Certification(msg)
+    }
+}
+
+impl From<CertificationShare> for CertificationMessage {
+    fn from(msg: CertificationShare) -> Self {
+        CertificationMessage::CertificationShare(msg)
+    }
+}
+
 /// Message hash.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub enum CertificationMessageHash {

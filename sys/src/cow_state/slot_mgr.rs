@@ -15,8 +15,8 @@
 /// sharing of slots between multiple rounds. Also multiple rounds can be folded
 /// into a single checkpoint freeing all overwritten slots.   
 use lmdb::{Cursor, DatabaseFlags, EnvironmentFlags, Transaction, WriteFlags};
-use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap};
 use std::convert::TryInto;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -448,8 +448,8 @@ impl SlotMgr {
         self.sync();
     }
 
-    pub fn get_current_round_mappings(&self) -> HashMap<u64, u64> {
-        let mut mappings = HashMap::new();
+    pub fn get_current_round_mappings(&self) -> BTreeMap<u64, u64> {
+        let mut mappings = BTreeMap::new();
         let ro_txn = self.env.begin_ro_txn().unwrap();
         let mut ro_cursor = ro_txn.open_ro_cursor(**self.current_round_table).unwrap();
         for (rawk, rawv) in ro_cursor.iter().map(|x| x.unwrap()).map(|(k, v)| (k, v)) {
@@ -460,8 +460,8 @@ impl SlotMgr {
         mappings
     }
 
-    pub fn get_mappings_for_round(&self, round: u64) -> HashMap<u64, u64> {
-        let mut mappings = HashMap::new();
+    pub fn get_mappings_for_round(&self, round: u64) -> BTreeMap<u64, u64> {
+        let mut mappings = BTreeMap::new();
         let ro_txn = self.env.begin_ro_txn().unwrap();
         let roundb = unsafe {
             ro_txn

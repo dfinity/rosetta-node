@@ -26,18 +26,13 @@ pub enum Method {
     DeleteCanister,
     RawRand,
     DepositFunds,
-    ConvertIcptToCycles,
+    DepositCycles,
     SetupInitialDKG,
 
     // These methods are added for the Mercury I release.
     // They should be removed afterwards.
     ProvisionalCreateCanisterWithCycles,
     ProvisionalTopUpCanister,
-
-    // "Dev" methods are ones that are not meant to be available in production.
-    // They are normally used to support local development or for tests.
-    DevCreateCanisterWithFunds,
-    DevSetFunds,
 }
 
 /// A trait to be implemented by all structs that are used as payloads
@@ -292,63 +287,6 @@ impl SetupInitialDKGResponse {
         }
     }
 }
-
-#[derive(CandidType, Deserialize, Debug)]
-pub struct DevCreateCanisterWithFundsArgs {
-    num_cycles: candid::Nat,
-    num_icpt: candid::Nat,
-}
-
-impl DevCreateCanisterWithFundsArgs {
-    pub fn new(num_cycles: u64, num_icpt: u64) -> Self {
-        Self {
-            num_cycles: candid::Nat::from(num_cycles),
-            num_icpt: candid::Nat::from(num_icpt),
-        }
-    }
-
-    pub fn num_cycles_as_u64(&self) -> u64 {
-        self.num_cycles.0.to_u64().unwrap()
-    }
-
-    pub fn num_icpt_as_u64(&self) -> u64 {
-        self.num_icpt.0.to_u64().unwrap()
-    }
-}
-
-impl Payload<'_> for DevCreateCanisterWithFundsArgs {}
-
-#[derive(CandidType, Deserialize, Debug)]
-pub struct DevSetFundsArgs {
-    canister_id: PrincipalId,
-    num_cycles: candid::Nat,
-    num_icpt: candid::Nat,
-}
-
-impl DevSetFundsArgs {
-    pub fn new(canister_id: CanisterId, num_cycles: u64, num_icpt: u64) -> Self {
-        Self {
-            canister_id: canister_id.get(),
-            num_cycles: candid::Nat::from(num_cycles),
-            num_icpt: candid::Nat::from(num_icpt),
-        }
-    }
-
-    pub fn num_cycles_as_u64(&self) -> u64 {
-        self.num_cycles.0.to_u64().unwrap()
-    }
-
-    pub fn num_icpt_as_u64(&self) -> u64 {
-        self.num_icpt.0.to_u64().unwrap()
-    }
-
-    pub fn get_canister_id(&self) -> CanisterId {
-        // Safe as this was converted from CanisterId when Self was constructed.
-        CanisterId::new(self.canister_id).unwrap()
-    }
-}
-
-impl Payload<'_> for DevSetFundsArgs {}
 
 #[derive(CandidType, Deserialize, Debug)]
 pub struct ProvisionalCreateCanisterWithCyclesArgs {

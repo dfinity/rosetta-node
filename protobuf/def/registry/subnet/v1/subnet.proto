@@ -37,14 +37,17 @@ message SubnetRecord {
   // The length of all DKG intervals. The DKG interval length is the number of rounds following the DKG summary.
   uint64 dkg_interval_length = 10;
 
-  // Initial non-interactive low-threshold DKG transcript
-  InitialNiDkgTranscriptRecord initial_ni_dkg_transcript_low_threshold = 11;
-
-  // Initial non-interactive high-threshold DKG transcript
-  InitialNiDkgTranscriptRecord initial_ni_dkg_transcript_high_threshold = 12;
-
   // Gossip Config
   GossipConfig gossip_config = 13;
+}
+
+// Contains the initial DKG transcripts for the subnet
+message CatchUpPackageContents {
+  // Initial non-interactive low-threshold DKG transcript
+  InitialNiDkgTranscriptRecord initial_ni_dkg_transcript_low_threshold = 1;
+
+  // Initial non-interactive high-threshold DKG transcript
+  InitialNiDkgTranscriptRecord initial_ni_dkg_transcript_high_threshold = 2;
 }
 
 // A list of subnet ids of all subnets present in this instance of the IC.
@@ -88,7 +91,7 @@ message GossipConfig {
   uint32 max_artifact_streams_per_peer = 1;
   // timeout for a outstanding request 3_000/15_000/180_000
   uint32 max_chunk_wait_ms = 2 ;
-  // max duplicate requests in a under utilized networks 1/28/6000
+  // max duplicate requests in underutilized networks 1/28/6000
   uint32 max_duplicity = 3;
   // maximum chunk size supported on this subnet 1024/4096/131_072
   uint32 max_chunk_size = 4;
@@ -98,4 +101,6 @@ message GossipConfig {
   uint32 pfn_evaluation_period_ms = 6;
   // period for polling the registry for updates 1_000/3_000/30_000
   uint32 registry_poll_period_ms = 7;
+  // period for sending a retransmission request
+  uint32 retransmission_request_ms = 8;
 }

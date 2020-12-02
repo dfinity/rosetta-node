@@ -39,6 +39,11 @@ pub mod bls12_381 {
             write!(f, "Fr({:?})", hex::encode(&self.0[..]))
         }
     }
+    impl Default for Fr {
+        fn default() -> Self {
+            Fr([0; Fr::SIZE])
+        }
+    }
 
     /// A point in the group "G1" in serialised, library independent form.
     ///
@@ -90,6 +95,16 @@ pub mod bls12_381 {
     impl Hash for G1 {
         fn hash<H: Hasher>(&self, state: &mut H) {
             self.0[..].hash(state);
+        }
+    }
+    impl AsRef<[u8]> for G1 {
+        fn as_ref(&self) -> &[u8] {
+            &self.0
+        }
+    }
+    impl Default for G1 {
+        fn default() -> Self {
+            G1([0; G1::SIZE])
         }
     }
 
@@ -149,6 +164,16 @@ pub mod bls12_381 {
     impl Hash for G2 {
         fn hash<H: Hasher>(&self, state: &mut H) {
             self.0[..].hash(state);
+        }
+    }
+    impl AsRef<[u8]> for G2 {
+        fn as_ref(&self) -> &[u8] {
+            &self.0
+        }
+    }
+    impl Default for G2 {
+        fn default() -> Self {
+            G2([0; G2::SIZE])
         }
     }
 }

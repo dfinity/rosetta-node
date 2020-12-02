@@ -11,77 +11,17 @@ use ic_protobuf::types::v1 as pb;
 use serde::{Deserialize, Serialize};
 use std::cmp::PartialOrd;
 use std::hash::Hash;
-use std::sync::Arc;
 
 pub mod catchup;
 pub mod certification;
 pub mod dkg;
 pub mod hashed;
+mod payload;
 pub mod thunk;
 
 pub use catchup::*;
 use hashed::Hashed;
-use thunk::Thunk;
-
-/// A lazily loaded `BatchPayload` that is also internally shared via an `Arc`
-/// pointer so that it is cheap to clone.
-///
-/// It serializes to both the crypto hash and value of a `BatchPayload`.
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
-pub struct Payload {
-    payload: Arc<Hashed<CryptoHashOf<BatchPayload>, Thunk<BatchPayload>>>,
-}
-
-impl Payload {
-    /// Return a Payload using the given hash function and a `BatchPayload`.
-    pub fn new<F: FnOnce(&BatchPayload) -> CryptoHashOf<BatchPayload> + Send + 'static>(
-        hash_func: F,
-        payload: BatchPayload,
-    ) -> Self {
-        Payload {
-            payload: Arc::new(Hashed::new(
-                move |thunk: &Thunk<BatchPayload>| hash_func(thunk.as_ref()),
-                Thunk::from(payload),
-            )),
-        }
-    }
-
-    /// Return a Payload with the given hash, and an intialization function that
-    /// will be use for lazily loading the actual `BatchPayload` matching
-    /// the given hash. This function does not check if the eventually loaded
-    /// `BatchPayload` with match the given hash, so it must be used with care.
-    pub fn new_with(
-        hash: CryptoHashOf<BatchPayload>,
-        init: Box<dyn FnOnce() -> BatchPayload + Send>,
-    ) -> Self {
-        Payload {
-            payload: Arc::new(Hashed {
-                hash,
-                value: Thunk::new(init),
-            }),
-        }
-    }
-
-    /// Return the crypto hash of the enclosed `BatchPayload`.
-    pub fn get_hash(&self) -> &CryptoHashOf<BatchPayload> {
-        self.payload.get_hash()
-    }
-}
-
-impl AsRef<BatchPayload> for Payload {
-    fn as_ref(&self) -> &BatchPayload {
-        self.payload.get_value().as_ref()
-    }
-}
-
-impl From<Payload> for BatchPayload {
-    fn from(from: Payload) -> BatchPayload {
-        match Arc::try_unwrap(from.payload) {
-            Ok(payload) => payload.into_inner().into_inner(),
-            Err(payload) => payload.get_value().as_ref().clone(),
-        }
-    }
-}
+pub use payload::{BlockPayload, Payload};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct BasicSignature<T> {
@@ -176,9 +116,9 @@ impl HasVersion for Block {
     }
 }
 
-impl HasVersion for HashedBlock {
+impl<H, T: HasVersion> HasVersion for Hashed<H, T> {
     fn version(&self) -> &ReplicaVersion {
-        &self.value.version
+        &self.value.version()
     }
 }
 
@@ -188,9 +128,9 @@ impl HasHeight for Block {
     }
 }
 
-impl HasHeight for HashedBlock {
+impl<H, T: HasHeight> HasHeight for Hashed<H, T> {
     fn height(&self) -> Height {
-        self.value.height
+        self.value.height()
     }
 }
 
@@ -200,9 +140,9 @@ impl HasRank for Block {
     }
 }
 
-impl HasRank for HashedBlock {
+impl<H, T: HasRank> HasRank for Hashed<H, T> {
     fn rank(&self) -> Rank {
-        self.value.rank
+        self.value.rank()
     }
 }
 
@@ -305,7 +245,6 @@ pub struct Block {
     version: ReplicaVersion,
     pub parent: CryptoHashOf<Block>,
     pub payload: Payload,
-    pub dkg_payload: dkg::Payload,
     pub height: Height,
     pub rank: Rank,
     pub context: ValidationContext,
@@ -315,7 +254,6 @@ impl Block {
     pub fn new(
         parent: CryptoHashOf<Block>,
         payload: Payload,
-        dkg_payload: dkg::Payload,
         height: Height,
         rank: Rank,
         context: ValidationContext,
@@ -324,7 +262,6 @@ impl Block {
             version: ReplicaVersion::default(),
             parent,
             payload,
-            dkg_payload,
             height,
             rank,
             context,
@@ -335,7 +272,7 @@ impl Block {
         BlockLogEntry {
             byte_size: None,
             certified_height: Some(self.context.certified_height.get()),
-            dkg_payload_type: Some(self.dkg_payload.payload_type().to_string()),
+            dkg_payload_type: Some(self.payload.as_ref().payload_type().to_string()),
             hash: Some(block_hash),
             height: Some(self.height.get()),
             parent_hash: Some(hex::encode(self.parent.get_ref().0.clone())),
@@ -412,6 +349,8 @@ pub struct RandomBeaconContent {
     pub height: Height,
     pub parent: CryptoHashOf<RandomBeacon>,
 }
+
+pub type HashedRandomBeacon = Hashed<CryptoHashOf<RandomBeacon>, RandomBeacon>;
 
 impl RandomBeaconContent {
     pub fn new(height: Height, parent: CryptoHashOf<RandomBeacon>) -> Self {
@@ -511,6 +450,116 @@ pub enum ConsensusMessage {
     RandomTapeShare(RandomTapeShare),
     CatchUpPackage(CatchUpPackage),
     CatchUpPackageShare(CatchUpPackageShare),
+}
+
+impl TryFrom<ConsensusMessage> for RandomBeacon {
+    type Error = ConsensusMessage;
+    fn try_from(msg: ConsensusMessage) -> Result<Self, Self::Error> {
+        match msg {
+            ConsensusMessage::RandomBeacon(x) => Ok(x),
+            _ => Err(msg),
+        }
+    }
+}
+
+impl TryFrom<ConsensusMessage> for Finalization {
+    type Error = ConsensusMessage;
+    fn try_from(msg: ConsensusMessage) -> Result<Self, Self::Error> {
+        match msg {
+            ConsensusMessage::Finalization(x) => Ok(x),
+            _ => Err(msg),
+        }
+    }
+}
+
+impl TryFrom<ConsensusMessage> for Notarization {
+    type Error = ConsensusMessage;
+    fn try_from(msg: ConsensusMessage) -> Result<Self, Self::Error> {
+        match msg {
+            ConsensusMessage::Notarization(x) => Ok(x),
+            _ => Err(msg),
+        }
+    }
+}
+
+impl TryFrom<ConsensusMessage> for BlockProposal {
+    type Error = ConsensusMessage;
+    fn try_from(msg: ConsensusMessage) -> Result<Self, Self::Error> {
+        match msg {
+            ConsensusMessage::BlockProposal(x) => Ok(x),
+            _ => Err(msg),
+        }
+    }
+}
+
+impl TryFrom<ConsensusMessage> for RandomBeaconShare {
+    type Error = ConsensusMessage;
+    fn try_from(msg: ConsensusMessage) -> Result<Self, Self::Error> {
+        match msg {
+            ConsensusMessage::RandomBeaconShare(x) => Ok(x),
+            _ => Err(msg),
+        }
+    }
+}
+
+impl TryFrom<ConsensusMessage> for NotarizationShare {
+    type Error = ConsensusMessage;
+    fn try_from(msg: ConsensusMessage) -> Result<Self, Self::Error> {
+        match msg {
+            ConsensusMessage::NotarizationShare(x) => Ok(x),
+            _ => Err(msg),
+        }
+    }
+}
+
+impl TryFrom<ConsensusMessage> for FinalizationShare {
+    type Error = ConsensusMessage;
+    fn try_from(msg: ConsensusMessage) -> Result<Self, Self::Error> {
+        match msg {
+            ConsensusMessage::FinalizationShare(x) => Ok(x),
+            _ => Err(msg),
+        }
+    }
+}
+
+impl TryFrom<ConsensusMessage> for RandomTape {
+    type Error = ConsensusMessage;
+    fn try_from(msg: ConsensusMessage) -> Result<Self, Self::Error> {
+        match msg {
+            ConsensusMessage::RandomTape(x) => Ok(x),
+            _ => Err(msg),
+        }
+    }
+}
+
+impl TryFrom<ConsensusMessage> for RandomTapeShare {
+    type Error = ConsensusMessage;
+    fn try_from(msg: ConsensusMessage) -> Result<Self, Self::Error> {
+        match msg {
+            ConsensusMessage::RandomTapeShare(x) => Ok(x),
+            _ => Err(msg),
+        }
+    }
+}
+
+impl TryFrom<ConsensusMessage> for CatchUpPackage {
+    type Error = ConsensusMessage;
+    fn try_from(msg: ConsensusMessage) -> Result<Self, Self::Error> {
+        match msg {
+            ConsensusMessage::CatchUpPackage(x) => Ok(x),
+            _ => Err(msg),
+        }
+    }
+}
+
+impl TryFrom<ConsensusMessage> for CatchUpPackageShare {
+    type Error = ConsensusMessage;
+    fn try_from(msg: ConsensusMessage) -> Result<Self, Self::Error> {
+        match msg {
+            ConsensusMessage::CatchUpPackageShare(x) => Ok(x),
+            _ => Err(msg),
+        }
+    }
 }
 
 /// Message hash. Enum order should be consistent with ConsensusMessage.
@@ -768,27 +817,68 @@ pub fn get_faults_tolerated(n: usize) -> usize {
 
 impl From<&Block> for pb::Block {
     fn from(block: &Block) -> Self {
+        let payload: &BlockPayload = block.payload.as_ref();
+        let (dkg_payload, xnet_payload, ingress_payload) = if payload.is_summary() {
+            (pb::DkgPayload::from(payload.as_summary()), None, None)
+        } else {
+            let batch = payload.as_batch_payload();
+            (
+                pb::DkgPayload::from(payload.as_dealings()),
+                Some(pb::XNetPayload::from(&batch.xnet)),
+                Some(pb::IngressPayload::from(&batch.ingress)),
+            )
+        };
         Self {
             version: block.version.to_string(),
             parent: block.parent.clone().get().0,
-            dkg_payload: Some(pb::DkgPayload::from(&block.dkg_payload)),
+            dkg_payload: Some(dkg_payload),
             height: block.height().get(),
             rank: block.rank.0,
             registry_version: block.context.registry_version.get(),
             certified_height: block.context.certified_height.get(),
             time: block.context.time.as_nanos_since_unix_epoch(),
-            xnet_payload: Some(pb::XNetPayload::from(&block.payload.as_ref().xnet)),
-            ingress_payload: Some(pb::IngressPayload::from(&block.payload.as_ref().ingress)),
+            xnet_payload,
+            ingress_payload,
         }
     }
 }
 
 pub fn block_from_protobuf<
-    F: FnOnce(&BatchPayload) -> CryptoHashOf<BatchPayload> + Send + 'static,
+    F: FnOnce(&BlockPayload) -> CryptoHashOf<BlockPayload> + Send + 'static,
 >(
     hash_func: F,
     block: pb::Block,
 ) -> Result<Block, String> {
+    let dkg_payload = dkg::Payload::try_from(
+        block
+            .dkg_payload
+            .ok_or_else(|| String::from("Error: Block missing dkg_payload"))?,
+    )?;
+    let batch = BatchPayload::new(
+        block
+            .ingress_payload
+            .map(crate::batch::IngressPayload::try_from)
+            .transpose()?
+            .unwrap_or_default(),
+        block
+            .xnet_payload
+            .map(crate::batch::XNetPayload::try_from)
+            .transpose()?
+            .unwrap_or_default(),
+    );
+    let payload = if dkg_payload.is_summary() {
+        // TODO: Re-enable this assertion once the combined payload PR is deployed.
+        //       This is to avoid breaking the upgrade process.
+        /*
+        assert!(
+            batch.is_empty(),
+            "Error: Summary block has non-empty batch payload."
+        );
+        */
+        BlockPayload::Summary(dkg_payload.into_summary())
+    } else {
+        (batch, dkg_payload.into_dealings()).into()
+    };
     Ok(Block {
         version: ReplicaVersion::try_from(block.version.as_str())
             .map_err(|e| format!("Block replica version failed to parse {:?}", e))?,
@@ -800,25 +890,6 @@ pub fn block_from_protobuf<
             certified_height: Height::from(block.certified_height),
             time: Time::from_nanos_since_unix_epoch(block.time),
         },
-        dkg_payload: dkg::Payload::try_from(
-            block
-                .dkg_payload
-                .ok_or_else(|| String::from("Error: Block missing dkg_payload"))?,
-        )?,
-        payload: Payload::new(
-            hash_func,
-            BatchPayload::new(
-                crate::batch::IngressPayload::try_from(
-                    block
-                        .ingress_payload
-                        .ok_or_else(|| String::from("Error: Block missing ingress_payload"))?,
-                )?,
-                crate::batch::XNetPayload::try_from(
-                    block
-                        .xnet_payload
-                        .ok_or_else(|| String::from("Error: Block missing xnet_payload"))?,
-                )?,
-            ),
-        ),
+        payload: Payload::new(hash_func, payload),
     })
 }

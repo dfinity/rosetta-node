@@ -9,7 +9,7 @@ import "types/v1/ingress.proto";
 import "messaging/xnet/v1/certified_stream_slice.proto";
 
 message CatchUpPackage {
-	CatchUpContent content = 1;
+	bytes content = 1;
 	bytes signature = 2;
 	NiDkgId signer = 3;
 }

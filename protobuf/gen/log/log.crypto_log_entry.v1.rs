@@ -48,4 +48,7 @@ pub struct CryptoLogEntry {
     #[prost(message, optional, tag="16")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allowed_tls_clients: ::std::option::Option<::std::string::String>,
+    #[prost(message, optional, tag="17")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls_server: ::std::option::Option<::std::string::String>,
 }

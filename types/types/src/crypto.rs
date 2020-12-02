@@ -436,9 +436,15 @@ impl fmt::Debug for CryptoError {
                 hex::encode(&key_bytes),
                 internal_error,
             ),
-            CryptoError::MalformedPublicKey { algorithm, .. } => {
-                write!(f, "Malformed {:?} public key", algorithm)
-            }
+            CryptoError::MalformedPublicKey {
+                algorithm,
+                internal_error,
+                ..
+            } => write!(
+                f,
+                "Malformed {:?} public key: {}",
+                algorithm, internal_error
+            ),
 
             CryptoError::MalformedSignature {
                 algorithm,

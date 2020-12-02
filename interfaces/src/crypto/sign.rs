@@ -37,7 +37,8 @@ use ic_types::crypto::{
 use ic_types::messages::{Delegation, MessageId, WebAuthnEnvelope};
 use ic_types::{
     consensus::{
-        certification::CertificationContent, CatchUpContent, RandomBeaconContent, RandomTapeContent,
+        certification::CertificationContent, CatchUpContent, CatchUpContentProtobufBytes,
+        RandomBeaconContent, RandomTapeContent,
     },
     NodeId, RegistryVersion, SubnetId,
 };
@@ -88,6 +89,7 @@ mod private {
     impl SignatureDomainSeal for MessageId {}
     impl SignatureDomainSeal for CertificationContent {}
     impl SignatureDomainSeal for CatchUpContent {}
+    impl SignatureDomainSeal for CatchUpContentProtobufBytes {}
     impl SignatureDomainSeal for RandomBeaconContent {}
     impl SignatureDomainSeal for RandomTapeContent {}
     impl SignatureDomainSeal for SignableMock {}
@@ -119,6 +121,15 @@ impl SignatureDomain for CertificationContent {
 }
 
 impl SignatureDomain for CatchUpContent {
+    fn domain(&self) -> Vec<u8> {
+        domain_with_prepended_length(DOMAIN_CATCH_UP_CONTENT)
+    }
+}
+
+// This is INTENTIONALLY made the same as CatchUpContent, because this type is
+// used to verify the signature over the bytes of a catch up package without
+// necessarily needing to deserialize them into CatchUpContent.
+impl SignatureDomain for CatchUpContentProtobufBytes {
     fn domain(&self) -> Vec<u8> {
         domain_with_prepended_length(DOMAIN_CATCH_UP_CONTENT)
     }

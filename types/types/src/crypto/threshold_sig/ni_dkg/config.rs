@@ -89,7 +89,13 @@ impl TryFrom<pb::NiDkgConfig> for NiDkgConfig {
             threshold: NiDkgThreshold::new(NumberOfNodes::from(config.threshold))
                 .map_err(|e| format!("threshold error {:?}", e))?,
             registry_version: RegistryVersion::from(config.registry_version),
-            resharing_transcript: None,
+            resharing_transcript: config
+                .resharing_transcript
+                .map(|transcript| {
+                    NiDkgTranscript::try_from(&transcript)
+                        .map_err(|e| format!("Converting resharing transcript failed: {:?}", e))
+                })
+                .transpose()?,
         })
     }
 }

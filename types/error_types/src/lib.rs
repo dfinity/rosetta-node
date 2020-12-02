@@ -82,6 +82,7 @@ impl From<ErrorCode> for RejectCode {
             IngressMessageTimeout => SysTransient,
             InsufficientTransferFunds => CanisterReject,
             CertifiedStateUnavailable => SysTransient,
+            InsufficientMemoryAllocation => CanisterReject,
         }
     }
 }
@@ -103,6 +104,7 @@ pub enum ErrorCode {
     CanisterWasmModuleNotFound = 304,
     CanisterEmpty = 305,
     InsufficientTransferFunds = 401,
+    InsufficientMemoryAllocation = 402,
     CanisterOutOfCycles = 501,
     CanisterTrapped = 502,
     CanisterCalledTrap = 503,

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2018"
 
 [dependencies]
+ic-crypto-tree-hash = { path = "../crypto/tree_hash" }
 ic-interfaces = { path = "../interfaces" }
 ic-protobuf = { path = "../protobuf" }
 ic-types = { path = "../types/types" }
@@ -15,10 +16,13 @@ phantom_newtype = { path = "../phantom_newtype" }
 prost = "0.6"
 reqwest = "0.10.8"
 serde = { version = "1.0", features = ["derive"] }
+serde_bytes = "0.11"
 serde_cbor = "0.11.1"
 tokio = { version = "0.2.22", features = [ "macros" ] }
+tree-deserializer = { path = "../tree_deserializer" }
 
 [dev-dependencies]
+hex = "0.4.2"
 ic-test-utilities = { path = "../test_utilities" }
 ic-validator = { path = "../validator" }
 rand_chacha = "0.2.2"

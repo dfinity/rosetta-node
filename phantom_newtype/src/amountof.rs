@@ -494,6 +494,36 @@ where
     }
 }
 
+/// ```
+/// use phantom_newtype::AmountOf;
+/// use candid::{Decode, Encode};
+///
+/// enum MetricApple {}
+/// type Apples = AmountOf<MetricApple, u64>;
+///
+/// let amount = Apples::from(3);
+/// let bytes = Encode!(&amount).unwrap();
+/// let decoded = Decode!(&bytes, Apples).unwrap();
+/// assert_eq!(amount, decoded);
+/// ```
+impl<Unit, Repr> candid::CandidType for AmountOf<Unit, Repr>
+where
+    Repr: candid::CandidType,
+{
+    fn id() -> candid::types::TypeId {
+        Repr::id()
+    }
+    fn _ty() -> candid::types::Type {
+        Repr::_ty()
+    }
+    fn idl_serialize<S>(&self, serializer: S) -> Result<(), S::Error>
+    where
+        S: candid::types::Serializer,
+    {
+        self.0.idl_serialize(serializer)
+    }
+}
+
 impl<Unit, Repr: slog::Value> slog::Value for AmountOf<Unit, Repr> {
     fn serialize(
         &self,

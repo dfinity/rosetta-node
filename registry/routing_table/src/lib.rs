@@ -1,13 +1,13 @@
 mod proto;
 
 use candid::Decode;
-use ic_base_types::{CanisterId, SubnetId};
+use ic_base_types::{CanisterId, PrincipalId, SubnetId};
 use ic_ic00_types::{
-    CanisterIdRecord, DevSetFundsArgs, InstallCodeArgs, Method as Ic00Method, Payload,
-    ProvisionalTopUpCanisterArgs, SetControllerArgs,
+    CanisterIdRecord, InstallCodeArgs, Method as Ic00Method, Payload, ProvisionalTopUpCanisterArgs,
+    SetControllerArgs,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, str::FromStr, sync::Arc};
+use std::{collections::BTreeMap, convert::TryFrom, str::FromStr, sync::Arc};
 
 pub enum ResolveDestinationError {
     CandidError(candid::Error),
@@ -30,25 +30,24 @@ pub fn resolve_destination(
     own_subnet: SubnetId,
 ) -> Result<SubnetId, ResolveDestinationError> {
     // Figure out the destination subnet based on the method and the payload.
-    match Ic00Method::from_str(method_name) {
+    let method = Ic00Method::from_str(method_name);
+    match method {
         Ok(Ic00Method::CreateCanister)
         | Ok(Ic00Method::RawRand)
-        | Ok(Ic00Method::DevCreateCanisterWithFunds)
         | Ok(Ic00Method::ProvisionalCreateCanisterWithCycles)
-        | Ok(Ic00Method::ConvertIcptToCycles)
         | Ok(Ic00Method::SetupInitialDKG) => Ok(own_subnet),
         Ok(Ic00Method::InstallCode) => {
             // Find the destination canister from the payload.
             let args = Decode!(payload, InstallCodeArgs)?;
             let canister_id = args.get_canister_id();
-            routing_table.route(canister_id).ok_or({
+            routing_table.route(canister_id.get()).ok_or({
                 ResolveDestinationError::SubnetNotFound(canister_id, Ic00Method::InstallCode)
             })
         }
         Ok(Ic00Method::SetController) => {
             let args = Decode!(payload, SetControllerArgs)?;
             let canister_id = args.get_canister_id();
-            routing_table.route(canister_id).ok_or({
+            routing_table.route(canister_id.get()).ok_or({
                 ResolveDestinationError::SubnetNotFound(canister_id, Ic00Method::SetController)
             })
         }
@@ -56,24 +55,18 @@ pub fn resolve_destination(
         | Ok(Ic00Method::StartCanister)
         | Ok(Ic00Method::StopCanister)
         | Ok(Ic00Method::DeleteCanister)
-        | Ok(Ic00Method::DepositFunds) => {
+        | Ok(Ic00Method::DepositFunds)
+        | Ok(Ic00Method::DepositCycles) => {
             let args = Decode!(payload, CanisterIdRecord)?;
             let canister_id = args.get_canister_id();
-            routing_table.route(canister_id).ok_or({
-                ResolveDestinationError::SubnetNotFound(canister_id, Ic00Method::DepositFunds)
-            })
-        }
-        Ok(Ic00Method::DevSetFunds) => {
-            let args = DevSetFundsArgs::decode(payload)?;
-            let canister_id = args.get_canister_id();
-            routing_table.route(canister_id).ok_or({
-                ResolveDestinationError::SubnetNotFound(canister_id, Ic00Method::DevSetFunds)
+            routing_table.route(canister_id.get()).ok_or_else(|| {
+                ResolveDestinationError::SubnetNotFound(canister_id, method.unwrap())
             })
         }
         Ok(Ic00Method::ProvisionalTopUpCanister) => {
             let args = ProvisionalTopUpCanisterArgs::decode(payload)?;
             let canister_id = args.get_canister_id();
-            routing_table.route(canister_id).ok_or({
+            routing_table.route(canister_id.get()).ok_or({
                 ResolveDestinationError::SubnetNotFound(
                     canister_id,
                     Ic00Method::ProvisionalTopUpCanister,
@@ -86,7 +79,7 @@ pub fn resolve_destination(
     }
 }
 
-pub fn canister_id_into_u64(canister_id: CanisterId) -> u64 {
+fn canister_id_into_u64(canister_id: CanisterId) -> u64 {
     const LENGTH: usize = std::mem::size_of::<u64>();
     let principal_id = canister_id.get();
     let bytes = principal_id.as_slice();
@@ -214,6 +207,26 @@ impl CanisterIdRanges {
     }
 }
 
+/// A helper function to help insert a new subnet to the routing table
+pub fn routing_table_insert_subnet(
+    routing_table: &mut RoutingTable,
+    subnet_id: SubnetId,
+) -> Result<(), WellFormedError> {
+    // We assign roughly 1M canisters to each subnet
+    let num_canisters_per_subnet: u64 = 1 << 20;
+    let start = match routing_table.iter().last() {
+        Some((last_canister_id_range, _)) => canister_id_into_u64(last_canister_id_range.end) + 1,
+        None => 0,
+    };
+    // The -1 because the ranges are stored as closed intervals.
+    let end = start + num_canisters_per_subnet - 1;
+    let canister_id_range = CanisterIdRange {
+        start: CanisterId::from(start),
+        end: CanisterId::from(end),
+    };
+    routing_table.insert(canister_id_range, subnet_id)
+}
+
 /// Stores an ordered map mapping CanisterId ranges to SubnetIds.  The ranges
 /// tracked are inclusive of start and end i.e. can be denoted as [a, b].
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -227,6 +240,9 @@ impl RoutingTable {
         ret
     }
 
+    /// Insert a new subnet with a corresponding canister_id_range into the
+    /// routing table.  You may want to consider using
+    /// routing_table_insert_subnet instead.  It may meet your needs.
     pub fn insert(
         &mut self,
         canister_id_range: CanisterIdRange,
@@ -293,47 +309,68 @@ impl RoutingTable {
         Ok(())
     }
 
-    /// Find the subnetwork that `canister_id` is assigned to.
-    pub fn route(&self, canister_id: CanisterId) -> Option<SubnetId> {
-        // In simple terms, we need to do a binary search of all the interval
-        // ranges tracked in self to see if `canister_id` in included in any of
-        // them.  BTreeMap offers this functionality in the form of the
-        // `range()` function.  In particular, assume self is [a1, b1] ... [an,
-        // bn].  Pretend to insert [canister_id, u64::MAX] into this sequence.
-        // We look for the interval [i1, i2] that is before (or equal to) the
-        // position where [caniter_id, u64::MAX] would be inserted.
-        let before = self
-            .0
-            .range(
-                ..=(CanisterIdRange {
-                    start: canister_id,
-                    end: CanisterId::from(u64::MAX),
-                }),
-            )
-            .next_back();
-        if let Some((interval, subnet_id)) = before {
-            // We found an interval [star, end], it must be the case that
-            // [start, end]<=[canister_id, u64::MAX] lexicographically, whence
-            // start <= canister_id.
-            assert!(interval.start <= canister_id);
-            // If canister_id is in the interval then we found our answer.
-            if canister_id <= interval.end {
-                Some(*subnet_id)
-            } else {
-                // In this case, either [start, end] is the last interval in the
-                // map and c comes after end, or there is an interval [a,b] in
-                // the map such that lexicographically [start, end] <= [c,
-                // u64::MAX] < [a, b]. This means that canister_id < a so
-                // canister_id is not assigned to any subnetwork. Because if
-                // canister_id == a, then u64::MAX < b which is impossible.
-                None
+    /// Returns the `SubnetId` that the given `principal_id` is assigned to or
+    /// `None` if an assignment cannot be found.
+    pub fn route(&self, principal_id: PrincipalId) -> Option<SubnetId> {
+        // TODO(dsarlis): The below search can be optimized if we keep a set of subnet
+        // ids.
+        // Check if the given `principal_id` is a subnet.
+        // Note that the following assumes that all known subnets are in the routing
+        // table, even if they're empty (i.e. no canister exists on them). In the
+        // future, if this assumption does not hold, the list of existing
+        // subnets should be taken from the rest of the registry (which should
+        // be the absolute source of truth).
+        if let Some(subnet_id) = self.0.values().find(|x| x.get() == principal_id) {
+            return Some(*subnet_id);
+        }
+
+        // If the `principal_id` was not a subnet, it must be a `CanisterId` (otherwise
+        // we can't route to it).
+        match CanisterId::try_from(principal_id) {
+            Ok(canister_id) => {
+                // In simple terms, we need to do a binary search of all the interval
+                // ranges tracked in self to see if `canister_id` in included in any of
+                // them.  BTreeMap offers this functionality in the form of the
+                // `range()` function.  In particular, assume self is [a1, b1] ... [an,
+                // bn].  Pretend to insert [canister_id, u64::MAX] into this sequence.
+                // We look for the interval [i1, i2] that is before (or equal to) the
+                // position where [caniter_id, u64::MAX] would be inserted.
+                let before = self
+                    .0
+                    .range(
+                        ..=(CanisterIdRange {
+                            start: canister_id,
+                            end: CanisterId::from(u64::MAX),
+                        }),
+                    )
+                    .next_back();
+                if let Some((interval, subnet_id)) = before {
+                    // We found an interval [star, end], it must be the case that
+                    // [start, end]<=[canister_id, u64::MAX] lexicographically, whence
+                    // start <= canister_id.
+                    assert!(interval.start <= canister_id);
+                    // If canister_id is in the interval then we found our answer.
+                    if canister_id <= interval.end {
+                        Some(*subnet_id)
+                    } else {
+                        // In this case, either [start, end] is the last interval in the
+                        // map and c comes after end, or there is an interval [a,b] in
+                        // the map such that lexicographically [start, end] <= [c,
+                        // u64::MAX] < [a, b]. This means that canister_id < a so
+                        // canister_id is not assigned to any subnetwork. Because if
+                        // canister_id == a, then u64::MAX < b which is impossible.
+                        None
+                    }
+                } else {
+                    // All intervals [a,b] of the map are lexicographically > than
+                    // [canister_id, u64::MAX]. But if [a, b] > [canister_id, u64::MAX]
+                    // then a > canister_id, which means that canister_id is unassigned
+                    // (or a == b and b > u64::MAX which is impossible).
+                    None
+                }
             }
-        } else {
-            // All intervals [a,b] of the map are lexicographically > than
-            // [canister_id, u64::MAX]. But if [a, b] > [canister_id, u64::MAX]
-            // then a > canister_id, which means that canister_id is unassigned
-            // (or a == b and b > u64::MAX which is impossible).
-            None
+            // Cannot route to any subnet as we couldn't convert to a `CanisterId`.
+            Err(_) => None,
         }
     }
 
@@ -400,7 +437,7 @@ mod test {
             // Check that we got an application group ID.
             assert!(canister_id_into_u64(cid).trailing_zeros() >= 8);
             // Sanity check: the Canister ID routes to our SN.
-            assert_eq!(rt.route(cid), Some(me));
+            assert_eq!(rt.route(cid.get()), Some(me));
             // Check in our canister map if the Canister ID is already
             // mapped to a canister.
             if canister_find(cid) {
@@ -528,19 +565,19 @@ mod test {
             .to_vec(),
         );
         assert_eq!(rt.well_formed(), Ok(()));
-        assert!(rt.route(CanisterId::from(0)) == None);
-        assert!(rt.route(CanisterId::from(0x99)) == None);
-        assert!(rt.route(CanisterId::from(0x100)) == Some(subnet_test_id(1)));
-        assert!(rt.route(CanisterId::from(0x10000)) == Some(subnet_test_id(1)));
-        assert!(rt.route(CanisterId::from(0x100ff)) == Some(subnet_test_id(1)));
-        assert!(rt.route(CanisterId::from(0x10100)) == None);
-        assert!(rt.route(CanisterId::from(0x20500)) == Some(subnet_test_id(2)));
-        assert!(rt.route(CanisterId::from(0x50050)) == Some(subnet_test_id(1)));
-        assert!(rt.route(CanisterId::from(0x100000)) == None);
-        assert!(rt.route(CanisterId::from(0x80500)) == Some(subnet_test_id(8)));
-        assert!(rt.route(CanisterId::from(0x8ffff)) == Some(subnet_test_id(8)));
-        assert!(rt.route(CanisterId::from(0x90000)) == Some(subnet_test_id(9)));
-        assert!(rt.route(CanisterId::from(0xffffffffffffffff)) == Some(subnet_test_id(0xf)));
+        assert!(rt.route(CanisterId::from(0).get()) == None);
+        assert!(rt.route(CanisterId::from(0x99).get()) == None);
+        assert!(rt.route(CanisterId::from(0x100).get()) == Some(subnet_test_id(1)));
+        assert!(rt.route(CanisterId::from(0x10000).get()) == Some(subnet_test_id(1)));
+        assert!(rt.route(CanisterId::from(0x100ff).get()) == Some(subnet_test_id(1)));
+        assert!(rt.route(CanisterId::from(0x10100).get()) == None);
+        assert!(rt.route(CanisterId::from(0x20500).get()) == Some(subnet_test_id(2)));
+        assert!(rt.route(CanisterId::from(0x50050).get()) == Some(subnet_test_id(1)));
+        assert!(rt.route(CanisterId::from(0x100000).get()) == None);
+        assert!(rt.route(CanisterId::from(0x80500).get()) == Some(subnet_test_id(8)));
+        assert!(rt.route(CanisterId::from(0x8ffff).get()) == Some(subnet_test_id(8)));
+        assert!(rt.route(CanisterId::from(0x90000).get()) == Some(subnet_test_id(9)));
+        assert!(rt.route(CanisterId::from(0xffffffffffffffff).get()) == Some(subnet_test_id(0xf)));
         assert_eq!(rt.ranges(subnet_test_id(1)).well_formed(), Ok(()));
         assert!(
             rt.ranges(subnet_test_id(1)).0
@@ -556,5 +593,36 @@ mod test {
         );
         println!("CID 0x{:x?}, seq_no {}", cid, seq_no);
         assert!(cid > CanisterId::from(0x10000));
+    }
+
+    #[test]
+    fn route_when_principal_corresponds_to_subnet() {
+        // Valid routing table
+        let rt = new_routing_table(
+            [
+                ((0x100, 0x100ff), 1),
+                ((0x20000, 0x2ffff), 2),
+                ((0x50000, 0x50fff), 1),
+                ((0x80000, 0x8ffff), 8),
+                ((0x90000, 0xfffff), 9),
+                ((0x1000000000000000, 0xffffffffffffffff), 0xf),
+            ]
+            .to_vec(),
+        );
+
+        assert_eq!(rt.well_formed(), Ok(()));
+
+        // Existing subnets.
+        let subnet_id1 = subnet_test_id(1);
+        let subnet_id8 = subnet_test_id(8);
+
+        // Non existing subnets
+        let subnet_id5 = subnet_test_id(5);
+        let subnet_id12 = subnet_test_id(12);
+
+        assert_eq!(rt.route(subnet_id1.get()), Some(subnet_id1));
+        assert_eq!(rt.route(subnet_id8.get()), Some(subnet_id8));
+        assert_eq!(rt.route(subnet_id5.get()), None);
+        assert_eq!(rt.route(subnet_id12.get()), None);
     }
 }

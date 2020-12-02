@@ -5,12 +5,12 @@
 
 use super::{
     validate_ingress_expiry, validate_ingress_expiry_range, Blob, HttpHandlerError, MessageId,
-    ReadStatePath,
 };
 use crate::{
     crypto::SignedBytesWithoutDomainSeparator, messages::message_id::hash_of_map, CanisterId,
     CountBytes, PrincipalId, Time, UserId,
 };
+use ic_crypto_tree_hash::{MixedHashTree, Path};
 use ic_protobuf::types::v1 as pb;
 use maplit::btreemap;
 #[cfg(test)]
@@ -96,8 +96,8 @@ pub struct HttpRequestStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HttpReadState {
     pub sender: Blob,
-    // A list of paths, where a path is itself a sequence of blobs.
-    pub paths: Vec<ReadStatePath>,
+    // A list of paths, where a path is itself a sequence of labels.
+    pub paths: Vec<Path>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nonce: Option<Blob>,
     pub ingress_expiry: u64,
@@ -120,16 +120,6 @@ pub enum HttpReadContent {
         #[serde(flatten)]
         read_state: HttpReadState,
     },
-}
-
-/// Describes the fields of a query call between canisters.  There is currently
-/// no public specification for this.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct HttpCanisterQuery {
-    pub sender: Blob,
-    pub receiver: Blob,
-    pub method_name: String,
-    pub method_payload: Blob,
 }
 
 /// Describes the request envelope as defined in
@@ -449,7 +439,7 @@ impl TryFrom<(HttpReadState, Time)> for RawHttpRequest {
                     .map(|p| {
                         RawHttpRequestVal::Array(
                             p.iter()
-                                .map(|b| RawHttpRequestVal::Bytes(b.0.clone()))
+                                .map(|b| RawHttpRequestVal::Bytes(b.clone().to_vec()))
                                 .collect(),
                         )
                     })
@@ -513,6 +503,29 @@ pub enum HttpQueryResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HttpQueryResponseReply {
     pub arg: Blob,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HttpReadStateResponse {
+    /// The CBOR-encoded `Certificate`.
+    pub certificate: Blob,
+}
+
+/// A `Certificate` as defined in https://docs.dfinity.systems/public/#_certificate
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Certificate {
+    pub tree: MixedHashTree,
+    pub signature: Blob,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delegation: Option<CertificateDelegation>,
+}
+
+/// This enum is defined as a filler to make the encoding of `Certificate`
+/// compliant with the public spec. It is not currently being used.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CertificateDelegation {
+    pub subnet_id: Blob,
+    pub certificate: Blob,
 }
 
 /// The response to `/api/v1/status`.

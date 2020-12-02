@@ -19,6 +19,8 @@ pub struct GossipAdvert {
     pub integrity_hash: CryptoHash,
 }
 
+// TODO: Move all the constants in a more reasonable shared location in the code
+// https://dfinity.atlassian.net/browse/P2P-380
 /// Gossip subnet constants
 // Maximum number of artifact chunks that can be downloaded
 // simultaneously from one peer
@@ -48,6 +50,9 @@ pub const PFN_EVALUATION_PERIOD_MS: u32 = 3_000;
 // Period for polling the registry for changes
 pub const REGISTRY_POLL_PERIOD_MS: u32 = 3_000;
 
+// Period for sending a retransmission request
+pub const RETRANSMISSION_REQUEST_MS: u32 = 60_000;
+
 // helper function
 pub fn build_default_gossip_config() -> GossipConfig {
     GossipConfig {
@@ -58,5 +63,6 @@ pub fn build_default_gossip_config() -> GossipConfig {
         receive_check_cache_size: RECEIVE_CHECK_PEER_SET_SIZE,
         pfn_evaluation_period_ms: PFN_EVALUATION_PERIOD_MS,
         registry_poll_period_ms: REGISTRY_POLL_PERIOD_MS,
+        retransmission_request_ms: RETRANSMISSION_REQUEST_MS,
     }
 }

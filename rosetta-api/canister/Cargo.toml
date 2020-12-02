@@ -1,0 +1,20 @@
+[package]
+name = "ledger-canister"
+version = "0.0.1"
+authors = []
+description = "Like an accountant, but on the blockchain!"
+edition = "2018"
+
+[dependencies]
+dfn_core = {path = "../../rust_canisters/dfn_core"}
+dfn_candid = {path = "../../rust_canisters/dfn_candid"}
+candid = "0.6.10"
+lazy_static = "1.4.0"
+serde = "1.0"
+ic-crypto-sha256 = {path = "../../crypto/sha256/"}
+ic-types = { path = "../../types/types" }
+
+[[bin]]
+name = "ledger-canister"
+path = "src/main.rs"
+

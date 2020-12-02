@@ -5,6 +5,7 @@ use ic_protobuf::registry::crypto::v1::AlgorithmId as AlgorithmIdProto;
 use ic_protobuf::registry::crypto::v1::PublicKey as PublicKeyProto;
 use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
+use std::fmt;
 use strum_macros::IntoStaticStr;
 
 #[cfg(test)]
@@ -32,7 +33,6 @@ impl TryFrom<PublicKeyProto> for CspFsEncryptionPublicKey {
     type Error = MalformedFsEncryptionPublicKeyError;
 
     fn try_from(pk_proto: PublicKeyProto) -> Result<Self, MalformedFsEncryptionPublicKeyError> {
-        // TODO: this is the correct algorithm ID to use, right?
         if pk_proto.algorithm != AlgorithmIdProto::Groth20Bls12381 as i32 {
             return Err(MalformedFsEncryptionPublicKeyError {
                 key_bytes: pk_proto.key_value,
@@ -61,6 +61,17 @@ impl TryFrom<PublicKeyProto> for CspFsEncryptionPublicKey {
 pub struct MalformedFsEncryptionPublicKeyError {
     pub key_bytes: Vec<u8>,
     pub internal_error: String,
+}
+
+impl fmt::Display for MalformedFsEncryptionPublicKeyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "MalformedFsEncryptionPublicKeyError {{  key_bytes: 0x{}, internal_error: {} }}",
+            hex::encode(&self.key_bytes[..]),
+            self.internal_error
+        )
+    }
 }
 
 impl TryFrom<&PublicKeyProto> for CspFsEncryptionPok {

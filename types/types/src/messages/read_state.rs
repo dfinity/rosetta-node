@@ -1,13 +1,13 @@
-use super::{Blob, RawHttpRequest, RawHttpRequestVal, UserSignature};
-use crate::{crypto::Signed, UserId};
+use ic_crypto_tree_hash::{Label, Path};
 
-pub type ReadStatePath = Vec<Blob>;
+use super::{RawHttpRequest, RawHttpRequestVal, UserSignature};
+use crate::{crypto::Signed, UserId};
 
 pub type SignedReadState = Signed<RawHttpRequest, Option<UserSignature>>;
 
 pub struct ReadState {
     pub source: UserId,
-    pub paths: Vec<ReadStatePath>,
+    pub paths: Vec<Path>,
 }
 
 // This conversion should be error free as long as we performed all the
@@ -28,8 +28,8 @@ impl From<SignedReadState> for ReadState {
                 };
                 inner_paths
                     .into_iter()
-                    .map(|path| {
-                        Blob(match path {
+                    .map(|segment| {
+                        Label::from(match segment {
                             RawHttpRequestVal::Bytes(bytes) => bytes,
                             val => unreachable!("Expected bytes, got {:?}", val),
                         })

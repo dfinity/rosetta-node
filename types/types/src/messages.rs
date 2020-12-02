@@ -16,10 +16,11 @@ use crate::{
 };
 pub use blob::Blob;
 pub use http::{
-    Delegation, HttpCanisterQuery, HttpCanisterUpdate, HttpQueryResponse, HttpQueryResponseReply,
-    HttpReadContent, HttpReadState, HttpReply, HttpRequestEnvelope, HttpRequestStatus,
-    HttpRequestStatusResponse, HttpResponseStatus, HttpStatusResponse, HttpSubmitContent,
-    HttpUserQuery, RawHttpRequest, RawHttpRequestVal, SignedDelegation,
+    Certificate, CertificateDelegation, Delegation, HttpCanisterUpdate, HttpQueryResponse,
+    HttpQueryResponseReply, HttpReadContent, HttpReadState, HttpReadStateResponse, HttpReply,
+    HttpRequestEnvelope, HttpRequestStatus, HttpRequestStatusResponse, HttpResponseStatus,
+    HttpStatusResponse, HttpSubmitContent, HttpUserQuery, RawHttpRequest, RawHttpRequestVal,
+    SignedDelegation,
 };
 pub use ic_base_types::CanisterInstallMode;
 use ic_protobuf::proxy::{try_from_option_field, ProxyDecodeError};
@@ -30,12 +31,12 @@ pub use inter_canister::{
     CallContextId, CallbackId, Payload, RejectContext, Request, RequestOrResponse, Response,
 };
 pub use message_id::{MessageId, MessageIdError, EXPECTED_MESSAGE_ID_LENGTH};
-pub use query::{QueryRequest, SignedUserQuery, UserQuery};
-pub use read_state::{ReadState, ReadStatePath, SignedReadState};
+pub use query::{SignedUserQuery, UserQuery};
+pub use read_state::{ReadState, SignedReadState};
 pub use request_status::{RequestStatus, SignedRequestStatus};
 use serde::{Deserialize, Serialize};
 use std::{convert::TryFrom, error::Error, fmt};
-pub use webauthn::{WebAuthnDelegation, WebAuthnEnvelope, WebAuthnSignature};
+pub use webauthn::{WebAuthnEnvelope, WebAuthnSignature};
 
 /// This sets the upper bound on how big a single inter-canister request or
 /// response can be.  We know that allowing messages larger than around 2MB has
@@ -44,15 +45,7 @@ pub use webauthn::{WebAuthnDelegation, WebAuthnEnvelope, WebAuthnSignature};
 /// their blocks notarized; and when the consensus protocol is configured for
 /// smaller messages, a large message in the network can cause the finalization
 /// rate to drop.
-///
-/// We have some specific use cases which need support for large messages,
-/// specifically, installing large wasm modules on canisters.  Until we can
-/// support these usecases sensibly, we have to allow for such large messages in
-/// the network.
-///
-/// The current value is set based on the current estimate of the largest
-/// message that we need to support.
-pub const MAX_INTER_CANISTER_PAYLOAD_IN_BYTES: NumBytes = NumBytes::new(50 * 1024 * 1024); // 50 MiB
+pub const MAX_INTER_CANISTER_PAYLOAD_IN_BYTES: NumBytes = NumBytes::new(3 * 1024 * 1024); // 3 MiB
 
 /// The maximum size of an inter-canister request or response that the IC can
 /// support.
@@ -63,7 +56,7 @@ pub const MAX_INTER_CANISTER_PAYLOAD_IN_BYTES: NumBytes = NumBytes::new(50 * 102
 /// fields (e.g. sender: CanisterId), so it is not possible to statically
 /// compute an upper bound on their sizes.  Hopefully the additional space we
 /// have allocated here is sufficient.
-pub const MAX_INTER_CANISTER_MESSAGE_IN_BYTES: NumBytes = NumBytes::new(60 * 1024 * 1024); // 60 MiB
+pub const MAX_INTER_CANISTER_MESSAGE_IN_BYTES: NumBytes = NumBytes::new(2 * 1024 * 1024); // 2 MiB
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct UserSignature {

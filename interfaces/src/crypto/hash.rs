@@ -1,12 +1,12 @@
 use ic_types::artifact::StateSyncMessage;
-use ic_types::batch::BatchPayload;
 use ic_types::consensus::certification::CertificationMessage;
 use ic_types::consensus::dkg as consensus_dkg;
 use ic_types::consensus::{
     certification::{Certification, CertificationContent, CertificationShare},
-    BasicSignature, Block, CatchUpContent, ConsensusMessage, FinalizationContent, HashedBlock,
-    MultiSignature, MultiSignatureShare, NotarizationContent, RandomBeaconContent,
-    RandomTapeContent, ThresholdSignature, ThresholdSignatureShare,
+    BasicSignature, Block, BlockPayload, CatchUpContent, CatchUpContentProtobufBytes,
+    CatchUpShareContent, ConsensusMessage, FinalizationContent, HashedBlock, MultiSignature,
+    MultiSignatureShare, NotarizationContent, RandomBeaconContent, RandomTapeContent,
+    ThresholdSignature, ThresholdSignatureShare,
 };
 use ic_types::crypto::Signed;
 use ic_types::messages::{HttpCanisterUpdate, MessageId, SignedIngress};
@@ -52,6 +52,8 @@ const DOMAIN_RANDOM_TAPE: &str = "random_tape_domain";
 const DOMAIN_RANDOM_TAPE_SHARE: &str = "random_tape_share_domain";
 
 pub(crate) const DOMAIN_CATCH_UP_CONTENT: &str = "catch_up_content_domain";
+const DOMAIN_CATCH_UP_CONTENT_PROTO: &str = "catch_up_content_proto_domain";
+const DOMAIN_CATCH_UP_SHARE_CONTENT: &str = "catch_up_share_content_domain";
 const DOMAIN_CATCH_UP_PACKAGE: &str = "catch_up_package_domain";
 const DOMAIN_CATCH_UP_PACKAGE_SHARE: &str = "catch_up_package_share_domain";
 
@@ -94,7 +96,7 @@ mod private {
     impl CryptoHashDomainSeal for Block {}
     impl CryptoHashDomainSeal for Signed<HashedBlock, BasicSignature<Block>> {}
 
-    impl CryptoHashDomainSeal for BatchPayload {}
+    impl CryptoHashDomainSeal for BlockPayload {}
 
     impl CryptoHashDomainSeal for RandomBeaconContent {}
     impl CryptoHashDomainSeal for Signed<RandomBeaconContent, ThresholdSignature<RandomBeaconContent>> {}
@@ -124,8 +126,11 @@ mod private {
     }
 
     impl CryptoHashDomainSeal for CatchUpContent {}
+    impl CryptoHashDomainSeal for CatchUpContentProtobufBytes {}
     impl CryptoHashDomainSeal for Signed<CatchUpContent, ThresholdSignature<CatchUpContent>> {}
-    impl CryptoHashDomainSeal for Signed<CatchUpContent, ThresholdSignatureShare<CatchUpContent>> {}
+
+    impl CryptoHashDomainSeal for CatchUpShareContent {}
+    impl CryptoHashDomainSeal for Signed<CatchUpShareContent, ThresholdSignatureShare<CatchUpContent>> {}
 
     impl CryptoHashDomainSeal for StateSyncMessage {}
     impl CryptoHashDomainSeal for ConsensusMessage {}
@@ -200,7 +205,7 @@ impl CryptoHashDomain for Signed<HashedBlock, BasicSignature<Block>> {
     }
 }
 
-impl CryptoHashDomain for BatchPayload {
+impl CryptoHashDomain for BlockPayload {
     fn domain(&self) -> String {
         DOMAIN_INMEMORY_PAYLOAD.to_string()
     }
@@ -280,13 +285,25 @@ impl CryptoHashDomain for CatchUpContent {
     }
 }
 
+impl CryptoHashDomain for CatchUpContentProtobufBytes {
+    fn domain(&self) -> String {
+        DOMAIN_CATCH_UP_CONTENT_PROTO.to_string()
+    }
+}
+
+impl CryptoHashDomain for CatchUpShareContent {
+    fn domain(&self) -> String {
+        DOMAIN_CATCH_UP_SHARE_CONTENT.to_string()
+    }
+}
+
 impl CryptoHashDomain for Signed<CatchUpContent, ThresholdSignature<CatchUpContent>> {
     fn domain(&self) -> String {
         DOMAIN_CATCH_UP_PACKAGE.to_string()
     }
 }
 
-impl CryptoHashDomain for Signed<CatchUpContent, ThresholdSignatureShare<CatchUpContent>> {
+impl CryptoHashDomain for Signed<CatchUpShareContent, ThresholdSignatureShare<CatchUpContent>> {
     fn domain(&self) -> String {
         DOMAIN_CATCH_UP_PACKAGE_SHARE.to_string()
     }

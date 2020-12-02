@@ -44,9 +44,6 @@ pub struct TransportConfig {
 
     /// P2P specific config. In future, this will be made more generic.
     pub p2p_flows: Vec<TransportFlowConfig>,
-
-    /// TLS config.
-    pub tls: Option<TransportTlsConfig>,
 }
 
 /// Per-flow config
@@ -61,16 +58,6 @@ pub struct TransportFlowConfig {
 
     /// Flow queue size
     pub queue_size: usize,
-}
-
-/// Per-node TLS  config
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct TransportTlsConfig {
-    /// Path to the private key PEM file.
-    pub private_key_path: String,
-
-    /// Path to the self-signed cert PEM file.
-    pub certificate_path: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -292,6 +279,9 @@ pub enum TransportErrorCode {
 
     /// Failed to configure the client side TLS connector
     ConnectorConfigFailed,
+
+    /// Failed to get socket address
+    InvalidSockAddr,
 }
 
 impl FlowId {

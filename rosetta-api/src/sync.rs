@@ -1,9 +1,10 @@
-use crate::ledger_canister::{Certification, Hash, HashedBlock};
+use dfn_candid::{Candid, CandidOne};
 use ic_canister_client::{Agent, Sender};
 use ic_types::CanisterId;
+use ledger_canister::{Certification, Hash, HashedBlock};
+use on_wire::{FromWire, IntoWire};
 use reqwest::Url;
 use serde::de::DeserializeOwned;
-use serde::Serialize;
 use std::fs::OpenOptions;
 use std::io::ErrorKind;
 use std::path::Path;
@@ -53,34 +54,32 @@ impl LedgerCanister {
         }
     }
 
-    async fn query<'a, Payload: Serialize, Res: DeserializeOwned>(
+    async fn query<'a, Payload: dfn_candid::encode::EncodeArguments, Res: DeserializeOwned>(
         &self,
+        method: &str,
         payload: Payload,
     ) -> Result<Res, String> {
-        let arg = serde_json::to_vec(&payload).map_err(|e| e.to_string())?;
+        let arg = Candid(payload).into_bytes()?;
         let bytes = self
             .agent
-            .execute_query(&self.canister_id, "block", Some(arg))
+            .execute_query(&self.canister_id, method, Some(arg))
             .await?
             .ok_or_else(|| "Reply payload was empty".to_string())?;
-        serde_json::from_slice(&bytes).map_err(|e| e.to_string())
+        CandidOne::from_bytes(bytes).map(|c| c.0)
     }
 
-    async fn read(&self, hash: &Hash) -> BlockResult {
-        self.query(hash).await
+    async fn read(&self, hash: &Hash) -> Result<Option<HashedBlock>, String> {
+        self.query("block", (hash,)).await
     }
 
-    async fn tip(&self) -> Result<Option<(Certification, Hash)>, String> {
-        self.query(()).await
+    async fn tip(&self) -> Result<(Certification, Hash), String> {
+        self.query("tip_of_chain", ()).await
     }
 
     /// Returns the tip of the chain having verified and written all the other
     /// blocks to disk
     pub async fn sync(&self) -> Result<Option<Hash>, String> {
-        let (cert, hash) = match self.tip().await? {
-            Some(x) => x,
-            None => return Ok(None),
-        };
+        let (cert, hash) = self.tip().await?;
 
         let mut to_fetch = Some(verify_tip(cert, hash)?);
 

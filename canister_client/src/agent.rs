@@ -1,22 +1,24 @@
-use crate::cbor::{parse_canister_call_response, CanisterCallResponse};
-use ed25519_dalek::{Keypair, KEYPAIR_LENGTH};
-use ic_interfaces::crypto::DOMAIN_IC_REQUEST;
-use ic_types::{
-    consensus::catchup::{CatchUpPackage, CatchUpPackageParam},
-    messages::{
-        Blob, HttpReadContent, HttpRequestEnvelope, HttpSubmitContent, MessageId, RawHttpRequest,
-    },
-    time::current_time_and_expiry_time,
-    CanisterId, PrincipalId,
+use crate::{
+    cbor::{parse_canister_query_response, parse_read_state_response, RequestStatus},
+    time_source::SystemTimeTimeSource,
 };
+use ed25519_dalek::{Keypair, KEYPAIR_LENGTH};
+use ic_crypto_tree_hash::Path;
+use ic_interfaces::{crypto::DOMAIN_IC_REQUEST, time_source::TimeSource};
+use ic_protobuf::types::v1 as pb;
+use ic_types::{
+    consensus::catchup::CatchUpPackageParam,
+    messages::{
+        Blob, HttpReadContent, HttpRequestEnvelope, HttpStatusResponse, HttpSubmitContent,
+        MessageId, RawHttpRequest,
+    },
+    CanisterId, PrincipalId, Time,
+};
+use prost::Message;
 use reqwest::{RequestBuilder, Url};
 use serde_cbor::value::Value as CBOR;
-use std::convert::TryFrom;
-use std::error::Error;
-use std::fmt;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tokio::time::delay_until;
+use std::{convert::TryFrom, error::Error, fmt, sync::Arc, time::Duration};
+use tokio::time::delay_for;
 
 /// Maximum time in seconds to wait for a result (successful or otherwise)
 /// from an 'execute_update' call.
@@ -146,6 +148,9 @@ pub struct Agent {
     /// The values that any 'sender' field should have when issuing
     /// calls with the user corresponding to this Agent.
     pub sender_field: Blob,
+
+    /// The source of time. Generally not changed, unless under test
+    pub time_source: Arc<dyn TimeSource>,
 }
 
 impl fmt::Debug for Agent {
@@ -187,6 +192,7 @@ impl Agent {
             install_timeout: INSTALL_TIMEOUT,
             sender,
             sender_field,
+            time_source: Arc::new(SystemTimeTimeSource::new()),
         }
     }
 
@@ -208,10 +214,17 @@ impl Agent {
         self
     }
 
+    /// Sets the timesource.
+    pub fn with_timesource(mut self, time_source: Arc<dyn TimeSource>) -> Self {
+        self.time_source = time_source;
+        self
+    }
+
+    /// Queries the cup endpoint given the provided CatchUpPackageParams.
     pub async fn query_cup_endpoint(
         &self,
         param: Option<CatchUpPackageParam>,
-    ) -> Result<Option<CatchUpPackage>, String> {
+    ) -> Result<Option<pb::CatchUpPackage>, String> {
         let url = self
             .url
             .join(CATCH_UP_PACKAGE_PATH)
@@ -231,16 +244,16 @@ impl Agent {
             .await
             .map_err(|e| format!("Receiving from CUP endpoint failed: {:?}", e))?;
 
-        // Response is either empty or a CBOR encoded byte stream.
-        let cup: Option<CatchUpPackage> = if bytes.is_empty() {
+        // Response is either empty or a protobuf encoded byte stream.
+        let cup = if bytes.is_empty() {
             None
         } else {
-            serde_cbor::from_slice(&bytes).map_err(|e| {
+            Some(pb::CatchUpPackage::decode(&bytes[..]).map_err(|e| {
                 format!(
-                    "Failed to parse CUP to CBOR, got: {:?} - error {:?}",
+                    "Failed to deserialize CUP from protobuf, got: {:?} - error {:?}",
                     bytes, e
                 )
-            })?
+            })?)
         };
 
         Ok(cup)
@@ -255,19 +268,18 @@ impl Agent {
         arg: Option<Vec<u8>>,
     ) -> Result<Option<Vec<u8>>, String> {
         let url = self.url.join(QUERY_PATH).map_err(|e| format!("{}", e))?;
-        let request = self.prepare_cbor_post_request_body(
-            url,
-            self.prepare_query(method, canister_id, arg)
-                .map_err(|e| format!("Failed to prepare query: {}", e))?,
-        );
+        let envelope = self
+            .prepare_query(method, canister_id, arg)
+            .map_err(|e| format!("Failed to prepare query: {}", e))?;
+        let request = self.prepare_cbor_post_request_body(url, envelope);
 
         let cbor = match wait_for_one_http_request(request, self.query_timeout).await {
             Ok(c) => Ok(c),
             Err(e) => Err(format!("Canister query call failed: {:?}", e)),
         }?;
-        let call_response = parse_canister_call_response(&cbor)?;
+        let call_response = parse_canister_query_response(&cbor)?;
         if call_response.status == "replied" {
-            Ok(call_response.arg)
+            Ok(call_response.reply)
         } else {
             Err(format!(
                 "The response of a canister query call contained status '{}' and message '{:?}'",
@@ -302,7 +314,7 @@ impl Agent {
         let (http_body, request_id) = self.prepare_update(canister_id, method, arguments, nonce)?;
 
         let url = self.url.join(UPDATE_PATH).map_err(|e| format!("{}", e))?;
-        let deadline = std::time::Instant::now() + timeout;
+        let deadline = self.time_source.get_relative_time() + timeout;
         let request = self.prepare_cbor_post_request_body(url, http_body);
 
         if let Err(e) = request.timeout(timeout).send().await {
@@ -315,23 +327,23 @@ impl Agent {
         const POLL_INTERVAL_MULTIPLIER: f32 = 1.3;
 
         let mut poll_interval = MIN_POLL_INTERVAL;
-        let mut next_poll_time = Instant::now() + poll_interval;
+        let mut next_poll_time = self.time_source.get_relative_time() + poll_interval;
 
         while next_poll_time < deadline {
-            delay_until(next_poll_time.into()).await;
+            delay_for(poll_interval).await;
 
             let wait_timeout = deadline - next_poll_time;
             match self.wait_ingress(request_id.clone(), wait_timeout).await {
-                Ok(call_response) => match call_response.status.as_ref() {
+                Ok(request_status) => match request_status.status.as_ref() {
                     "replied" => {
-                        return Ok(call_response.arg);
+                        return Ok(request_status.reply);
                     }
                     "unknown" | "received" | "processing" => {}
                     _ => {
                         return Err(format!(
-                            "Unexpected result: {:?} - {:?}",
-                            call_response.status, call_response.reject_message
-                        ));
+                            "unexpected result: {:?} - {:?}",
+                            request_status.status, request_status.reject_message
+                        ))
                     }
                 },
                 Err(e) => return Err(format!("Unexpected error: {:?}", e)),
@@ -342,7 +354,7 @@ impl Agent {
             poll_interval = poll_interval
                 .mul_f32(POLL_INTERVAL_MULTIPLIER)
                 .max(MAX_POLL_INTERVAL);
-            next_poll_time = Instant::now() + poll_interval;
+            next_poll_time = self.time_source.get_relative_time() + poll_interval;
         }
         Ok(None)
     }
@@ -353,26 +365,27 @@ impl Agent {
     ///
     /// Returns the entire CBOR value from the response, without trying to
     /// interpret it.
-    pub async fn request_status_once(
+    async fn request_status_once(
         &self,
         request_id: MessageId,
         timeout: Duration,
     ) -> Result<CBOR, Box<dyn Error>> {
         let url = self.url.join(QUERY_PATH)?;
         let request = self.prepare_cbor_post_request(url);
-        let status_request_body = self.prepare_update_result_check(request_id)?;
+        let path = Path::new(vec!["request_status".into(), request_id.into()]);
+        let status_request_body = self.prepare_read_state(&[path])?;
         wait_for_one_http_request(request.body(status_request_body), timeout).await
     }
 
     /// Requests the status of a pending canister update call request exactly
-    /// once.
+    /// once using the `read_state` API.
     ///
     /// This is intended to be used in a loop until a final state is reached.
     pub async fn wait_ingress(
         &self,
         request_id: MessageId,
         timeout: Duration,
-    ) -> Result<CanisterCallResponse, String> {
+    ) -> Result<RequestStatus, String> {
         let cbor = self
             .request_status_once(request_id.clone(), timeout)
             .await
@@ -382,7 +395,7 @@ impl Agent {
                     request_id, e
                 )
             })?;
-        parse_canister_call_response(&cbor)
+        parse_read_state_response(&request_id, cbor)
     }
 
     /// Requests the version of the public spec supported by this node by
@@ -392,29 +405,25 @@ impl Agent {
         let resp = wait_for_one_http_request(self.client.get(url), self.query_timeout)
             .await
             .map_err(|e| format!("{}", e))?;
-        if let CBOR::Map(m) = resp {
-            let version_key = CBOR::Text("ic_api_version".to_string());
-            if let Some(CBOR::Text(version)) = m.get(&version_key) {
-                return Ok(version.to_owned());
-            }
-        }
-        Err("Could not parse out cbor response".to_string())
+
+        let response = serde_cbor::value::from_value::<HttpStatusResponse>(resp)
+            .map_err(|source| format!("decoding to HttpStatusResponse failed: {}", source))?;
+
+        Ok(response.ic_api_version)
     }
 
     /// Requests the Replica impl version of this node by querying
     /// /api/v1/status
-    pub async fn impl_version(&self) -> Result<String, String> {
+    pub async fn impl_version(&self) -> Result<Option<String>, String> {
         let url = self.url.join(NODE_STATUS_PATH).unwrap();
         let resp = wait_for_one_http_request(self.client.get(url), self.query_timeout)
             .await
             .map_err(|e| format!("{}", e))?;
-        if let CBOR::Map(m) = resp {
-            let version_key = CBOR::Text("impl_version".to_string());
-            if let Some(CBOR::Text(version)) = m.get(&version_key) {
-                return Ok(version.to_owned());
-            }
-        }
-        Err("Could not parse out cbor response".to_string())
+
+        let response = serde_cbor::value::from_value::<HttpStatusResponse>(resp)
+            .map_err(|source| format!("decoding to HttpStatusResponse failed: {}", source))?;
+
+        Ok(response.impl_version)
     }
 
     fn prepare_cbor_post_request(&self, url: Url) -> RequestBuilder {
@@ -459,6 +468,7 @@ pub fn ed25519_public_key_to_der(mut key: Vec<u8>) -> Vec<u8> {
 pub fn sign_submit(
     content: HttpSubmitContent,
     sender: &Sender,
+    current_time: Time,
 ) -> Result<(HttpRequestEnvelope<HttpSubmitContent>, MessageId), String> {
     // Open question: should this also set the `sender` field of the `content`? The
     // two are linked, but it's a bit weird for a function that presents itself
@@ -466,7 +476,6 @@ pub fn sign_submit(
 
     let message_id = match &content {
         HttpSubmitContent::Call { update } => {
-            let (current_time, _) = current_time_and_expiry_time();
             let raw_http_request =
                 RawHttpRequest::try_from((update.clone(), current_time)).unwrap();
             MessageId::from(&raw_http_request)
@@ -496,9 +505,8 @@ pub fn sign_submit(
 pub fn sign_read(
     content: HttpReadContent,
     sender: &Sender,
+    current_time: Time,
 ) -> Result<HttpRequestEnvelope<HttpReadContent>, Box<dyn Error>> {
-    let (current_time, _) = current_time_and_expiry_time();
-
     let raw_http_request = match &content {
         HttpReadContent::Query { query } => {
             RawHttpRequest::try_from((query.clone(), current_time)).unwrap()
@@ -541,8 +549,10 @@ async fn wait_for_one_http_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ic_test_utilities::crypto::temp_crypto_component_with_fake_registry;
     use ic_test_utilities::types::ids::node_test_id;
+    use ic_test_utilities::{
+        crypto::temp_crypto_component_with_fake_registry, FastForwardTimeSource,
+    };
     use ic_types::messages::{
         HttpCanisterUpdate, HttpRequestStatus, HttpUserQuery, SignedIngress, SignedReadRequest,
     };
@@ -566,7 +576,8 @@ mod tests {
     /// that `authenticate_ingress_message` manages to authenticate it.
     #[test]
     fn sign_and_verify_submit_content() {
-        let (current_time, expiry_time) = current_time_and_expiry_time();
+        let current_time = FastForwardTimeSource::new().get_relative_time();
+        let expiry_time = current_time + Duration::from_secs(4 * 60);
         // Set up an arbitrary legal input
         let keypair = {
             let mut rng = ChaChaRng::seed_from_u64(789 as u64);
@@ -590,7 +601,7 @@ mod tests {
             },
         };
         let sender = Sender::from_keypair(&keypair);
-        let (submit, id) = sign_submit(content.clone(), &sender).unwrap();
+        let (submit, id) = sign_submit(content.clone(), &sender, current_time).unwrap();
 
         // The wrapped content is content, without modification
         assert_eq!(submit.content, content);
@@ -608,7 +619,9 @@ mod tests {
     /// verify that `authenticate_ingress_message` manages to authenticate it.
     #[test]
     fn sign_and_verify_submit_content_explicit_anonymous() {
-        let (current_time, expiry_time) = current_time_and_expiry_time();
+        let current_time = FastForwardTimeSource::new().get_relative_time();
+        let expiry_time = current_time + Duration::from_secs(4 * 60);
+
         // Set up an arbitrary legal input
         let content = HttpSubmitContent::Call {
             update: HttpCanisterUpdate {
@@ -621,7 +634,7 @@ mod tests {
                 ingress_expiry: expiry_time.as_nanos_since_unix_epoch(),
             },
         };
-        let (submit, id) = sign_submit(content.clone(), &Sender::Anonymous).unwrap();
+        let (submit, id) = sign_submit(content.clone(), &Sender::Anonymous, current_time).unwrap();
 
         // The wrapped content is content, without modification
         assert_eq!(submit.content, content);
@@ -637,7 +650,9 @@ mod tests {
 
     #[test]
     fn sign_and_verify_request_status_content_valid_status_request() {
-        let (current_time, expiry_time) = current_time_and_expiry_time();
+        let current_time = FastForwardTimeSource::new().get_relative_time();
+        let expiry_time = current_time + Duration::from_secs(4 * 60);
+
         // Set up an arbitrary legal input
         let keypair = {
             let mut rng = ChaChaRng::seed_from_u64(51 as u64);
@@ -662,7 +677,7 @@ mod tests {
         .unwrap();
 
         let sender = Sender::from_keypair(&keypair);
-        let read = sign_read(content, &sender).unwrap();
+        let read = sign_read(content, &sender, current_time).unwrap();
 
         // The wrapped content is content, without modification
         assert_eq!(read.content, content_copy);
@@ -681,7 +696,9 @@ mod tests {
 
     #[test]
     fn sign_and_verify_request_status_content_valid_query() {
-        let (current_time, expiry_time) = current_time_and_expiry_time();
+        let current_time = FastForwardTimeSource::new().get_relative_time();
+        let expiry_time = current_time + Duration::from_secs(4 * 60);
+
         // Set up an arbitrary legal input
         let keypair = {
             let mut rng = ChaChaRng::seed_from_u64(89 as u64);
@@ -710,7 +727,7 @@ mod tests {
         .unwrap();
 
         let sender = Sender::from_keypair(&keypair);
-        let read = sign_read(content, &sender).unwrap();
+        let read = sign_read(content, &sender, current_time).unwrap();
 
         // The wrapped content is content, without modification
         assert_eq!(read.content, content_copy);

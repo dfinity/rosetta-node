@@ -1,4 +1,3 @@
-use super::{Blob, HttpCanisterQuery};
 use crate::{ingress::WasmResult, CanisterId, Funds, NumBytes};
 use ic_error_types::{RejectCode, UserError};
 use ic_protobuf::{
@@ -37,17 +36,6 @@ impl Request {
     pub fn payload_size_bytes(&self) -> NumBytes {
         let bytes = self.method_name.len() + self.method_payload.len();
         NumBytes::from(bytes as u64)
-    }
-}
-
-impl From<&Request> for HttpCanisterQuery {
-    fn from(request: &Request) -> Self {
-        Self {
-            sender: Blob(request.sender.get_ref().clone().into_vec()),
-            receiver: Blob(request.receiver.get_ref().clone().into_vec()),
-            method_name: request.method_name.clone(),
-            method_payload: Blob(request.method_payload.clone()),
-        }
     }
 }
 

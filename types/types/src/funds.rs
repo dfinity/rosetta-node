@@ -132,9 +132,6 @@ pub const FIXED_FEE_FOR_NETWORK_TRANSFER: Cycles = Cycles::new(10);
 // allocation and usage
 pub const CANISTER_FREEZE_BALANCE_RESERVE: Cycles = Cycles::new(1 << 33);
 
-/// The fee for depositing funds to a canister
-pub const CANISTER_DEPOSIT_FUNDS_FEE: Cycles = Cycles::new(10);
-
 /// Globals are expensive for us to handle, so we charge more for them than we
 /// do for regular data.
 pub const CYCLES_PER_WASM_EXPORTED_GLOBAL: Cycles = Cycles::new(100);
@@ -142,9 +139,6 @@ pub const CYCLES_PER_WASM_EXPORTED_GLOBAL: Cycles = Cycles::new(100);
 //////////////////////////////////////////////////////////////
 // Conversions
 //////////////////////////////////////////////////////////////
-
-/// An arbitrary rate at which ICPTs are convertible to Cycles.
-pub const ICPT_TO_CYCLES_CONVERSION_RATE: u64 = 1_000_000_000;
 
 /// Cycles to be paid per byte that's transferred across subnets.
 pub const CYCLES_PER_BYTE_RATIO: Cycles = Cycles::new(1);

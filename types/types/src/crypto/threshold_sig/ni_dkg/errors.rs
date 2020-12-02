@@ -1,5 +1,5 @@
 use crate::{NodeId, RegistryVersion};
-use ic_crypto_internal_types::NodeIndex;
+use ic_crypto_internal_types::encrypt::forward_secure as ifs;
 use std::collections::BTreeSet;
 use std::fmt;
 
@@ -54,16 +54,23 @@ impl fmt::Display for FsEncryptionPublicKeyNotInRegistryError {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct MalformedFsEncryptionPublicKeyError {
-    pub receiver_index: NodeIndex,
     pub internal_error: String,
+}
+
+impl From<ifs::MalformedFsEncryptionPublicKeyError> for MalformedFsEncryptionPublicKeyError {
+    fn from(internal_malformed_fs_enc_pubkey: ifs::MalformedFsEncryptionPublicKeyError) -> Self {
+        Self {
+            internal_error: format!("{}", internal_malformed_fs_enc_pubkey),
+        }
+    }
 }
 
 impl fmt::Display for MalformedFsEncryptionPublicKeyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "The (forward-secure) encryption public key is malformed for receiver index {}: {}",
-            &self.receiver_index, &self.internal_error
+            "The (forward-secure) encryption public key is malformed: {}",
+            &self.internal_error
         )
     }
 }

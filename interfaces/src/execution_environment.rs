@@ -1,13 +1,14 @@
-use crate::messages::CanisterInputMessage;
+use crate::{messages::CanisterInputMessage, state_manager::StateManagerError};
 use ic_registry_routing_table::RoutingTable;
 use ic_types::{
     ingress::{IngressStatus, WasmResult},
-    messages::{MessageId, QueryRequest, UserQuery},
+    messages::{MessageId, UserQuery},
     methods::WasmMethod,
     user_error::UserError,
     CanisterId, Cycles, Height, Time,
 };
 use rand::RngCore;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 // Note [Unit]
@@ -15,7 +16,7 @@ use std::sync::Arc;
 // Units for funds are represented as blobs. 0x00 is used for cycles and 0x01
 // for ICP tokens. Other units can be added in the future.
 
-#[derive(Clone, Copy, PartialEq, Eq, Ord, PartialOrd, Debug)]
+#[derive(Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Ord, PartialOrd, Debug)]
 pub enum WasmValidationError {
     UnexpectedEof,
     InvalidMagic,
@@ -98,7 +99,7 @@ impl std::fmt::Display for WasmValidationError {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Ord, PartialOrd, Debug)]
+#[derive(Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Ord, PartialOrd, Debug)]
 pub enum TrapCode {
     StackOverflow,
     HeapOutOfBounds,
@@ -123,7 +124,7 @@ impl std::fmt::Display for TrapCode {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub enum HypervisorError {
     /// The message sent to the canister refers a function not found in the
     /// table. The payload contains the index of the table and the index of the
@@ -519,11 +520,6 @@ pub type HypervisorResult<T> = Result<T, HypervisorError>;
 
 /// Interface for the component to execute queries on canisters.  It can be used
 /// by the HttpHandler and other system components to execute queries.
-///
-/// If the said canister issues further queries, then this component handles
-/// executing them as well.  At the time of writing, support for this is still
-/// being actively added and there are many rough edges.  See the actual structs
-/// implementing this trait for more detail.
 pub trait QueryHandler: Send + Sync {
     /// Type of state managed by StateReader.
     ///
@@ -538,21 +534,21 @@ pub trait QueryHandler: Send + Sync {
         processing_state: Arc<Self::State>,
         data_certificate: Vec<u8>,
     ) -> Result<WasmResult, UserError>;
-
-    /// Handle a query of type `QueryRequest` which was sent by a canister using
-    /// the http interface.
-    fn query_request(
-        &self,
-        q: QueryRequest,
-        processing_state: Arc<Self::State>,
-        data_certificate: Vec<u8>,
-    ) -> Result<WasmResult, UserError>;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum IngressHistoryError {
     StateRemoved(Height),
     StateNotAvailableYet(Height),
+}
+
+impl From<StateManagerError> for IngressHistoryError {
+    fn from(source: StateManagerError) -> Self {
+        match source {
+            StateManagerError::StateRemoved(height) => Self::StateRemoved(height),
+            StateManagerError::StateNotCommittedYet(height) => Self::StateNotAvailableYet(height),
+        }
+    }
 }
 
 /// Interface for reading the history of ingress messages.
@@ -786,6 +782,17 @@ pub trait SystemApi {
         heap: &[u8],
     ) -> HypervisorResult<()>;
 
+    /// Adds cycles to a call by moving them from the canister's balance onto
+    /// the call under construction. The cycles are deducted immediately
+    /// from the canister's balance and moved back if the call cannot be
+    /// performed (e.g. if `ic0.call_perform` signals an error or if the
+    /// canister invokes `ic0.call_new` or returns without invoking
+    /// `ic0.call_perform`).
+    ///
+    /// This traps if trying to transfer more cycles than are in the current
+    /// balance of the canister.
+    fn ic0_call_cycles_add(&mut self, amount: u64) -> HypervisorResult<()>;
+
     /// This call concludes assembling the call. It queues the call message to
     /// the given destination, but does not actually act on it until the current
     /// WebAssembly function returns without trapping.
@@ -860,6 +867,9 @@ pub trait SystemApi {
         heap: &[u8],
     ) -> HypervisorResult<u64>;
 
+    /// Returns the current balance in cycles.
+    fn ic0_canister_cycle_balance(&self) -> HypervisorResult<u64>;
+
     /// Returns the amount of funds available for the specified unit that was
     /// transferred by the caller of the current call and is still available in
     /// this message.
@@ -882,6 +892,30 @@ pub trait SystemApi {
         unit_size: u32,
         heap: &[u8],
     ) -> HypervisorResult<u64>;
+
+    /// Cycles sent in the current call and still available.
+    fn ic0_msg_cycles_available(&self) -> HypervisorResult<u64>;
+
+    /// Cycles that came back with the response, as a refund.
+    fn ic0_msg_cycles_refunded(&self) -> HypervisorResult<u64>;
+
+    /// This moves cycles from the call to the canister balance.
+    /// It can be called multiple times, each time adding more cycles to the
+    /// balance.
+    ///
+    /// It moves no more cycles than `max_amount`.
+    ///
+    /// It moves no more cycles than available according to
+    /// `ic0.msg_cycles_available`, and
+    ///
+    /// The canister balance afterwards does not exceeed
+    /// `CYCLES_LIMIT_PER_CANISTER` (public spec refers to this constant as
+    /// MAX_CANISTER_BALANCE) minus any possible outstanding balances.
+    ///
+    /// EXE-117: the last point is not properly handled yet.  In particular, a
+    /// refund can come back to the canister after this call finishes which
+    /// causes the canister's balance to overflow.
+    fn ic0_msg_cycles_accept(&mut self, max_amount: u64) -> HypervisorResult<u64>;
 
     /// Sets the certified data for the canister.
     /// See: https://docs.dfinity.systems/public/#system-api-certified-data)

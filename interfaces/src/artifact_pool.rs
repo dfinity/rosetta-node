@@ -21,6 +21,11 @@ pub struct ReplicaVersionMismatch {
     pub artifact: ReplicaVersion,
 }
 
+/// A trait similar to Into, but without its restrictions.
+pub trait IntoInner<T>: AsRef<T> {
+    fn into_inner(self) -> T;
+}
+
 /// Validated artifact
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ValidatedArtifact<T> {
@@ -31,6 +36,12 @@ pub struct ValidatedArtifact<T> {
 impl<T> AsRef<T> for ValidatedArtifact<T> {
     fn as_ref(&self) -> &T {
         &self.msg
+    }
+}
+
+impl<T> IntoInner<T> for ValidatedArtifact<T> {
+    fn into_inner(self) -> T {
+        self.msg
     }
 }
 
@@ -45,6 +56,12 @@ pub struct UnvalidatedArtifact<T> {
 impl<T> AsRef<T> for UnvalidatedArtifact<T> {
     fn as_ref(&self) -> &T {
         &self.message
+    }
+}
+
+impl<T> IntoInner<T> for UnvalidatedArtifact<T> {
+    fn into_inner(self) -> T {
+        self.message
     }
 }
 

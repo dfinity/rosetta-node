@@ -699,7 +699,7 @@ fn labeled_tree_from_hashtree(
 ///              /
 ///             b
 /// ```
-pub fn sparse_labeled_tree_from_paths(mut paths: Vec<Path>) -> LabeledTree<()> {
+pub fn sparse_labeled_tree_from_paths(paths: &mut [Path]) -> LabeledTree<()> {
     // Sort all the paths. That way, if one path is a prefix of another, the prefix
     // is always first.
     paths.sort();
@@ -904,7 +904,8 @@ impl HashTreeBuilder for HashTreeBuilderImpl {
         }
     }
 
-    fn write_leaf(&mut self, bytes: &[u8]) {
+    fn write_leaf<T: AsRef<[u8]>>(&mut self, bytes: T) {
+        let bytes = bytes.as_ref();
         let head = self.curr_path.pop().expect("Construction completed.");
         match head {
             ActiveNode::Leaf { mut hasher, label } => {
@@ -969,7 +970,8 @@ impl HashTreeBuilder for HashTreeBuilderImpl {
         }
     }
 
-    fn new_edge(&mut self, edge_label: Label) {
+    fn new_edge<T: Into<Label>>(&mut self, edge_label: T) {
+        let edge_label = edge_label.into();
         let head = self.curr_path.pop().expect("Construction completed.");
         match head {
             ActiveNode::SubTree {

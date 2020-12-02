@@ -3,6 +3,9 @@ use serde_bytes::Bytes;
 use std::collections::BTreeMap;
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
+use std::iter::FromIterator;
+use std::ops::Deref;
+use std::ops::DerefMut;
 
 #[cfg(test)]
 pub(crate) mod arbitrary;
@@ -17,6 +20,78 @@ mod encoding_tests;
 
 pub use tree_hash::*;
 
+/// Represents a path (a collection of `Label`) in a hash tree.
+///
+/// Initialisation options include:
+///
+/// - If you have a `Vec<Label>` use `Path::new`.
+///
+/// - If you have a single `Label`, use `Path::from(Label)`.
+///
+/// - If you have an iterator that contains `Label` or `&Label` use
+/// `Path::from_iter(iterator)`.
+// Implemented as a newtype to allow implementation of traits like
+// `fmt::Display`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Ord)]
+pub struct Path(Vec<Label>);
+
+impl Deref for Path {
+    type Target = Vec<Label>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for Path {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl fmt::Display for Path {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "/{}",
+            self.iter()
+                .map(|label| label.to_string())
+                .collect::<Vec<String>>()
+                .join("/")
+        )
+    }
+}
+
+impl FromIterator<Label> for Path {
+    fn from_iter<T: IntoIterator<Item = Label>>(iter: T) -> Self {
+        Self(iter.into_iter().collect())
+    }
+}
+
+impl<'a> FromIterator<&'a Label> for Path {
+    fn from_iter<T: IntoIterator<Item = &'a Label>>(iter: T) -> Self {
+        Self(iter.into_iter().cloned().collect())
+    }
+}
+
+impl From<Vec<Label>> for Path {
+    fn from(path: Vec<Label>) -> Self {
+        Self(path)
+    }
+}
+
+impl From<Label> for Path {
+    fn from(label: Label) -> Self {
+        Self(vec![label])
+    }
+}
+
+impl Path {
+    pub fn new(path: Vec<Label>) -> Self {
+        Self(path)
+    }
+}
+
 /// A blob used as a label in the tree.
 ///
 /// Most labels are expected to be printable ASCII strings, but some
@@ -25,9 +100,6 @@ pub use tree_hash::*;
 #[serde(from = "&serde_bytes::Bytes")]
 #[serde(into = "serde_bytes::ByteBuf")]
 pub struct Label(LabelRepr);
-
-/// Represents a path in a hash tree.
-pub type Path = Vec<Label>;
 
 /// Vec<u8> is typically 3 machine words long (pointer + size + capacity) which
 /// is 24 bytes on amd64.  It's a good practice to keep enum variants of
@@ -589,21 +661,21 @@ pub trait WitnessGenerator {
 ///
 /// builder.start_subtree(); // start root
 ///
-/// builder.new_edge(&Label::from("label_A"));
+/// builder.new_edge("label_A");
 /// builder.start_leaf();
 /// builder.write_leaf("node A");
 /// builder.finish_leaf();
 ///
-/// builder.new_edge(&Label::from("label_B"));
+/// builder.new_edge("label_B");
 ///
 /// builder.start_subtree(); // start subtree (C, D)
 ///
-/// builder.new_edge(&Label::from("label_C"));
+/// builder.new_edge("label_C");
 /// builder.start_leaf();
 /// builder.write_leaf("node C");
 /// builder.finish_leaf();
 ///
-/// builder.new_edge(&Label::from("label_D"));
+/// builder.new_edge("label_D");
 /// builder.start_leaf();
 /// builder.write_leaf("node D");
 /// builder.write_leaf(" is longer");
@@ -632,7 +704,7 @@ pub trait HashTreeBuilder {
     /// `panics!` if the current position is not a `Leaf`-node,
     /// i.e. if the previous call was neither `start_leaf()`,
     /// nor `write_leaf()`.
-    fn write_leaf(&mut self, bytes: &[u8]);
+    fn write_leaf<T: AsRef<[u8]>>(&mut self, bytes: T);
 
     /// Finishes the current leaf.  Changes the current position
     /// in the tree to the parent of the finished leaf (if any).
@@ -663,7 +735,7 @@ pub trait HashTreeBuilder {
     ///   position to a parent that is a `SubTree`-node.
     /// * `panics!` if the current `SubTree`-node contains already an edge with
     ///   the specified label.
-    fn new_edge(&mut self, label: Label);
+    fn new_edge<T: Into<Label>>(&mut self, label: T);
 
     /// Finishes the current subtree.  Changes the current position
     /// in the tree to the parent of the finished subtree (if any).

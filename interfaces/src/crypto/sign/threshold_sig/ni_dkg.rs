@@ -119,6 +119,8 @@ pub trait NiDkgAlgorithm {
     /// # Errors
     /// * `DkgLoadTranscriptError::FsEncryptionPublicKeyNotInRegistry` if a
     ///   forward secure encryption public key is not in the registry.
+    /// * `DkgLoadTranscriptError::MalformedFsEncryptionPublicKey` if a
+    ///   encryption public key fetched from the registry is malformed.
     /// * `DkgLoadTranscriptError::Registry` if the registry client returns an
     ///   error, e.g. because the registry version is not available.
     /// * `DkgLoadTranscriptError::InvalidTranscript` if the transcript could

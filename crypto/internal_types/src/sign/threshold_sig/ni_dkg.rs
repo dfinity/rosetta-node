@@ -94,8 +94,11 @@ pub mod ni_dkg_groth20_bls12_381 {
     //! Data types for the Groth20 non-interactive distributed key generation
     //! scheme.
 
-    use serde::{Deserialize, Serialize};
+    use arrayvec::ArrayVec;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
     use std::collections::BTreeMap;
+    use std::convert::TryFrom;
+    use std::hash::{Hash, Hasher};
 
     // These are all the types used together with this scheme, made public in one
     // place for ease of use:
@@ -121,11 +124,11 @@ pub mod ni_dkg_groth20_bls12_381 {
     /// Threshold signature key material.
     pub use FsEncryptionCiphertext as EncryptedShares;
 
-    pub const NUM_ZK_REPETITIONS: usize = 10; // TODO: decide on value
+    pub const NUM_ZK_REPETITIONS: usize = 40;
 
     /// A zero knowledge proof that the encrypted shares can be decrypted by the
     /// corresponding receivers.
-    #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+    #[derive(Clone)]
     pub struct ZKProofDec {
         pub first_move_y0: G1,
         pub first_move_b: [G1; NUM_ZK_REPETITIONS],
@@ -135,6 +138,112 @@ pub mod ni_dkg_groth20_bls12_381 {
         pub response_z_r: Vec<Fr>,
         pub response_z_s: [Fr; NUM_ZK_REPETITIONS],
         pub response_z_b: Fr,
+    }
+
+    /// Private structure to help implement ZKProofDec traits.
+    ///
+    /// Many #derive traits fail for arrays of over 32 elements so we need to
+    /// implement those traits on ZKProofDec manually.  We can make this fairly
+    /// simple by changing the arrays to vectors, for which the #derived
+    /// definitions ARE defined, and calling those derived definitions.  Note
+    /// that the helper can be deleted when we update our version of Rust to one
+    /// that supports const generics, which should happen fairly soon.  There is
+    /// little point in optimising this code given that it will be deleted
+    /// shortly.
+    #[serde(rename(serialize = "ZKProofDec"))]
+    #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+    struct ZKProofDecHelper {
+        pub first_move_y0: G1,
+        pub first_move_b: Vec<G1>,
+        pub first_move_c: Vec<G1>,
+        pub second_move_d: Vec<G1>, // Has length #receivers+1
+        pub second_move_y: G1,
+        pub response_z_r: Vec<Fr>,
+        pub response_z_s: Vec<Fr>,
+        pub response_z_b: Fr,
+    }
+
+    // TODO: Use pointers to save a bunch of copying
+    impl From<&ZKProofDec> for ZKProofDecHelper {
+        fn from(item: &ZKProofDec) -> ZKProofDecHelper {
+            ZKProofDecHelper {
+                first_move_y0: item.first_move_y0,
+                first_move_b: item.first_move_b.to_vec(),
+                first_move_c: item.first_move_c.to_vec(),
+                second_move_d: item.second_move_d.clone(),
+                second_move_y: item.second_move_y,
+                response_z_r: item.response_z_r.clone(),
+                response_z_s: item.response_z_s.to_vec(),
+                response_z_b: item.response_z_b,
+            }
+        }
+    }
+
+    impl TryFrom<ZKProofDecHelper> for ZKProofDec {
+        type Error = ();
+
+        fn try_from(item: ZKProofDecHelper) -> Result<Self, Self::Error> {
+            let first_move_b: ArrayVec<[G1; NUM_ZK_REPETITIONS]> =
+                item.first_move_b.into_iter().collect();
+            let first_move_c: ArrayVec<[G1; NUM_ZK_REPETITIONS]> =
+                item.first_move_c.into_iter().collect();
+            let response_z_s: ArrayVec<[Fr; NUM_ZK_REPETITIONS]> =
+                item.response_z_s.into_iter().collect();
+            Ok(ZKProofDec {
+                first_move_y0: item.first_move_y0,
+                first_move_b: first_move_b.into_inner().map_err(|_| ())?,
+                first_move_c: first_move_c.into_inner().map_err(|_| ())?,
+                second_move_d: item.second_move_d.clone(),
+                second_move_y: item.second_move_y,
+                response_z_r: item.response_z_r.clone(),
+                response_z_s: response_z_s.into_inner().map_err(|_| ())?,
+                response_z_b: item.response_z_b,
+            })
+        }
+    }
+
+    impl Serialize for ZKProofDec {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            let serde_friendly = ZKProofDecHelper::from(self);
+            serde_friendly.serialize(serializer)
+        }
+    }
+
+    impl PartialEq for ZKProofDec {
+        fn eq(&self, other: &Self) -> bool {
+            let left = ZKProofDecHelper::from(self);
+            let right = ZKProofDecHelper::from(other);
+            left == right
+        }
+    }
+    impl Eq for ZKProofDec {}
+
+    impl<'de> Deserialize<'de> for ZKProofDec {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            let parsed = ZKProofDecHelper::deserialize(deserializer)?;
+            Ok(ZKProofDec::try_from(parsed).expect("Uh"))
+        }
+    }
+
+    impl std::fmt::Debug for ZKProofDec {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            // Note: This will print the struct name as ZKProofDecHelper rather than
+            // ZKProofDec but I think this is fine.
+            ZKProofDecHelper::from(self).fmt(formatter)
+        }
+    }
+
+    impl Hash for ZKProofDec {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            let repackaged = ZKProofDecHelper::from(self);
+            repackaged.hash(state);
+        }
     }
 
     /// A zero knowledge proof that the shares are indeed valid points on the

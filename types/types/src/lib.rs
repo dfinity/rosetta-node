@@ -487,7 +487,7 @@ pub const ICP_UNIT: &str = "01";
 ///
 /// Note that this struct does not implement `(De)Serialize`. If you need to
 /// perform any (de)serialization consider converting to a `ic00::Unit` instead.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Unit {
     Cycles,
     ICP,

@@ -1,3 +1,4 @@
+
 [package]
 name = "ic-rosetta-api"
 version = "0.0.1"
@@ -7,6 +8,7 @@ edition = "2018"
 
 [dependencies]
 actix-web = "3.0.2"
+futures = "0.3.8"
 hex = "0.4.2"
 ic-types = { path = "../types/types" }
 ic-interfaces = { path = "../interfaces" }
@@ -19,22 +21,24 @@ serde_derive = "1.0"
 serde_json = "1.0"
 serde_cbor = "0.11"
 dfn_core = {path = "../rust_canisters/dfn_core"}
-dfn_json = {path = "../rust_canisters/dfn_json"}
+dfn_candid = {path = "../rust_canisters/dfn_candid"}
+candid = "0.6.10"
 dfn_macro = {path = "../rust_canisters/dfn_macro"}
+on_wire = {path = "../rust_canisters/on_wire"}
 lazy_static = "1.4.0"
+ledger-canister = {path = "canister"}
 rand = "0.7"
 structopt = "0.3.20"
+async-trait = "0.1.41"
 
 #temporarily copied from dev-dependencies
 actix-rt = "*"
-rand_distr = "0.3.0"
-thread_local = "1.0.1"
 
 [dev-dependencies]
-actix-rt = "*"
 rand_distr = "0.3.0"
 thread_local = "1.0.1"
+ic-scenario-tests = { path = "../scenario_tests" }
 
-[[bin]]
-name = "ic-ledger-canister"
-path = "src/ledger_canister.rs"
+[[test]]
+name = "tests"
+path = "test/test_utils.rs"

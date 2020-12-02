@@ -10,7 +10,7 @@ use libc::{
 use libc::MAP_ANON;
 
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     fmt,
     fs::{File, OpenOptions},
     io::Error,
@@ -152,7 +152,7 @@ struct MappedStateCommon<T> {
     meta: StateMeta,
     file: File,
     slot_mgr: Arc<SlotMgr>,
-    current_mappings: HashMap<u64, u64>,
+    current_mappings: BTreeMap<u64, u64>,
     _marker: PhantomData<T>,
 }
 
@@ -688,7 +688,7 @@ impl CowMemoryManagerCommon<ReadWrite> {
         if !file_exists {
             let parent = state_file.parent().unwrap();
             std::fs::create_dir_all(parent)
-                .unwrap_or_else(|_| panic!("failed to create path {:?}", parent));
+                .unwrap_or_else(|e| panic!("failed to create path {:?}, {}", parent, e));
         }
 
         let file = OpenOptions::new()
@@ -696,7 +696,7 @@ impl CowMemoryManagerCommon<ReadWrite> {
             .read(true)
             .write(true)
             .open(state_file.clone())
-            .unwrap_or_else(|_| panic!("failed to open file {:?}", state_file));
+            .unwrap_or_else(|e| panic!("failed to open file {:?}, {}", state_file, e));
 
         if !file_exists {
             // Grow the file to 8G initially
@@ -753,6 +753,37 @@ impl std::fmt::Debug for CowMemoryManagerCommon<ReadWrite> {
 }
 
 impl<T: AccessPolicy> CowMemoryManagerCommon<T> {
+    fn get_contiguous(&self, mappings: &BTreeMap<u64, u64>) -> BTreeMap<u64, (u64, u64)> {
+        let mut contig_mappings = BTreeMap::new();
+
+        let mut start_logical = INVALID_SLOT;
+        let mut start_physical = INVALID_SLOT;
+        let mut map_len = 0;
+
+        for (logical_slot, physical_slot) in mappings {
+            if start_logical == INVALID_SLOT {
+                start_logical = *logical_slot;
+                start_physical = *physical_slot;
+                map_len = 1;
+            } else if *logical_slot == start_logical + map_len
+                && *physical_slot == start_physical + map_len
+            {
+                map_len += 1;
+            } else {
+                contig_mappings.insert(start_logical, (start_physical, map_len));
+                start_logical = *logical_slot;
+                start_physical = *physical_slot;
+                map_len = 1;
+            }
+        }
+
+        if map_len > 0 {
+            contig_mappings.insert(start_logical, (start_physical, map_len));
+        }
+
+        contig_mappings
+    }
+
     fn get_slot_mgr(&self) -> Arc<SlotMgr> {
         // We open slot managers lazily intentionally.
         // This is efficient as for inactive canisters and
@@ -788,7 +819,7 @@ impl<T: AccessPolicy> CowMemoryManagerCommon<T> {
         &self,
         state_file: File,
         round_to_use: Option<u64>,
-    ) -> (*mut u8, usize, File, Arc<SlotMgr>, HashMap<u64, u64>) {
+    ) -> (*mut u8, usize, File, Arc<SlotMgr>, BTreeMap<u64, u64>) {
         unsafe {
             assert_eq!(self.meta.magic, STATE_MAGIC);
         }
@@ -849,16 +880,18 @@ impl<T: AccessPolicy> CowMemoryManagerCommon<T> {
 
         let mapped_base = mapped_base as *mut u8;
 
+        let contig = self.get_contiguous(&current_mappings);
+
         // overlay individual pieces
-        for (logical_slot, physical_slot) in &current_mappings {
+        for (logical_slot, (physical_slot, map_len)) in contig {
             unsafe {
-                let where_to_map = mapped_base.add(*logical_slot as usize * *PAGE_SIZE);
-                let what_to_map = (SlotMgr::get_slot(*physical_slot) + self.meta.meta_len as u64)
+                let where_to_map = mapped_base.add(logical_slot as usize * *PAGE_SIZE);
+                let what_to_map = (SlotMgr::get_slot(physical_slot) + self.meta.meta_len as u64)
                     * *PAGE_SIZE as u64;
 
                 let overlay_mem = mmap(
                     where_to_map as *mut c_void,
-                    *PAGE_SIZE,
+                    map_len as usize * *PAGE_SIZE,
                     PROT_NONE,
                     MAP_PRIVATE | MAP_NORESERVE | MAP_FIXED,
                     state_raw_fd,

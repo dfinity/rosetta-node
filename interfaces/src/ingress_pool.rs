@@ -138,4 +138,10 @@ pub trait IngressPoolSelect {
         f: Box<dyn FnMut(&IngressPoolObject) -> SelectResult<SignedIngress> + 'a>,
     ) -> Vec<SignedIngress>;
 }
+
+/// Interface to throttle user ingress messages
+pub trait IngressPoolThrottler {
+    /// Checks if the total number of entries is within the configured threshold
+    fn exceeds_threshold(&self) -> bool;
+}
 // end::interface[]

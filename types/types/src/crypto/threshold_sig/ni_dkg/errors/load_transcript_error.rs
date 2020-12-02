@@ -1,5 +1,7 @@
 use crate::crypto::error::InvalidArgumentError;
-use crate::crypto::threshold_sig::ni_dkg::errors::FsEncryptionPublicKeyNotInRegistryError;
+use crate::crypto::threshold_sig::ni_dkg::errors::{
+    FsEncryptionPublicKeyNotInRegistryError, MalformedFsEncryptionPublicKeyError,
+};
 use crate::registry::RegistryClientError;
 use core::fmt;
 
@@ -8,6 +10,7 @@ pub enum DkgLoadTranscriptError {
     FsEncryptionPublicKeyNotInRegistry(FsEncryptionPublicKeyNotInRegistryError),
     Registry(RegistryClientError),
     InvalidTranscript(InvalidArgumentError),
+    MalformedFsEncryptionPublicKey(MalformedFsEncryptionPublicKeyError),
     // Reminder: document error definition changes on `NiDkgAlgorithm::load_transcript`.
 }
 
@@ -17,6 +20,9 @@ impl fmt::Display for DkgLoadTranscriptError {
         match self {
             DkgLoadTranscriptError::Registry(error) => write!(f, "{}{}", prefix, error),
             DkgLoadTranscriptError::FsEncryptionPublicKeyNotInRegistry(error) => {
+                write!(f, "{}{}", prefix, error)
+            }
+            DkgLoadTranscriptError::MalformedFsEncryptionPublicKey(error) => {
                 write!(f, "{}{}", prefix, error)
             }
             DkgLoadTranscriptError::InvalidTranscript(error) => write!(f, "{}{}", prefix, error),

@@ -1,5 +1,16 @@
 use prost_build::Config;
 
+/// Creates a base Config, which should always be used in lieu of Config::new(),
+/// to avoid any risk of non-determinism. Indeed, with Config::new(), the
+/// generated code for proto's "map" fields are HashMaps. use `base_config()` to
+/// eliminate this risk.
+fn base_config() -> Config {
+    let mut config = Config::new();
+    // Use BTreeMap for all proto map fields.
+    config.btree_map(&["."]);
+    config
+}
+
 /// Derives fields for protobuf log messages and optional fields
 macro_rules! add_log_proto_derives {
     ($prost_build:expr, $message_type:ident, $package:expr, $log_entry_field:ident $(,$message_field:ident)*) => {{
@@ -29,12 +40,11 @@ fn main() {
     build_registry_proto();
     build_messaging_proto();
     build_state_proto();
-    build_nodemanager_proto();
 }
 
 /// Generates Rust structs from logging Protobuf messages.
 fn build_log_proto() {
-    let mut config = Config::new();
+    let mut config = base_config();
     config.out_dir("gen/log");
 
     config.type_attribute("log.log_entry.v1.LogEntry", "#[derive(serde::Serialize)]");
@@ -73,7 +83,8 @@ fn build_log_proto() {
         dkg_dealing,
         dkg_dealer,
         dkg_transcript,
-        allowed_tls_clients
+        allowed_tls_clients,
+        tls_server
     );
 
     add_log_proto_derives!(
@@ -152,7 +163,7 @@ fn build_log_proto() {
 
 /// Generates Rust structs from registry Protobuf messages.
 fn build_registry_proto() {
-    let mut config = Config::new();
+    let mut config = base_config();
     config.out_dir("gen/registry");
 
     config.type_attribute(".", "#[derive(serde::Serialize, serde::Deserialize)]");
@@ -161,6 +172,7 @@ fn build_registry_proto() {
         "def/registry/canister/v1/canister.proto",
         "def/registry/crypto/v1/crypto.proto",
         "def/registry/dc/v1/dc.proto",
+        "def/registry/nns/v1/nns.proto",
         "def/registry/node/v1/node.proto",
         "def/registry/routing_table/v1/routing_table.proto",
         "def/registry/subnet/v1/subnet.proto",
@@ -172,7 +184,7 @@ fn build_registry_proto() {
 
 /// Generates Rust structs from messaging Protobuf messages.
 fn build_messaging_proto() {
-    let mut config = Config::new();
+    let mut config = base_config();
     config.out_dir("gen/messaging");
     config.type_attribute(".", "#[derive(serde::Serialize, serde::Deserialize)]");
 
@@ -189,7 +201,7 @@ fn build_messaging_proto() {
 
 /// Generates Rust structs from state Protobuf messages.
 fn build_state_proto() {
-    let mut config = Config::new();
+    let mut config = base_config();
     config.out_dir("gen/state");
 
     let state_files = [
@@ -205,7 +217,7 @@ fn build_state_proto() {
 
 /// Generates Rust structs from types Protobuf messages.
 fn build_types_proto() {
-    let mut config = Config::new();
+    let mut config = base_config();
     config.out_dir("gen/types");
     config.type_attribute(".", "#[derive(serde::Serialize, serde::Deserialize)]");
     let files = [
@@ -219,19 +231,11 @@ fn build_types_proto() {
 
 /// Generates Rust structs from crypto Protobuf messages.
 fn build_crypto_proto() {
-    let mut config = Config::new();
+    let mut config = base_config();
     config.out_dir("gen/crypto");
     config.type_attribute(".", "#[derive(serde::Serialize, serde::Deserialize)]");
     let files = ["def/crypto/v1/crypto.proto"];
     compile_protos(config, &files);
-}
-
-/// Generate Rust structs from `nodemanager` Protobuf messages.
-fn build_nodemanager_proto() {
-    let mut config = Config::new();
-    config.out_dir("gen/nodemanager");
-    let state_files = ["def/nodemanager/registration/v1/registration.proto"];
-    compile_protos(config, &state_files);
 }
 
 /// Compiles the given `proto_files` and emits `cargo:rerun-if-changed` outputs

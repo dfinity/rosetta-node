@@ -1,4 +1,4 @@
-use super::{HttpCanisterQuery, HttpHandlerError, RawHttpRequest, UserSignature};
+use super::{RawHttpRequest, UserSignature};
 use crate::{crypto::Signed, CanisterId, PrincipalId, UserId};
 use std::convert::TryFrom;
 
@@ -33,42 +33,6 @@ impl From<SignedUserQuery> for UserQuery {
             method_name: raw_http_request.take_string("method_name"),
             method_payload: raw_http_request.take_bytes("arg"),
         }
-    }
-}
-
-/// Represents a query that is sent by one canister to another.
-///
-/// TODO(akhi): these types of queries are currently not signed.  We need a
-/// design on how canisters can safely sign queries.
-pub struct QueryRequest {
-    pub sender: CanisterId,
-    pub receiver: CanisterId,
-    pub method_name: String,
-    pub method_payload: Vec<u8>,
-}
-
-impl TryFrom<HttpCanisterQuery> for QueryRequest {
-    type Error = HttpHandlerError;
-
-    fn try_from(input: HttpCanisterQuery) -> Result<Self, Self::Error> {
-        let sender = input.sender.0;
-        let receiver = input.receiver.0;
-        Ok(Self {
-            sender: CanisterId::new(PrincipalId::try_from(&sender[..]).map_err(|err| {
-                HttpHandlerError::InvalidPrincipalId(format!(
-                    "converting {:?} to PrincipalId failed with {}",
-                    sender, err
-                ))
-            })?)?,
-            receiver: CanisterId::new(PrincipalId::try_from(&receiver[..]).map_err(|err| {
-                HttpHandlerError::InvalidPrincipalId(format!(
-                    "converting {:?} to PrincipalId failed with {}",
-                    receiver, err
-                ))
-            })?)?,
-            method_name: input.method_name,
-            method_payload: input.method_payload.0,
-        })
     }
 }
 

@@ -9,6 +9,10 @@ pub type IngressError = String;
 /// TODO: Make it such that it does not need to wrapped into a GossipArtifact
 pub trait IngressEventHandler: Send + Sync {
     fn on_ingress_message(&self, message: SignedIngress) -> Result<(), IngressError>;
+
+    /// Checks if the user message can be accepted for processing or if it
+    /// should rejected/throttled
+    fn can_accept_user_request(&self) -> bool;
 }
 
 /// P2P exposes channels which are used to hold artifacts sent by

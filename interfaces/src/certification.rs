@@ -1,4 +1,4 @@
-use crate::{consensus::ValidationResult, consensus_pool::ConsensusPool};
+use crate::{consensus::ValidationResult, consensus_pool::ConsensusPoolCache};
 use ic_types::artifact::CertificationArtifact;
 use ic_types::{
     artifact::{CertificationMessageFilter, PriorityFn},
@@ -40,7 +40,7 @@ pub trait Certifier: Send {
     /// Should be called on every change of the certification pool and timeouts.
     fn on_state_change(
         &self,
-        consensus_pool: Arc<RwLock<dyn ConsensusPool>>,
+        consensus_cache: &dyn ConsensusPoolCache,
         certification_pool: Arc<RwLock<dyn CertificationPool>>,
     ) -> ChangeSet;
 }
@@ -50,7 +50,7 @@ pub trait CertifierGossip: Send + Sync {
     /// artifact exchange.
     fn get_priority_function(
         &self,
-        consensus_pool: &dyn ConsensusPool,
+        consensus_cache: &dyn ConsensusPoolCache,
         certification_pool: &dyn CertificationPool,
     ) -> PriorityFn<CertificationArtifact>;
 

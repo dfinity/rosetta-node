@@ -92,7 +92,7 @@ fn leaf_with_empty_contents_equals_leaf_with_no_contents() {
     // empty contents
     let mut builder_1 = HashTreeBuilderImpl::new();
     builder_1.start_leaf();
-    builder_1.write_leaf("".as_ref());
+    builder_1.write_leaf("");
     builder_1.finish_leaf();
 
     // no contents
@@ -114,7 +114,7 @@ fn leaf_only_labeled_tree() {
 
     let mut builder = HashTreeBuilderImpl::new();
     builder.start_leaf();
-    builder.write_leaf(leaf_contents.as_ref());
+    builder.write_leaf(leaf_contents);
     builder.finish_leaf();
 
     assert_labeled_equal(&expected_tree, &builder.as_labeled_tree().unwrap());
@@ -164,8 +164,8 @@ fn long_leaf_only_labeled_tree() {
 
     let mut builder = HashTreeBuilderImpl::new();
     builder.start_leaf();
-    builder.write_leaf(leaf_contents_1.as_ref());
-    builder.write_leaf(leaf_contents_2.as_ref());
+    builder.write_leaf(leaf_contents_1);
+    builder.write_leaf(leaf_contents_2);
     builder.finish_leaf();
 
     assert_labeled_equal(&expected_labeled_tree, &builder.as_labeled_tree().unwrap());
@@ -209,18 +209,18 @@ fn labeled_tree_with_a_few_leaves_at_root() {
 
     builder.new_edge(leaf_a_label);
     builder.start_leaf();
-    builder.write_leaf(leaf_a_contents.as_ref());
+    builder.write_leaf(leaf_a_contents);
     builder.finish_leaf();
 
     builder.new_edge(leaf_b_label);
     builder.start_leaf();
-    builder.write_leaf(leaf_b_contents.as_ref());
+    builder.write_leaf(leaf_b_contents);
     builder.finish_leaf();
 
     builder.new_edge(leaf_c_label);
     builder.start_leaf();
-    builder.write_leaf(leaf_c_contents_1.as_ref());
-    builder.write_leaf(leaf_c_contents_2.as_ref());
+    builder.write_leaf(leaf_c_contents_1);
+    builder.write_leaf(leaf_c_contents_2);
     builder.finish_leaf();
 
     builder.finish_subtree();
@@ -298,7 +298,7 @@ fn labeled_tree_with_a_subtree() {
 
     builder.new_edge(label_a);
     builder.start_leaf();
-    builder.write_leaf(leaf_a_contents.as_ref());
+    builder.write_leaf(leaf_a_contents);
     builder.finish_leaf();
 
     builder.new_edge(label_b);
@@ -306,23 +306,23 @@ fn labeled_tree_with_a_subtree() {
 
     builder.new_edge(label_f); // intentionally non-alphabetically
     builder.start_leaf();
-    builder.write_leaf(leaf_f_contents.as_ref());
+    builder.write_leaf(leaf_f_contents);
     builder.finish_leaf();
 
     builder.new_edge(label_c);
     builder.start_leaf();
-    builder.write_leaf(leaf_c_contents.as_ref());
+    builder.write_leaf(leaf_c_contents);
     builder.finish_leaf();
 
     builder.new_edge(label_e);
     builder.start_leaf();
-    builder.write_leaf(leaf_e_contents.as_ref());
+    builder.write_leaf(leaf_e_contents);
     builder.finish_leaf();
 
     builder.new_edge(label_d);
     builder.start_leaf();
-    builder.write_leaf(leaf_d_contents_1.as_ref());
-    builder.write_leaf(leaf_d_contents_2.as_ref());
+    builder.write_leaf(leaf_d_contents_1);
+    builder.write_leaf(leaf_d_contents_2);
     builder.finish_leaf();
 
     builder.finish_subtree(); // finish subtree at label_b
@@ -363,7 +363,7 @@ fn should_panic_on_start_leaf_at_a_completed_tree() {
 #[should_panic(expected = "Invalid operation, expected Leaf-node.")]
 fn should_panic_on_write_leaf_at_undefined_node() {
     let mut builder = HashTreeBuilderImpl::new();
-    builder.write_leaf("some bytes".as_ref());
+    builder.write_leaf("some bytes");
 }
 
 #[test]
@@ -371,7 +371,7 @@ fn should_panic_on_write_leaf_at_undefined_node() {
 fn should_panic_on_write_leaf_at_subtree_node() {
     let mut builder = HashTreeBuilderImpl::new();
     builder.start_subtree();
-    builder.write_leaf("some bytes".as_ref());
+    builder.write_leaf("some bytes");
 }
 
 #[test]
@@ -380,7 +380,7 @@ fn should_panic_on_write_leaf_at_a_completed_tree() {
     let mut builder = HashTreeBuilderImpl::new();
     builder.start_subtree();
     builder.finish_subtree();
-    builder.write_leaf("some bytes".as_ref());
+    builder.write_leaf("some bytes");
 }
 
 // ---------- panic! on finish_leaf()
@@ -532,17 +532,17 @@ fn witness_generator_from_hash_tree_with_a_few_leaves() {
 
     builder.new_edge(leaf_a_label);
     builder.start_leaf();
-    builder.write_leaf(leaf_a_contents.as_ref());
+    builder.write_leaf(leaf_a_contents);
     builder.finish_leaf();
 
     builder.new_edge(leaf_b_label);
     builder.start_leaf();
-    builder.write_leaf(leaf_b_contents.as_ref());
+    builder.write_leaf(leaf_b_contents);
     builder.finish_leaf();
 
     builder.new_edge(leaf_c_label);
     builder.start_leaf();
-    builder.write_leaf(leaf_c_contents.as_ref());
+    builder.write_leaf(leaf_c_contents);
     builder.finish_leaf();
 
     builder.finish_subtree();
@@ -676,7 +676,7 @@ fn add_leaf(label_str: &str, contents: &str, builder: &mut HashTreeBuilderImpl) 
     let label = Label::from(label_str);
     builder.new_edge(label);
     builder.start_leaf();
-    builder.write_leaf(contents.as_ref());
+    builder.write_leaf(contents);
     builder.finish_leaf();
 }
 
@@ -1461,7 +1461,7 @@ fn witness_for_a_triple_fork_in_a_big_tree() {
 #[test]
 fn sparse_labeled_tree_empty() {
     assert_eq!(
-        sparse_labeled_tree_from_paths(vec![]),
+        sparse_labeled_tree_from_paths(&mut []),
         LabeledTree::Leaf(())
     );
 }
@@ -1469,135 +1469,113 @@ fn sparse_labeled_tree_empty() {
 #[test]
 fn sparse_labeled_tree_shallow_path() {
     assert_eq!(
-        sparse_labeled_tree_from_paths(vec![vec![Label::from(vec![0])]]),
+        sparse_labeled_tree_from_paths(&mut [Path::from(Label::from("0"))]),
         LabeledTree::SubTree(btreemap! {
-            Label::from(vec![0]) => LabeledTree::Leaf(())
+            Label::from("0") => LabeledTree::Leaf(())
         })
     );
 }
 
 #[test]
 fn sparse_labeled_tree_deep_path() {
-    let paths = vec![vec![
-        Label::from(vec![0]),
-        Label::from(vec![1]),
-        Label::from(vec![2]),
-    ]];
+    let (segment1, segment2, segment3) = (Label::from("0"), Label::from("1"), Label::from("2"));
+    let path = Path::from_iter(vec![&segment1, &segment2, &segment3]);
 
     let labeled_tree = LabeledTree::SubTree(btreemap! {
-        Label::from(vec![0]) => LabeledTree::SubTree(btreemap!{
-            Label::from(vec![1]) => LabeledTree::SubTree(btreemap!{
-                Label::from(vec![2]) => LabeledTree::Leaf(())
+        segment1 => LabeledTree::SubTree(btreemap!{
+            segment2 => LabeledTree::SubTree(btreemap!{
+                segment3 => LabeledTree::Leaf(())
             })
         })
     });
 
-    assert_eq!(labeled_tree, sparse_labeled_tree_from_paths(paths));
+    assert_eq!(labeled_tree, sparse_labeled_tree_from_paths(&mut [path]));
 }
 
 #[test]
 fn sparse_labeled_tree_duplicate_paths() {
-    let paths = vec![
-        vec![
-            Label::from(vec![0]),
-            Label::from(vec![1]),
-            Label::from(vec![2]),
-        ],
-        vec![
-            Label::from(vec![0]),
-            Label::from(vec![1]),
-            Label::from(vec![2]),
-        ],
+    let (segment1, segment2, segment3) = (Label::from("0"), Label::from("1"), Label::from("2"));
+
+    let mut paths = vec![
+        Path::from_iter(vec![&segment1, &segment2, &segment3]),
+        Path::from_iter(vec![&segment1, &segment2, &segment3]),
     ];
 
     let labeled_tree = LabeledTree::SubTree(btreemap! {
-        Label::from(vec![0]) => LabeledTree::SubTree(btreemap!{
-            Label::from(vec![1]) => LabeledTree::SubTree(btreemap!{
-                Label::from(vec![2]) => LabeledTree::Leaf(())
+        segment1 => LabeledTree::SubTree(btreemap!{
+            segment2 => LabeledTree::SubTree(btreemap!{
+                segment3 => LabeledTree::Leaf(())
             })
         })
     });
 
-    assert_eq!(labeled_tree, sparse_labeled_tree_from_paths(paths));
+    assert_eq!(labeled_tree, sparse_labeled_tree_from_paths(&mut paths));
 }
 
 #[test]
 fn sparse_labeled_tree_path_prefixes_another_path() {
+    let (segment1, segment2, segment3, segment4) = (
+        Label::from("0"),
+        Label::from("1"),
+        Label::from("2"),
+        Label::from("3"),
+    );
+
     let labeled_tree = LabeledTree::SubTree(btreemap! {
-        Label::from(vec![0]) => LabeledTree::SubTree(btreemap!{
-            Label::from(vec![1]) => LabeledTree::SubTree(btreemap!{
-                Label::from(vec![2]) => LabeledTree::Leaf(())
+        segment1.clone() => LabeledTree::SubTree(btreemap!{
+            segment2.clone() => LabeledTree::SubTree(btreemap!{
+                segment3.clone() => LabeledTree::Leaf(())
             })
         })
     });
 
-    let paths = vec![
-        vec![
-            Label::from(vec![0]),
-            Label::from(vec![1]),
-            Label::from(vec![2]),
-        ],
-        vec![
-            Label::from(vec![0]),
-            Label::from(vec![1]),
-            Label::from(vec![2]),
-            Label::from(vec![3]),
-        ],
+    let mut paths = vec![
+        Path::from_iter(vec![&segment1, &segment2, &segment3]),
+        Path::from_iter(vec![&segment1, &segment2, &segment3, &segment4]),
     ];
 
-    assert_eq!(labeled_tree, sparse_labeled_tree_from_paths(paths));
+    assert_eq!(labeled_tree, sparse_labeled_tree_from_paths(&mut paths));
 
-    let paths = vec![
-        vec![
-            Label::from(vec![0]),
-            Label::from(vec![1]),
-            Label::from(vec![2]),
-            Label::from(vec![3]),
-        ],
-        vec![
-            Label::from(vec![0]),
-            Label::from(vec![1]),
-            Label::from(vec![2]),
-        ],
+    let mut paths = vec![
+        Path::from_iter(vec![&segment1, &segment2, &segment3, &segment4]),
+        Path::from_iter(vec![&segment1, &segment2, &segment3]),
     ];
 
-    assert_eq!(labeled_tree, sparse_labeled_tree_from_paths(paths));
+    assert_eq!(labeled_tree, sparse_labeled_tree_from_paths(&mut paths));
 }
 
 #[test]
 fn sparse_labeled_tree_multiple_paths_with_prefixes() {
+    let (segment1, segment2, segment3, segment4, segment5, segment6, segment7, segment8) = (
+        Label::from("0"),
+        Label::from("1"),
+        Label::from("2"),
+        Label::from("3"),
+        Label::from("4"),
+        Label::from("5"),
+        Label::from("6"),
+        Label::from("7"),
+    );
+
     let labeled_tree = LabeledTree::SubTree(btreemap! {
-        Label::from(vec![0]) => LabeledTree::SubTree(btreemap!{
-            Label::from(vec![1]) => LabeledTree::SubTree(btreemap!{
-                Label::from(vec![2]) => LabeledTree::Leaf(())
+        segment1.clone() => LabeledTree::SubTree(btreemap!{
+            segment2.clone() => LabeledTree::SubTree(btreemap!{
+                segment3.clone() => LabeledTree::Leaf(())
             })
         }),
-        Label::from(vec![4]) => LabeledTree::SubTree(btreemap!{
-            Label::from(vec![5]) => LabeledTree::Leaf(()),
-            Label::from(vec![6]) => LabeledTree::Leaf(()),
+        segment5.clone() => LabeledTree::SubTree(btreemap!{
+            segment6.clone() => LabeledTree::Leaf(()),
+            segment7.clone() => LabeledTree::Leaf(()),
         })
     });
 
-    let paths = vec![
-        vec![
-            Label::from(vec![0]),
-            Label::from(vec![1]),
-            Label::from(vec![2]),
-            Label::from(vec![3]),
-        ],
-        vec![
-            Label::from(vec![0]),
-            Label::from(vec![1]),
-            Label::from(vec![2]),
-        ],
-        vec![Label::from(vec![4]), Label::from(vec![5])],
-        vec![
-            Label::from(vec![4]),
-            Label::from(vec![6]),
-            Label::from(vec![7]),
-        ],
-        vec![Label::from(vec![4]), Label::from(vec![6])],
+    let mut paths = vec![
+        Path::from_iter(vec![&segment1, &segment2, &segment3, &segment4]),
+        Path::from_iter(vec![&segment1, &segment2, &segment3]),
+        Path::from_iter(vec![&segment5, &segment6]),
+        Path::from_iter(vec![&segment5, &segment7, &segment8]),
+        Path::from_iter(vec![&segment5, &segment7]),
     ];
 
-    assert_eq!(labeled_tree, sparse_labeled_tree_from_paths(paths));
+    assert_eq!(labeled_tree, sparse_labeled_tree_from_paths(&mut paths));
 }

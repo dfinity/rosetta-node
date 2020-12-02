@@ -37,9 +37,10 @@ message NodeRecord {
   ConnectionEndpoint xnet = 5;
   // The endpoint where this node receives http requests.
   ConnectionEndpoint http = 6;
-  // The node's TLS certificate in PEM format. This is used for
-  // the P2P/transport connections.
-  string  transport_tls_certificate = 7;
+
+  reserved 7;
+  reserved "transport_tls_certificate";
+
   // The P2P flow end points.
   repeated FlowEndpoint p2p_flow_endpoints = 8;
   // Endpoint where the node provides Prometheus format metrics over HTTP
