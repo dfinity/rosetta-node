@@ -718,6 +718,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dfn_candid"
+version = "0.1.0"
+dependencies = [
+ "candid 0.6.10 (registry+https://github.com/rust-lang/crates.io-index)",
+ "dfn_core 0.1.0",
+ "ic-base-types 0.1.0",
+ "on_wire 0.1.0",
+ "serde 1.0.115 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "dfn_core"
 version = "0.1.0"
 dependencies = [
@@ -727,15 +738,6 @@ dependencies = [
  "ic-base-types 0.1.0",
  "on_wire 0.1.0",
  "rustversion 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
-]
-
-[[package]]
-name = "dfn_json"
-version = "0.1.0"
-dependencies = [
- "on_wire 0.1.0",
- "serde 1.0.115 (registry+https://github.com/rust-lang/crates.io-index)",
- "serde_json 1.0.54 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -1190,6 +1192,7 @@ dependencies = [
  "ed25519-dalek 1.0.0-pre.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "hyper 0.13.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "hyper-tls 0.4.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "ic-crypto-tree-hash 0.1.0",
  "ic-interfaces 0.1.0",
  "ic-protobuf 0.1.0",
  "ic-types 0.1.0",
@@ -1197,14 +1200,17 @@ dependencies = [
  "prost 0.6.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "reqwest 0.10.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.115 (registry+https://github.com/rust-lang/crates.io-index)",
+ "serde_bytes 0.11.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_cbor 0.11.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio 0.2.22 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tree-deserializer 0.1.0",
 ]
 
 [[package]]
 name = "ic-crypto-internal-types"
 version = "0.1.0"
 dependencies = [
+ "arrayvec 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "base64 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "hex 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "ic-protobuf 0.1.0",
@@ -1315,9 +1321,12 @@ version = "0.0.1"
 dependencies = [
  "actix-rt 1.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "actix-web 3.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "async-trait 0.1.41 (registry+https://github.com/rust-lang/crates.io-index)",
+ "candid 0.6.10 (registry+https://github.com/rust-lang/crates.io-index)",
+ "dfn_candid 0.1.0",
  "dfn_core 0.1.0",
- "dfn_json 0.1.0",
  "dfn_macro 0.1.0",
+ "futures 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "hex 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "ic-canister-client 0.1.0",
  "ic-interfaces 0.1.0",
@@ -1325,6 +1334,8 @@ dependencies = [
  "im 15.0.0 (git+https://github.com/dfinity-lab/im-rs?branch=fix-remove-index-ordmap)",
  "itertools 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "lazy_static 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "ledger-canister 0.0.1",
+ "on_wire 0.1.0",
  "rand 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand_distr 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "reqwest 0.10.8 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1365,6 +1376,7 @@ dependencies = [
  "ic-base-types 0.1.0",
  "ic-crypto-internal-types 0.1.0",
  "ic-crypto-sha256 0.1.0",
+ "ic-crypto-tree-hash 0.1.0",
  "ic-error-types 0.1.0",
  "ic-ic00-types 0.1.0",
  "ic-protobuf 0.1.0",
@@ -1547,6 +1559,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 name = "leb128"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "ledger-canister"
+version = "0.0.1"
+dependencies = [
+ "candid 0.6.10 (registry+https://github.com/rust-lang/crates.io-index)",
+ "dfn_candid 0.1.0",
+ "dfn_core 0.1.0",
+ "ic-crypto-sha256 0.1.0",
+ "ic-types 0.1.0",
+ "lazy_static 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "serde 1.0.115 (registry+https://github.com/rust-lang/crates.io-index)",
+]
 
 [[package]]
 name = "libc"
@@ -1921,6 +1946,7 @@ dependencies = [
 name = "phantom_newtype"
 version = "0.1.0"
 dependencies = [
+ "candid 0.6.10 (registry+https://github.com/rust-lang/crates.io-index)",
  "proptest 0.9.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.115 (registry+https://github.com/rust-lang/crates.io-index)",
  "slog 2.5.2 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2962,6 +2988,15 @@ version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "lazy_static 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "tree-deserializer"
+version = "0.1.0"
+dependencies = [
+ "ic-crypto-tree-hash 0.1.0",
+ "leb128 0.2.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "serde 1.0.115 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
