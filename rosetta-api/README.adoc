@@ -34,8 +34,6 @@ docker run \
     registry.gitlab.com/dfinity-lab/rosetta-node/rosetta-api
 ....
 
-There are two images available, one for each binary that we produce: `rosetta-api` and `ledger-canister`.
-
 == Building and running Docker image
 Building Docker image requires GitHub token `repository` permissions in order to download tarball with the sources via GitHub API. The command below assumes that the token is available in `github-token.txt` in the current working directory.
 
