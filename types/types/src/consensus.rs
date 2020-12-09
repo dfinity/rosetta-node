@@ -10,6 +10,7 @@ use ic_protobuf::log::block_log_entry::v1::BlockLogEntry;
 use ic_protobuf::types::v1 as pb;
 use serde::{Deserialize, Serialize};
 use std::cmp::PartialOrd;
+use std::convert::TryInto;
 use std::hash::Hash;
 
 pub mod catchup;
@@ -562,6 +563,116 @@ impl TryFrom<ConsensusMessage> for CatchUpPackageShare {
     }
 }
 
+impl<'a> TryFrom<&'a ConsensusMessage> for &'a RandomBeacon {
+    type Error = ();
+    fn try_from(msg: &'a ConsensusMessage) -> Result<Self, Self::Error> {
+        match msg {
+            ConsensusMessage::RandomBeacon(x) => Ok(x),
+            _ => Err(()),
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a ConsensusMessage> for &'a Finalization {
+    type Error = ();
+    fn try_from(msg: &'a ConsensusMessage) -> Result<Self, Self::Error> {
+        match msg {
+            ConsensusMessage::Finalization(x) => Ok(x),
+            _ => Err(()),
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a ConsensusMessage> for &'a Notarization {
+    type Error = ();
+    fn try_from(msg: &'a ConsensusMessage) -> Result<Self, Self::Error> {
+        match msg {
+            ConsensusMessage::Notarization(x) => Ok(x),
+            _ => Err(()),
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a ConsensusMessage> for &'a BlockProposal {
+    type Error = ();
+    fn try_from(msg: &'a ConsensusMessage) -> Result<Self, Self::Error> {
+        match msg {
+            ConsensusMessage::BlockProposal(x) => Ok(x),
+            _ => Err(()),
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a ConsensusMessage> for &'a RandomBeaconShare {
+    type Error = ();
+    fn try_from(msg: &'a ConsensusMessage) -> Result<Self, Self::Error> {
+        match msg {
+            ConsensusMessage::RandomBeaconShare(x) => Ok(x),
+            _ => Err(()),
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a ConsensusMessage> for &'a NotarizationShare {
+    type Error = ();
+    fn try_from(msg: &'a ConsensusMessage) -> Result<Self, Self::Error> {
+        match msg {
+            ConsensusMessage::NotarizationShare(x) => Ok(x),
+            _ => Err(()),
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a ConsensusMessage> for &'a FinalizationShare {
+    type Error = ();
+    fn try_from(msg: &'a ConsensusMessage) -> Result<Self, Self::Error> {
+        match msg {
+            ConsensusMessage::FinalizationShare(x) => Ok(x),
+            _ => Err(()),
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a ConsensusMessage> for &'a RandomTape {
+    type Error = ();
+    fn try_from(msg: &'a ConsensusMessage) -> Result<Self, Self::Error> {
+        match msg {
+            ConsensusMessage::RandomTape(x) => Ok(x),
+            _ => Err(()),
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a ConsensusMessage> for &'a RandomTapeShare {
+    type Error = ();
+    fn try_from(msg: &'a ConsensusMessage) -> Result<Self, Self::Error> {
+        match msg {
+            ConsensusMessage::RandomTapeShare(x) => Ok(x),
+            _ => Err(()),
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a ConsensusMessage> for &'a CatchUpPackage {
+    type Error = ();
+    fn try_from(msg: &'a ConsensusMessage) -> Result<Self, Self::Error> {
+        match msg {
+            ConsensusMessage::CatchUpPackage(x) => Ok(x),
+            _ => Err(()),
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a ConsensusMessage> for &'a CatchUpPackageShare {
+    type Error = ();
+    fn try_from(msg: &'a ConsensusMessage) -> Result<Self, Self::Error> {
+        match msg {
+            ConsensusMessage::CatchUpPackageShare(x) => Ok(x),
+            _ => Err(()),
+        }
+    }
+}
+
 /// Message hash. Enum order should be consistent with ConsensusMessage.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ConsensusMessageHash {
@@ -609,35 +720,52 @@ impl<C: PartialEq, S> ContentEq for Signed<C, S> {
 
 impl ContentEq for ConsensusMessage {
     fn content_eq(&self, other: &ConsensusMessage) -> bool {
-        match (self, other) {
-            (ConsensusMessage::RandomBeacon(x), ConsensusMessage::RandomBeacon(y)) => {
-                x.content_eq(y)
+        match self {
+            ConsensusMessage::RandomBeacon(x) => {
+                other.try_into().map(|y: &RandomBeacon| y.content_eq(x)) == Ok(true)
             }
-            (ConsensusMessage::Finalization(x), ConsensusMessage::Finalization(y)) => {
-                x.content_eq(y)
+            ConsensusMessage::Finalization(x) => {
+                other.try_into().map(|y: &Finalization| y.content_eq(x)) == Ok(true)
             }
-            (ConsensusMessage::Notarization(x), ConsensusMessage::Notarization(y)) => {
-                x.content_eq(y)
+            ConsensusMessage::Notarization(x) => {
+                other.try_into().map(|y: &Notarization| y.content_eq(x)) == Ok(true)
             }
-            (ConsensusMessage::BlockProposal(x), ConsensusMessage::BlockProposal(y)) => {
-                x.content_eq(y)
+            ConsensusMessage::BlockProposal(x) => {
+                other.try_into().map(|y: &BlockProposal| y.content_eq(x)) == Ok(true)
             }
-            (ConsensusMessage::RandomBeaconShare(x), ConsensusMessage::RandomBeaconShare(y)) => {
-                x.content_eq(y)
+            ConsensusMessage::RandomBeaconShare(x) => {
+                other
+                    .try_into()
+                    .map(|y: &RandomBeaconShare| y.content_eq(x))
+                    == Ok(true)
             }
-            (ConsensusMessage::NotarizationShare(x), ConsensusMessage::NotarizationShare(y)) => {
-                x.content_eq(y)
+            ConsensusMessage::NotarizationShare(x) => {
+                other
+                    .try_into()
+                    .map(|y: &NotarizationShare| y.content_eq(x))
+                    == Ok(true)
             }
-            (ConsensusMessage::FinalizationShare(x), ConsensusMessage::FinalizationShare(y)) => {
-                x.content_eq(y)
+            ConsensusMessage::FinalizationShare(x) => {
+                other
+                    .try_into()
+                    .map(|y: &FinalizationShare| y.content_eq(x))
+                    == Ok(true)
             }
-            (ConsensusMessage::RandomTape(x), ConsensusMessage::RandomTape(y)) => x.content_eq(y),
-            (ConsensusMessage::RandomTapeShare(x), ConsensusMessage::RandomTapeShare(y)) => {
-                x.content_eq(y)
+            ConsensusMessage::RandomTape(x) => {
+                other.try_into().map(|y: &RandomTape| y.content_eq(x)) == Ok(true)
             }
-
-            // Default to false when comparing messages of different type
-            _ => false,
+            ConsensusMessage::RandomTapeShare(x) => {
+                other.try_into().map(|y: &RandomTapeShare| y.content_eq(x)) == Ok(true)
+            }
+            ConsensusMessage::CatchUpPackage(x) => {
+                other.try_into().map(|y: &CatchUpPackage| y.content_eq(x)) == Ok(true)
+            }
+            ConsensusMessage::CatchUpPackageShare(x) => {
+                other
+                    .try_into()
+                    .map(|y: &CatchUpPackageShare| y.content_eq(x))
+                    == Ok(true)
+            }
         }
     }
 }

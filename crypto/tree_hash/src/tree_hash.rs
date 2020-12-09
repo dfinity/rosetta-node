@@ -829,9 +829,8 @@ impl HashTreeBuilderImpl {
     // /////////////////////////////////////////////////////////
     // API for obtaining the constructed structures.
 
-    // Returns the HashTree corresponding to the constructed LabeledTree
-    // if the construction is complete, and `None` otherwise.
-    // Does not `panic!`.
+    /// Like `into_hash_tree`, but returns a copy of the hash tree.
+    /// Does not `panic!`.
     #[allow(dead_code)]
     pub fn as_hash_tree(&self) -> Option<HashTree> {
         if let Some(hash_tree) = self.hash_tree.as_ref() {
@@ -841,9 +840,15 @@ impl HashTreeBuilderImpl {
         }
     }
 
-    // Returns the constructed LabeledTree if the construction
-    // is complete, and `None` otherwise.
-    // Does not `panic!`.
+    /// Returns the HashTree corresponding to the traversed tree if the
+    /// construction is complete, and None otherwise.
+    pub fn into_hash_tree(self) -> Option<HashTree> {
+        self.hash_tree
+    }
+
+    /// Returns the constructed LabeledTree if the construction
+    /// is complete, and `None` otherwise.
+    /// Does not `panic!`.
     #[allow(dead_code)]
     pub fn as_labeled_tree(&self) -> Option<LabeledTree<Digest>> {
         if let Some(labeled_tree) = self.labeled_tree.as_ref() {

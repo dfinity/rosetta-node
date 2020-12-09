@@ -19,18 +19,18 @@ use ic_types::{CanisterId, PrincipalId};
 
 use crate::convert::{
     account_identifier, from_arg, from_hex, from_public_key, internal_error, into_error,
-    transaction_id, transaction_identifier,
+    transaction_id,
 };
 use crate::ledger_client::LedgerAccess;
-use ledger_canister::{Hash, Transaction};
+use ledger_canister::{BlockHeight, Memo, Transfer};
 use serde_json::{json, map::Map};
 use std::convert::TryFrom;
 use std::sync::Arc;
 
 pub const API_VERSION: &str = "1.4.4";
 
-fn to_index(height: usize) -> Result<i64, ApiError> {
-    i64::try_from(height).map_err(|_| ApiError::InternalError(true, None))
+fn to_index(height: BlockHeight) -> Result<i128, ApiError> {
+    i128::try_from(height).map_err(|_| ApiError::InternalError(true, None))
 }
 
 fn verify_network_id(canister_id: &CanisterId, net_id: &NetworkIdentifier) -> Result<(), ApiError> {
@@ -71,7 +71,8 @@ fn get_block(
             index: Some(block_height),
             hash: Some(block_hash),
         }) => {
-            let hash: ledger_canister::Hash = convert::to_hash(&block_hash)?;
+            let hash: ledger_canister::HashOf<ledger_canister::Block> =
+                convert::to_hash(&block_hash)?;
             if block_height < 0 {
                 return Err(ApiError::InvalidBlockId(false, None));
             }
@@ -98,7 +99,8 @@ fn get_block(
             index: None,
             hash: Some(block_hash),
         }) => {
-            let hash: ledger_canister::Hash = convert::to_hash(&block_hash)?;
+            let hash: ledger_canister::HashOf<ledger_canister::Block> =
+                convert::to_hash(&block_hash)?;
             blocks.get(hash)?
         }
         Some(PartialBlockIdentifier {
@@ -163,8 +165,8 @@ impl RosettaRequestHandler {
         let b_id = convert::block_id(&b)?;
         let parent_id = create_parent_block_id(&blocks, &b)?;
 
-        let t_id = convert::transaction_identifier(&b.hash);
-        let transactions = vec![convert::transaction(&b.block.payment, t_id)?];
+        let t_id = convert::transaction_identifier(&b.block.transaction.hash());
+        let transactions = vec![convert::transaction(&b.block.transaction.transfer, t_id)?];
         let block = Some(models::Block::new(
             b_id,
             parent_id,
@@ -178,7 +180,7 @@ impl RosettaRequestHandler {
         })
     }
 
-    /// Get a Block Transaction
+    /// Get a Block Transfer
     pub async fn block_transaction(
         &self,
         msg: models::BlockTransactionRequest,
@@ -191,13 +193,13 @@ impl RosettaRequestHandler {
         });
         let b = get_block(&blocks, b_id)?;
 
-        let t_id = convert::transaction_identifier(&b.hash);
-        let transaction = convert::transaction(&b.block.payment, t_id)?;
+        let t_id = convert::transaction_identifier(&b.block.transaction.hash());
+        let transaction = convert::transaction(&b.block.transaction.transfer, t_id)?;
 
         Ok(BlockTransactionResponse::new(transaction))
     }
 
-    /// Create Network Transaction from Signatures
+    /// Create Network Transfer from Signatures
     // This returns HttpRequestEnvelope<HttpSubmitContent> encoded in a JSON string
     pub async fn construction_combine(
         &self,
@@ -270,20 +272,22 @@ impl RosettaRequestHandler {
         })
     }
 
-    /// Get the Hash of a Signed Transaction
+    /// Get the Hash of a Signed Transfer
     pub async fn construction_hash(
         &self,
         msg: models::ConstructionHashRequest,
     ) -> Result<ConstructionHashResponse, ApiError> {
         verify_network_id(self.ledger.ledger_canister_id(), &msg.network_identifier)?;
-        let transaction = msg.signed_transaction;
+        let envelope: HttpRequestEnvelope<HttpSubmitContent> =
+            serde_json::from_str(&msg.signed_transaction).map_err(internal_error)?;
+
         Ok(ConstructionHashResponse {
-            transaction_identifier: transaction_id(&transaction)?,
+            transaction_identifier: transaction_id(envelope)?,
             metadata: Map::new(),
         })
     }
 
-    /// Get Metadata for Transaction Construction
+    /// Get Metadata for Transfer Construction
     pub async fn construction_metadata(
         &self,
         msg: models::ConstructionMetadataRequest,
@@ -292,7 +296,7 @@ impl RosettaRequestHandler {
         Ok(ConstructionMetadataResponse::new(Map::new()))
     }
 
-    /// Parse a Transaction
+    /// Parse a Transfer
     pub async fn construction_parse(
         &self,
         msg: models::ConstructionParseRequest,
@@ -322,7 +326,7 @@ impl RosettaRequestHandler {
         // This is always a transaction
         let (_, amount, to, _) = from_arg(update.arg.0)?;
 
-        let operations = operations(&Transaction::Send { from, to, amount })?;
+        let operations = operations(&Transfer::Send { from, to, amount })?;
 
         Ok(ConstructionParseResponse {
             operations,
@@ -332,7 +336,7 @@ impl RosettaRequestHandler {
         })
     }
 
-    /// Generate an Unsigned Transaction and Signing Payloads
+    /// Generate an Unsigned Transfer and Signing Payloads
     /// The unsigned_transaction returned from this function is a JSON
     /// serialized HttpCanisterUpdate The data to be signed is a single hex
     /// encoded MessageId
@@ -351,12 +355,12 @@ impl RosettaRequestHandler {
         let mut payloads: Vec<_> = transactions
             .iter()
             .map(|t| match t {
-                Transaction::Send { from, to, amount } => {
+                Transfer::Send { from, to, amount } => {
                     // What we send to the canister
                     let mut rng = rand::thread_rng();
                     // TODO make transaction ID a distinct type maybe get this to include a previous
                     // hash?
-                    let transaction_id: Hash = rng.gen();
+                    let transaction_id: Memo = Memo(rng.gen());
 
                     // TODO add transaction ID to the canister
                     let argument =
@@ -430,7 +434,7 @@ impl RosettaRequestHandler {
         Ok(ConstructionPreprocessResponse::new())
     }
 
-    /// Submit a Signed Transaction
+    /// Submit a Signed Transfer
     // Normally we'd just use the canister client Agent for this but because this
     // request is constructed in such an odd way it's easier to just do it from
     // scratch
@@ -447,9 +451,7 @@ impl RosettaRequestHandler {
                 ))
             })?;
 
-        let transaction_id = self.ledger.submit(request).await?;
-
-        let transaction_identifier = transaction_identifier(&transaction_id);
+        let transaction_identifier = self.ledger.submit(request).await?;
 
         Ok(ConstructionSubmitResponse {
             transaction_identifier,
@@ -463,7 +465,7 @@ impl RosettaRequestHandler {
         Ok(MempoolResponse::new(vec![]))
     }
 
-    /// Get a Mempool Transaction
+    /// Get a Mempool Transfer
     pub async fn mempool_transaction(
         &self,
         msg: models::MempoolTransactionRequest,

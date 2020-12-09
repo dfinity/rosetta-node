@@ -114,9 +114,7 @@ fn set_print(printer: Box<Printer>) {
 
 #[allow(clippy::boxed_local)]
 #[cfg(not(nightly_compiler))]
-fn set_print(_printer: Box<Printer>) {
-    api::print("WARNING: Print hooks do not work without using an experimental rust compiler, print statements will not be displayed");
-}
+fn set_print(_printer: Box<Printer>) {}
 
 /// Sets a line-buffered stdout, uses debug.trace
 pub fn set_stdout() {

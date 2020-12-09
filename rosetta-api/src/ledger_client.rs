@@ -1,5 +1,5 @@
-use crate::convert::{internal_error, invalid_block_id};
-use crate::models::ApiError;
+use crate::convert::{internal_error, invalid_block_id, transaction_id};
+use crate::models::{ApiError, TransactionIdentifier};
 use crate::sync::{read_fs, LedgerCanister};
 use async_trait::async_trait;
 use core::ops::Deref;
@@ -7,7 +7,7 @@ use core::time::Duration;
 use ic_types::messages::{HttpRequestEnvelope, HttpSubmitContent};
 use ic_types::{CanisterId, PrincipalId};
 use im::OrdMap;
-use ledger_canister::{Hash, HashedBlock, ICPTs, Transaction};
+use ledger_canister::{Block, HashOf, HashedBlock, ICPTs, Transfer};
 use reqwest::Url;
 use std::collections::HashMap;
 use std::sync::RwLock;
@@ -23,7 +23,7 @@ pub trait LedgerAccess {
     async fn submit(
         &self,
         _envelope: HttpRequestEnvelope<HttpSubmitContent>,
-    ) -> Result<Hash, ApiError>;
+    ) -> Result<TransactionIdentifier, ApiError>;
 }
 
 pub struct LedgerClient {
@@ -126,7 +126,7 @@ impl LedgerAccess for LedgerClient {
     async fn submit(
         &self,
         submit_request: HttpRequestEnvelope<HttpSubmitContent>,
-    ) -> Result<Hash, ApiError> {
+    ) -> Result<TransactionIdentifier, ApiError> {
         const UPDATE_PATH: &str = &"api/v1/submit";
 
         const INGRESS_TIMEOUT: Duration = Duration::from_secs(30);
@@ -140,11 +140,7 @@ impl LedgerAccess for LedgerClient {
             ))
         })?;
 
-        let cid = self.ledger_canister_id();
-
-        let url = reqwest::Url::parse(&format!("{}.ic0.app", cid)).unwrap();
-
-        let url = url.join(UPDATE_PATH).expect("URL join failed");
+        let url = self.testnet_url.join(UPDATE_PATH).expect("URL join failed");
 
         let client = self.reqwest_client();
 
@@ -171,14 +167,7 @@ impl LedgerAccess for LedgerClient {
         //     ))
         // })?;
 
-        let arg = match submit_request.content {
-            HttpSubmitContent::Call { update } => update.arg,
-        };
-
-        let (transaction_id, _, _): (Hash, PrincipalId, u64) =
-            serde_json::from_slice(&arg.0).unwrap();
-
-        Ok(transaction_id)
+        transaction_id(submit_request)
     }
 }
 
@@ -199,13 +188,11 @@ impl Balances {
         self.inner.get(&id).cloned()
     }
 
-    pub fn add_payment(&self, payment: &Transaction) -> Result<Self, String> {
+    pub fn add_payment(&self, payment: &Transfer) -> Result<Self, String> {
         let res = match payment {
-            Transaction::Send { from, to, amount } => {
-                self.debit(from, *amount)?.credit(to, *amount)
-            }
-            Transaction::Burn { from, amount, .. } => self.debit(from, *amount)?,
-            Transaction::Mint { to, amount, .. } => self.credit(to, *amount),
+            Transfer::Send { from, to, amount } => self.debit(from, *amount)?.credit(to, *amount),
+            Transfer::Burn { from, amount, .. } => self.debit(from, *amount)?,
+            Transfer::Mint { to, amount, .. } => self.credit(to, *amount),
         };
         Ok(res)
     }
@@ -245,12 +232,12 @@ impl Default for Balances {
 // testing
 enum BlockStore {
     OnDisk,
-    InMemory(HashMap<Hash, HashedBlock>),
+    InMemory(HashMap<HashOf<Block>, HashedBlock>),
 }
 
 pub struct Blocks {
-    balances: HashMap<Hash, Balances>,
-    block_order: Vec<Hash>,
+    balances: HashMap<HashOf<Block>, Balances>,
+    block_order: Vec<HashOf<Block>>,
     block_store: BlockStore,
 }
 
@@ -278,7 +265,7 @@ impl Blocks {
         self.get_balances(hash)
     }
 
-    pub fn get(&self, hash: Hash) -> Result<HashedBlock, ApiError> {
+    pub fn get(&self, hash: HashOf<Block>) -> Result<HashedBlock, ApiError> {
         match &self.block_store {
             BlockStore::OnDisk => read_fs(hash).map_err(internal_error)?,
             BlockStore::InMemory(hm) => hm.get(&hash).cloned(),
@@ -286,7 +273,7 @@ impl Blocks {
         .ok_or_else(|| invalid_block_id(format!("Block not found: {:?}", hash)))
     }
 
-    pub fn get_balances(&self, hash: Hash) -> Result<Balances, ApiError> {
+    pub fn get_balances(&self, hash: HashOf<Block>) -> Result<Balances, ApiError> {
         self.balances
             .get(&hash)
             .cloned()
@@ -316,7 +303,7 @@ impl Blocks {
                 .clone(),
         };
         let new_balances = parent_balances
-            .add_payment(&block.payment)
+            .add_payment(&block.transaction.transfer)
             .map_err(internal_error)?;
 
         self.block_order.push(hash);
@@ -327,12 +314,12 @@ impl Blocks {
         Ok(())
     }
 
-    fn contains(&self, hash: &Hash) -> bool {
+    fn contains(&self, hash: &HashOf<Block>) -> bool {
         self.balances.contains_key(hash)
     }
 
     /// Ensure that this data structure is updated to at least this hash
-    pub fn sync_to(&mut self, target: Hash) -> Result<(), ApiError> {
+    pub fn sync_to(&mut self, target: HashOf<Block>) -> Result<(), ApiError> {
         // List all the ancestors of the target that don't exist in this data structure
         // starting with the target
         let missing_values = itertools::unfold(Some(target), |mut_hash| {
@@ -354,7 +341,7 @@ impl Blocks {
                 Some(res)
             }
         })
-        .collect::<Result<Vec<Hash>, ApiError>>()?;
+        .collect::<Result<Vec<HashOf<Block>>, ApiError>>()?;
 
         // Add the missing block_store starting with the oldest one
         for hash in missing_values.into_iter().rev() {

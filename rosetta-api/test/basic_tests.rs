@@ -26,7 +26,7 @@ async fn smoke_test() {
     }
 
     assert_eq!(
-        scribe.blockchain.len(),
+        scribe.blockchain.len() as u64,
         ledger.read_blocks().last().unwrap().unwrap().block.index + 1
     );
 

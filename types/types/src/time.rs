@@ -2,9 +2,12 @@
 #![cfg_attr(test, allow(clippy::unit_arg))]
 
 use crate::ingress::MAX_INGRESS_TTL;
+use chrono::{TimeZone, Utc};
 #[cfg(test)]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
+use std::convert::TryInto;
+use std::fmt;
 use std::time::Duration;
 
 /// Time since UNIX_EPOCH (in nanoseconds). Just like 'std::time::Instant' or
@@ -61,6 +64,15 @@ impl Time {
     /// A private function to cast from [Duration] to [Time].
     fn from_duration(t: Duration) -> Self {
         Time(t.as_nanos() as u64)
+    }
+}
+
+impl fmt::Display for Time {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0.try_into() {
+            Ok(signed) => write!(f, "{}", Utc.timestamp_nanos(signed)),
+            Err(_) => write!(f, "{}ns", self.0),
+        }
     }
 }
 

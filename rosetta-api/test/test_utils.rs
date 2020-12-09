@@ -6,7 +6,7 @@ use reqwest::Url;
 
 use ic_rosetta_api::models::*;
 use ic_types::{CanisterId, PrincipalId};
-use ledger_canister::{self, Block, Hash, HashedBlock, ICPTs, Message, Transaction};
+use ledger_canister::{self, Block, BlockHeight, HashedBlock, ICPTs, Memo, Transaction, Transfer};
 use std::sync::RwLock;
 
 use rand::{rngs::StdRng, RngCore, SeedableRng};
@@ -16,7 +16,9 @@ use thread_local::ThreadLocal;
 // TODO remove after disconnecting tests
 use async_trait::async_trait;
 #[allow(unused_imports)]
-use ic_rosetta_api::convert::{from_arg, from_hash, internal_error, to_hash};
+use ic_rosetta_api::convert::{
+    from_arg, from_hash, internal_error, to_hash, transaction_id, transaction_identifier,
+};
 use ic_rosetta_api::ledger_client::{Blocks, LedgerAccess};
 use ic_rosetta_api::rosetta_server::RosettaApiServer;
 use ic_rosetta_api::RosettaRequestHandler;
@@ -147,7 +149,7 @@ impl LedgerAccess for TestLedger {
     async fn submit(
         &self,
         submit_request: HttpRequestEnvelope<HttpSubmitContent>,
-    ) -> Result<Hash, ApiError> {
+    ) -> Result<TransactionIdentifier, ApiError> {
         let HttpCanisterUpdate { arg, sender, .. } = match submit_request.content {
             HttpSubmitContent::Call { update } => update,
         };
@@ -156,7 +158,7 @@ impl LedgerAccess for TestLedger {
 
         let (message, amount, to, _) = from_arg(arg.0).unwrap();
 
-        let transaction = Transaction::Send { from, to, amount };
+        let transaction = Transfer::Send { from, to, amount };
 
         let (parent_hash, index) = match self.last_submitted()? {
             None => (None, 0),
@@ -170,7 +172,7 @@ impl LedgerAccess for TestLedger {
 
         self.submit_queue.write().unwrap().push(hb.clone());
 
-        Ok(hb.hash)
+        Ok(transaction_identifier(&hb.block.transaction.hash()))
     }
 }
 
@@ -207,12 +209,12 @@ impl Scribe {
             + std::time::Duration::from_millis(1262307600000 + self.blockchain.len() as u64)
     }
 
-    fn next_message(&self) -> Message {
-        Message(self.next_index() as u64)
+    fn next_message(&self) -> Memo {
+        Memo(self.next_index() as u64)
     }
 
-    fn next_index(&self) -> usize {
-        self.blockchain.len()
+    fn next_index(&self) -> BlockHeight {
+        self.blockchain.len() as u64
     }
 
     pub fn gen_accounts(&mut self, num: u64, balance: u64) {
@@ -232,13 +234,16 @@ impl Scribe {
         let amount = ICPTs::from_icpts(amount).unwrap();
         self.transactions.push_back(Trans::Buy(uid, amount));
         *self.balance_book.get_mut(&uid).unwrap() += amount;
+        let transaction = Transaction {
+            transfer: Transfer::Mint { to: uid, amount },
+            memo: self.next_message(),
+            created_at: 1,
+        };
         let block = Block {
-            payment: Transaction::Mint { to: uid, amount },
+            transaction,
             timestamp: self.time(),
-            message: self.next_message(),
-            index: self.next_index() as usize,
+            index: self.next_index(),
             parent_hash: self.blockchain.back().map(|hb| hb.hash),
-            created_at_offset: 1,
         };
         self.balance_history.push_back(self.balance_book.clone());
         self.add_block(block);
@@ -248,13 +253,16 @@ impl Scribe {
         let amount = ICPTs::from_icpts(amount).unwrap();
         self.transactions.push_back(Trans::Sell(uid, amount));
         *self.balance_book.get_mut(&uid).unwrap() -= amount;
+        let transaction = Transaction {
+            transfer: Transfer::Burn { from: uid, amount },
+            memo: self.next_message(),
+            created_at: 1,
+        };
         let block = Block {
-            payment: Transaction::Burn { from: uid, amount },
+            transaction,
             timestamp: self.time(),
-            message: self.next_message(),
-            index: self.next_index() as usize,
+            index: self.next_index(),
             parent_hash: self.blockchain.back().map(|hb| hb.hash),
-            created_at_offset: 1,
         };
         self.balance_history.push_back(self.balance_book.clone());
         self.add_block(block);
@@ -267,17 +275,20 @@ impl Scribe {
         *self.balance_book.get_mut(&src).unwrap() -= amount;
         *self.balance_book.get_mut(&dst).unwrap() += amount;
 
-        let block = Block {
-            payment: Transaction::Send {
+        let transaction = Transaction {
+            transfer: Transfer::Send {
                 from: src,
                 to: dst,
                 amount,
             },
+            memo: self.next_message(),
+            created_at: 1,
+        };
+        let block = Block {
+            transaction,
             timestamp: self.time(),
-            message: self.next_message(),
-            index: self.next_index() as usize,
+            index: self.next_index(),
             parent_hash: self.blockchain.back().map(|hb| hb.hash),
-            created_at_offset: 1,
         };
         self.balance_history.push_back(self.balance_book.clone());
         self.add_block(block);

@@ -144,6 +144,7 @@ impl TryFrom<u64> for ErrorCode {
             304 => Ok(ErrorCode::CanisterWasmModuleNotFound),
             305 => Ok(ErrorCode::CanisterEmpty),
             401 => Ok(ErrorCode::InsufficientTransferFunds),
+            402 => Ok(ErrorCode::InsufficientMemoryAllocation),
             501 => Ok(ErrorCode::CanisterOutOfCycles),
             502 => Ok(ErrorCode::CanisterTrapped),
             503 => Ok(ErrorCode::CanisterCalledTrap),

@@ -9,16 +9,18 @@ use std::sync::Arc;
 
 #[derive(Debug, StructOpt)]
 struct Opt {
-    #[structopt(short = "a", long = "address", default_value = "127.0.0.1")]
+    #[structopt(short = "a", long = "address", default_value = "0.0.0.0")]
     listen_address: String,
     #[structopt(short = "p", long = "port", default_value = "8080")]
     listen_port: u16,
     #[structopt(
         short = "c",
         long = "canister-id",
-        default_value = "ctudu-yiaaa-aaaaa-qacla-cai"
+        default_value = "2xh5f-viaaa-aaaab-aae3q-cai"
     )]
     ic_canister_id: String,
+    #[structopt(long = "ic-url", default_value = "https://gw.dfinity.network")]
+    ic_url: String,
 }
 
 #[actix_web::main]
@@ -30,7 +32,7 @@ async fn main() -> std::io::Result<()> {
     let canister_id =
         CanisterId::new(PrincipalId::from_str(&opt.ic_canister_id[..]).unwrap()).unwrap();
 
-    let url = reqwest::Url::parse("https://gw.dfinity.network").unwrap();
+    let url = reqwest::Url::parse(&opt.ic_url[..]).unwrap();
 
     let client = ledger_client::LedgerClient::create_on_disk(url, canister_id)
         .expect("Failed to initialize ledger client");

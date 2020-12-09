@@ -121,7 +121,7 @@ fn cow_state_heap_basic() {
 
     // Get a readonly mapping and make sure we can read from it correctly
     let cow_mem_mgr = CowMemoryManagerImpl::open_readonly(test_dir.path().into());
-    let mapped_state = cow_mem_mgr.get_map_for_snapshot(42);
+    let mapped_state = cow_mem_mgr.get_map_for_snapshot(42).unwrap();
 
     let base = mapped_state.get_heap_base();
     reset_mem_protection(base, *PAGE_SIZE, PROT_READ | PROT_WRITE);
@@ -167,7 +167,7 @@ fn cow_state_globals_basic() {
     cow_mem_mgr.create_snapshot(42);
 
     let cow_mem_mgr_ro = CowMemoryManagerImpl::open_readonly(test_dir.path().into());
-    let mapped_state = cow_mem_mgr_ro.get_map_for_snapshot(42);
+    let mapped_state = cow_mem_mgr_ro.get_map_for_snapshot(42).unwrap();
     let globals = mapped_state.get_globals();
 
     // Assert everything persisted correctly
@@ -262,7 +262,7 @@ fn cow_state_heap_ro_basic() {
 
     // Get a readonly mapping and make sure we can read from it correctly
     let cow_mem_mgr = CowMemoryManagerImpl::open_readonly(test_dir.path().into());
-    let mapped_state = cow_mem_mgr.get_map_for_snapshot(42);
+    let mapped_state = cow_mem_mgr.get_map_for_snapshot(42).unwrap();
 
     let base = mapped_state.get_heap_base();
     reset_mem_protection(base, *PAGE_SIZE, PROT_READ | PROT_WRITE);

@@ -6,7 +6,7 @@ pub use canister_id::{CanisterId, CanisterIdError};
 use ic_protobuf::proxy::ProxyDecodeError;
 use ic_protobuf::types::v1 as pb;
 use phantom_newtype::{AmountOf, DisplayerOf, Id};
-pub use principal_id::{PrincipalId, PrincipalIdBlobParseError};
+pub use principal_id::{PrincipalId, PrincipalIdBlobParseError, PrincipalIdParseError};
 use serde::{Deserialize, Serialize};
 use std::{convert::TryFrom, fmt, slice::Iter};
 

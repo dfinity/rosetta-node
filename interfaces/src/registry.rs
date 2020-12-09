@@ -154,6 +154,14 @@ pub trait RegistryDataProvider: Send + Sync {
     /// Thus, if the local cache is at version `version`, after the returned
     /// records have been added to the local cache, the local registry is at
     /// the current version.
+    ///
+    /// TODO(dsd, 2020-11-29): This API should *not* return the latest version:
+    /// As we are talking about an async system, there is little to no value
+    /// knowing the latest version. In most cases however, it is redundant as
+    /// the registry, e.g., will just return the entire tail of the changelog.
+    /// This is a potential source of bugs if that is the assumed behavior on
+    /// the client side, while the canister might change at some point and only
+    /// return a subsequence of the changelog for performance reasons.
     fn get_updates_since(
         &self,
         version: RegistryVersion,

@@ -193,8 +193,14 @@ pub trait StateManager: StateReader {
     /// * Sorted in ascending order.
     fn list_state_heights(&self, cert_mask: CertificationMask) -> Vec<Height>;
 
-    /// Remove all states whose heights are strictly less than the specified
-    /// `height` (except state 0).
+    /// Notify this state manager that states with heights strictly less than
+    /// the specified `height` can be removed.
+    ///
+    /// Note that:
+    ///  * The initial state (height = 0) cannot be removed.
+    ///  * Some states matching the removal criteria might be kept alive.  For
+    ///    example, the last fully persisted state might be preserved to
+    ///    optimize future operations.
     fn remove_states_below(&self, height: Height);
 
     /// Commits the `state` at given `height`, limits the certification to

@@ -5,7 +5,7 @@ use ic_types::{
     messages::{MessageId, UserQuery},
     methods::WasmMethod,
     user_error::UserError,
-    CanisterId, Cycles, Height, Time,
+    CanisterId, Cycles, Height, NumInstructions, Time,
 };
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
@@ -137,9 +137,8 @@ pub enum HypervisorError {
     /// detailed explanation of the issue suitable for displaying it
     /// to a user of IC.
     ContractViolation(String),
-    /// Wasm execution consumed too much cycles. The payload specifies
-    /// the amount of cycles consumed by the execution.
-    OutOfCycles(Cycles),
+    /// Wasm execution consumed too many instructions.
+    OutOfInstructions,
     /// User supplied invalid Wasm file.
     InvalidWasm(WasmValidationError),
     /// Canister Wasm trapped (e.g. by executing the `unreachable`
@@ -206,7 +205,7 @@ pub trait ExecutionEnvironment: Sync + Send {
         &self,
         msg: CanisterInputMessage,
         state: Self::State,
-        cycles_limit: Cycles,
+        instructions_limit: NumInstructions,
         rng: &mut (dyn RngCore + 'static),
     ) -> Self::State;
 
@@ -214,7 +213,7 @@ pub trait ExecutionEnvironment: Sync + Send {
     fn execute_canister_message(
         &self,
         canister_state: Self::CanisterState,
-        cycles_limit: Cycles,
+        instructions_limit: NumInstructions,
         msg: CanisterInputMessage,
         time: Time,
         routing_table: Arc<RoutingTable>,
@@ -227,8 +226,9 @@ pub struct ExecuteMessageResult<CanisterState> {
     /// The `CanisterState` after message execution
     pub canister: CanisterState,
     /// The amount of cycles left after message execution.  This must be <= to
-    /// the cycles_limit that `execute_canister_message()` was called with.
-    pub cycles_left: Cycles,
+    /// the instructions_limit that `execute_canister_message()` was called
+    /// with.
+    pub num_instructions_left: NumInstructions,
     /// Optional status for an Ingress message if available.
     pub ingress_status: Option<(MessageId, IngressStatus)>,
 }
@@ -267,7 +267,7 @@ pub trait AsyncResult<T> {
 
 /// Interrupted execution. Can be resumed or canceled.
 pub trait InterruptedExec<T> {
-    fn resume(self: Box<Self>, cycles_topup: Cycles) -> ExecResult<T>;
+    fn resume(self: Box<Self>, cycles_topup: NumInstructions) -> ExecResult<T>;
     fn cancel(self: Box<Self>) -> ExecResult<T>;
 }
 
@@ -297,7 +297,7 @@ where
     B: 'static,
     F: 'static + FnOnce(A) -> B,
 {
-    fn resume(self: Box<Self>, cycles_topup: Cycles) -> ExecResult<B> {
+    fn resume(self: Box<Self>, cycles_topup: NumInstructions) -> ExecResult<B> {
         self.resume_token.resume(cycles_topup).and_then(self.f)
     }
 
@@ -454,9 +454,9 @@ impl HypervisorError {
                     canister_id, description
                 ),
             ),
-            Self::OutOfCycles(cycles) => UserError::new(
+            Self::OutOfInstructions => UserError::new(
                 E::CanisterOutOfCycles,
-                format!("Canister {} ran out of cycles limit {}", canister_id, cycles,),
+                format!("Canister {} exceeded the cycles limit for single message execution.", canister_id),
             ),
             Self::InvalidWasm(err) => UserError::new(
                 E::CanisterInvalidWasm,
@@ -592,11 +592,11 @@ pub trait SystemApi {
     /// Returns the reference to the execution error.
     fn get_execution_error(&self) -> Option<&HypervisorError>;
 
-    /// Returns the amount of available cycles.
-    fn get_available_cycles(&self) -> Cycles;
+    /// Returns the amount of available instructions.
+    fn get_available_num_instructions(&self) -> NumInstructions;
 
-    /// Sets the amount of available cycles.
-    fn set_available_cycles(&mut self, cycles: Cycles);
+    /// Sets the amount of available instructions.
+    fn set_available_num_instructions(&mut self, num_instructions: NumInstructions);
 
     /// Copies `size` bytes starting from `offset` inside the opaque caller blob
     /// and copies them to heap[dst..dst+size]. The caller is the canister
@@ -842,11 +842,11 @@ pub trait SystemApi {
     fn ic0_time(&self) -> HypervisorResult<Time>;
 
     /// This system call is not part of the public spec and used by the
-    /// hypervisor, when execution runs out of cycles. Higher levels
-    /// can decide how to proceed, by either providing more cycles
-    /// or aborting the execution (typically with an out-of-cyles
+    /// hypervisor, when execution runs out of instructions. Higher levels
+    /// can decide how to proceed, by either providing more instructions
+    /// or aborting the execution (typically with an out-of-instructions
     /// error).
-    fn out_of_cycles(&self) -> HypervisorResult<Cycles>;
+    fn out_of_instructions(&self) -> HypervisorResult<NumInstructions>;
 
     /// This system call is not part of the public spec. It's called after a
     /// native `memory.grow` has been called to check whether there's enough
@@ -909,8 +909,8 @@ pub trait SystemApi {
     /// `ic0.msg_cycles_available`, and
     ///
     /// The canister balance afterwards does not exceeed
-    /// `CYCLES_LIMIT_PER_CANISTER` (public spec refers to this constant as
-    /// MAX_CANISTER_BALANCE) minus any possible outstanding balances.
+    /// `CYCLES_LIMIT_PER_CANISTER` (public spec refers to this constant
+    /// as MAX_CANISTER_BALANCE) minus any possible outstanding balances.
     ///
     /// EXE-117: the last point is not properly handled yet.  In particular, a
     /// refund can come back to the canister after this call finishes which
