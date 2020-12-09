@@ -37,7 +37,7 @@ actix-rt = "*"
 [dev-dependencies]
 rand_distr = "0.3.0"
 thread_local = "1.0.1"
-ic-scenario-tests = { path = "../scenario_tests" }
+# ic-scenario-tests = { path = "../scenario_tests" }
 
 [[test]]
 name = "rosetta-api-tests"
