@@ -1,3 +1,4 @@
+use crate::cow_state::error;
 /// Slot manager is a "persistent" generic implementation to manage free
 /// regions, allocations, mappings, snapshots and checkpointing for any
 /// arbitrary object which can be viewed as a collection of slots.
@@ -14,6 +15,7 @@
 /// Lastly slot manager also supports rounds (snapshots) for mapping with
 /// sharing of slots between multiple rounds. Also multiple rounds can be folded
 /// into a single checkpoint freeing all overwritten slots.   
+use error::CowError;
 use lmdb::{Cursor, DatabaseFlags, EnvironmentFlags, Transaction, WriteFlags};
 use std::collections::HashSet;
 use std::collections::{BTreeMap, HashMap};
@@ -460,21 +462,33 @@ impl SlotMgr {
         mappings
     }
 
-    pub fn get_mappings_for_round(&self, round: u64) -> BTreeMap<u64, u64> {
+    pub fn get_mappings_for_round(&self, round: u64) -> Result<BTreeMap<u64, u64>, CowError> {
         let mut mappings = BTreeMap::new();
         let ro_txn = self.env.begin_ro_txn().unwrap();
         let roundb = unsafe {
             ro_txn
                 .open_db(Some(&format!("round-{}", round).as_str()))
-                .unwrap_or_else(|_| panic!("Opening old round db failed {}", round))
+                .map_err(|e| {
+                    CowError::SlotdbError(format!(
+                        "Unable to open round db round: {} reason: {}",
+                        round,
+                        e.to_string()
+                    ))
+                })?
         };
-        let mut ro_cursor = ro_txn.open_ro_cursor(roundb).unwrap();
+        let mut ro_cursor = ro_txn.open_ro_cursor(roundb).map_err(|e| {
+            CowError::SlotdbError(format!(
+                "Unable to open ro cursor for round: {} reason: {}",
+                round,
+                e.to_string()
+            ))
+        })?;
         for (rawk, rawv) in ro_cursor.iter().map(|x| x.unwrap()).map(|(k, v)| (k, v)) {
             let key = Self::decode_key(rawk);
             let val = Self::decode_key(rawv);
             mappings.insert(key, val);
         }
-        mappings
+        Ok(mappings)
     }
 
     pub fn get_completed_rounds(&self) -> Vec<u64> {

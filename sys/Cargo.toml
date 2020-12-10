@@ -4,11 +4,13 @@ version = "0.1.0"
 edition = "2018"
 
 [dependencies]
+hex = "0.4.2"
 lazy_static = "1.4.0"
 libc = "0.2.74"
 nix = "0.15"
 byteorder = "1.3.4"
 enum_dispatch = "0.3.1"
+ic-crypto-sha256 = { path = "../crypto/sha256" }
 ic-utils = { path = "../utils" }
 lmdb-rkv = "0.14.0"
 num-integer = "0.1.43"

@@ -1,3 +1,4 @@
+pub mod error;
 mod slot_mgr;
 
 use crate::PAGE_SIZE;
@@ -21,7 +22,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use crate::cow_state::slot_mgr::*;
+use crate::cow_state::{error::*, slot_mgr::*};
 use enum_dispatch::*;
 use ic_utils::ic_features::*;
 use num_integer::*;
@@ -144,6 +145,14 @@ impl MappedStates {
             Self::ReadWrite(mapped_state) => mapped_state.unmap(),
         }
     }
+}
+
+struct MapInfo {
+    mapped_base: u64,
+    mapped_len: usize,
+    file: File,
+    slot_mgr: Arc<SlotMgr>,
+    current_mappings: BTreeMap<u64, u64>,
 }
 
 struct MappedStateCommon<T> {
@@ -496,7 +505,7 @@ pub trait CowMemoryManager {
     /// mutations cannot be made part round state using "soft_commit".
     /// MappedState returned by get_map_for_snapshot can be used for query type
     /// canister operations.
-    fn get_map_for_snapshot(&self, _round_to_use: u64) -> MappedStateImpl;
+    fn get_map_for_snapshot(&self, _round_to_use: u64) -> Result<MappedStateImpl, CowError>;
 
     /// create_snapshot creates a snapshot of all soft_committed mutations to
     /// canister state the last snapshot
@@ -815,11 +824,7 @@ impl<T: AccessPolicy> CowMemoryManagerCommon<T> {
         slot_mgr_guard.as_ref().unwrap().clone()
     }
 
-    fn create_map(
-        &self,
-        state_file: File,
-        round_to_use: Option<u64>,
-    ) -> (*mut u8, usize, File, Arc<SlotMgr>, BTreeMap<u64, u64>) {
+    fn create_map(&self, state_file: File, round_to_use: Option<u64>) -> Result<MapInfo, CowError> {
         unsafe {
             assert_eq!(self.meta.magic, STATE_MAGIC);
         }
@@ -835,7 +840,7 @@ impl<T: AccessPolicy> CowMemoryManagerCommon<T> {
                 completed_rounds.sort();
                 let max_round = completed_rounds.pop();
                 if max_round.is_some() && max_round.unwrap() <= round {
-                    slot_mgr.get_mappings_for_round(round)
+                    slot_mgr.get_mappings_for_round(round)?
                 } else {
                     slot_mgr.get_current_round_mappings()
                 }
@@ -905,37 +910,46 @@ impl<T: AccessPolicy> CowMemoryManagerCommon<T> {
             }
         }
 
-        (
-            mapped_base,
-            total_size,
-            state_file,
-            slot_mgr,
-            current_mappings,
-        )
-    }
-
-    fn get_map_for_snapshot(&self, file: File, round_to_use: u64) -> MappedStateImpl {
-        let (mapped_base, total_size, state_file, slot_mgr, current_mappings) =
-            self.create_map(file, Some(round_to_use));
-
-        let internal = MappedStateCommon::<ReadOnly> {
+        Ok(MapInfo {
             mapped_base: mapped_base as u64,
             mapped_len: total_size,
-            meta: self.meta,
             file: state_file,
+            slot_mgr,
+            current_mappings,
+        })
+    }
+
+    fn get_map_for_snapshot(
+        &self,
+        file: File,
+        round_to_use: u64,
+    ) -> Result<MappedStateImpl, CowError> {
+        let MapInfo {
+            mapped_base,
+            mapped_len,
+            file,
+            slot_mgr,
+            current_mappings,
+        } = self.create_map(file, Some(round_to_use))?;
+
+        let internal = MappedStateCommon::<ReadOnly> {
+            mapped_base,
+            mapped_len,
+            meta: self.meta,
+            file,
             slot_mgr,
             current_mappings,
             _marker: PhantomData::<ReadOnly>,
         };
 
-        MappedStateImpl {
+        Ok(MappedStateImpl {
             mapped_state: MappedStates::ReadOnly(internal),
-        }
+        })
     }
 }
 
 impl CowMemoryManager for CowMemoryManagerCommon<ReadOnly> {
-    fn get_map_for_snapshot(&self, round_to_use: u64) -> MappedStateImpl {
+    fn get_map_for_snapshot(&self, round_to_use: u64) -> Result<MappedStateImpl, CowError> {
         let file = Self::open_state_file(&self.state_root);
         let mapped_state = self.get_map_for_snapshot(file, round_to_use);
 
@@ -949,14 +963,19 @@ impl CowMemoryManager for CowMemoryManagerCommon<ReadOnly> {
 
     fn get_map(&self) -> MappedStateImpl {
         let file = Self::open_state_file(&self.state_root);
-        let (mapped_base, total_size, state_file, slot_mgr, current_mappings) =
-            self.create_map(file, None);
+        let MapInfo {
+            mapped_base,
+            mapped_len,
+            file,
+            slot_mgr,
+            current_mappings,
+        } = self.create_map(file, None).unwrap();
 
         let internal = MappedStateCommon::<ReadOnly> {
-            mapped_base: mapped_base as u64,
-            mapped_len: total_size,
+            mapped_base,
+            mapped_len,
             meta: self.meta,
-            file: state_file,
+            file,
             slot_mgr,
             current_mappings,
             _marker: PhantomData::<ReadOnly>,
@@ -977,14 +996,19 @@ impl CowMemoryManager for CowMemoryManagerCommon<ReadOnly> {
 impl CowMemoryManager for CowMemoryManagerCommon<ReadWrite> {
     fn get_map(&self) -> MappedStateImpl {
         let file = Self::open_state_file(&self.state_root);
-        let (mapped_base, total_size, state_file, slot_mgr, current_mappings) =
-            self.create_map(file, None);
+        let MapInfo {
+            mapped_base,
+            mapped_len,
+            file,
+            slot_mgr,
+            current_mappings,
+        } = self.create_map(file, None).unwrap();
 
         let internal = MappedStateCommon::<ReadWrite> {
-            mapped_base: mapped_base as u64,
-            mapped_len: total_size,
+            mapped_base,
+            mapped_len,
             meta: self.meta,
-            file: state_file,
+            file,
             slot_mgr,
             current_mappings,
             _marker: PhantomData::<ReadWrite>,
@@ -995,7 +1019,7 @@ impl CowMemoryManager for CowMemoryManagerCommon<ReadWrite> {
         }
     }
 
-    fn get_map_for_snapshot(&self, round_to_use: u64) -> MappedStateImpl {
+    fn get_map_for_snapshot(&self, round_to_use: u64) -> Result<MappedStateImpl, CowError> {
         let file = Self::open_state_file(&self.state_root);
         self.get_map_for_snapshot(file, round_to_use)
     }
@@ -1004,6 +1028,10 @@ impl CowMemoryManager for CowMemoryManagerCommon<ReadWrite> {
         let slot_mgr_ro = self.slot_mgr.read().unwrap();
         if slot_mgr_ro.is_some() {
             slot_mgr_ro.as_ref().unwrap().end_round(round);
+        } else {
+            drop(slot_mgr_ro);
+            let slot_mgr = self.get_slot_mgr();
+            slot_mgr.as_ref().end_round(round);
         }
     }
 

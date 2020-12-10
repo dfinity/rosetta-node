@@ -39,6 +39,9 @@ message SubnetRecord {
 
   // Gossip Config
   GossipConfig gossip_config = 13;
+
+  // If set to yes, the subnet starts as a (new) NNS
+  bool start_as_nns = 14;
 }
 
 // Contains the initial DKG transcripts for the subnet

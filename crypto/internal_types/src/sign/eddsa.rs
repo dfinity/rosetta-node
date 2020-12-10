@@ -2,6 +2,7 @@
 
 pub mod ed25519 {
     //! Data types for Ed25519
+    use std::convert::TryFrom;
     use std::fmt;
     use std::hash::{Hash, Hasher};
 
@@ -11,10 +12,30 @@ pub mod ed25519 {
 
     impl PublicKey {
         pub const SIZE: usize = 32;
+
+        /// The bytes of a public key, in raw encoding.
+        pub fn as_bytes(&self) -> &[u8] {
+            &self.0[..]
+        }
     }
     impl fmt::Debug for PublicKey {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(f, "PublicKey(0x{})", hex::encode(&self.0[..]))
+        }
+    }
+
+    impl TryFrom<&[u8]> for PublicKey {
+        type Error = PublicKeyByteConversionError;
+        fn try_from(bytes: &[u8]) -> Result<Self, PublicKeyByteConversionError> {
+            if bytes.len() != Self::SIZE {
+                Err(PublicKeyByteConversionError {
+                    length: bytes.len(),
+                })
+            } else {
+                let mut buffer = [0u8; Self::SIZE];
+                buffer.copy_from_slice(&bytes);
+                Ok(Self(buffer))
+            }
         }
     }
 
@@ -40,6 +61,20 @@ pub mod ed25519 {
     impl Hash for Signature {
         fn hash<H: Hasher>(&self, state: &mut H) {
             self.0[..].hash(state);
+        }
+    }
+
+    pub struct PublicKeyByteConversionError {
+        pub length: usize,
+    }
+    impl fmt::Debug for PublicKeyByteConversionError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "ERROR: ED25519 public key must have {} bytes but received {}",
+                PublicKey::SIZE,
+                self.length
+            )
         }
     }
 }

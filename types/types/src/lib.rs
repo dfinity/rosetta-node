@@ -171,6 +171,12 @@ pub fn node_id_try_from_protobuf(value: pb::NodeId) -> Result<NodeId, PrincipalI
     Ok(NodeId::from(principal_id))
 }
 
+/// Represents an amount of weighted instructions that can be used as the
+/// execution cutoff point for messages. This amount can be used to charge the
+/// respective amount of `Cycles` on a canister's balance for message execution.
+pub struct NumInstructionsTag;
+pub type NumInstructions = AmountOf<NumInstructionsTag, u64>;
+
 pub struct QueueIndexTag;
 /// Index into a queue; used in the context of `InputQueue` / `OutputQueue` to
 /// define message order.
@@ -262,15 +268,15 @@ impl std::ops::Sub for QueryAllocation {
     }
 }
 
-impl Into<Cycles> for QueryAllocation {
-    fn into(self) -> Cycles {
-        Cycles::from(self.0)
+impl Into<NumInstructions> for QueryAllocation {
+    fn into(self) -> NumInstructions {
+        NumInstructions::from(self.0)
     }
 }
 
-impl From<Cycles> for QueryAllocation {
-    fn from(cycles: Cycles) -> QueryAllocation {
-        QueryAllocation(cycles.get())
+impl From<NumInstructions> for QueryAllocation {
+    fn from(num_instructions: NumInstructions) -> QueryAllocation {
+        QueryAllocation(num_instructions.get())
     }
 }
 

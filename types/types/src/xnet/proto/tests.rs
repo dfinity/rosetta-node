@@ -8,7 +8,6 @@ use crate::{
         threshold_sig::ni_dkg::{NiDkgId, NiDkgTag, NiDkgTargetSubnet},
         CombinedThresholdSig, CombinedThresholdSigOf, CryptoHash, Signed,
     },
-    replica_version::ReplicaVersionParseError,
     xnet::CertifiedStreamSlice,
     CryptoHashOfPartialState, Height, PrincipalId, PrincipalIdBlobParseError, SubnetId,
 };
@@ -111,21 +110,6 @@ fn error_missing_field() {
         <v1::ThresholdSignature as ProtoProxy<ThresholdSignature<CertificationContent>>>::proxy_decode(&sig_vec),
         Err(ProxyDecodeError::MissingField("ThresholdSignature::signer"))
     );
-}
-
-#[test]
-fn error_replica_version_parse_error() {
-    let content = certification_content_for_test();
-    let mut content_proto: v1::CertificationContent = content.into();
-    // A replica version that contains illegal characters.
-    const BAD_VERSION: &str = "~!@#$%^&*()_+-=`";
-    content_proto.version = BAD_VERSION.to_string();
-    let content_vec = v1::CertificationContent::proxy_encode(content_proto).unwrap();
-
-    assert_matches!(
-        <v1::CertificationContent as ProtoProxy<CertificationContent>>::proxy_decode(&content_vec),
-        Err(ProxyDecodeError::ReplicaVersionParseError(err))
-            if err.downcast_ref() == Some(&ReplicaVersionParseError(BAD_VERSION.to_string())));
 }
 
 fn certified_stream_slice_for_test() -> CertifiedStreamSlice {

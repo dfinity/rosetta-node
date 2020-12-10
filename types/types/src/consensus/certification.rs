@@ -1,9 +1,6 @@
 use crate::{
-    consensus::{
-        Committee, HasCommittee, HasHeight, HasVersion, ThresholdSignature, ThresholdSignatureShare,
-    },
+    consensus::{Committee, HasCommittee, HasHeight, ThresholdSignature, ThresholdSignatureShare},
     crypto::{CryptoHash, CryptoHashOf, Signed, SignedBytesWithoutDomainSeparator},
-    replica_version::{ReplicaVersion, ReplicaVersionParseError},
     CryptoHashOfPartialState, Height,
 };
 use ic_protobuf::messaging::xnet::v1 as pb;
@@ -67,28 +64,20 @@ pub enum CertificationMessageHash {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct CertificationContent {
-    version: ReplicaVersion,
     pub hash: CryptoHashOfPartialState,
 }
 
 impl CertificationContent {
     pub fn new(hash: CryptoHashOfPartialState) -> Self {
-        CertificationContent {
-            version: ReplicaVersion::default(),
-            hash,
-        }
+        CertificationContent { hash }
     }
 }
 
-impl TryFrom<pb::CertificationContent> for CertificationContent {
-    type Error = ReplicaVersionParseError;
-
-    fn try_from(value: pb::CertificationContent) -> Result<Self, Self::Error> {
-        let version = ReplicaVersion::try_from(value.version)?;
-        Ok(CertificationContent {
-            version,
+impl From<pb::CertificationContent> for CertificationContent {
+    fn from(value: pb::CertificationContent) -> Self {
+        CertificationContent {
             hash: CryptoHashOfPartialState::new(CryptoHash(value.hash)),
-        })
+        }
     }
 }
 
@@ -103,33 +92,6 @@ impl SignedBytesWithoutDomainSeparator for CertificationContent {
 impl HasCommittee for Certification {
     fn committee() -> Committee {
         Committee::HighThreshold
-    }
-}
-
-impl HasVersion for CertificationContent {
-    fn version(&self) -> &ReplicaVersion {
-        &self.version
-    }
-}
-
-impl HasVersion for Certification {
-    fn version(&self) -> &ReplicaVersion {
-        self.signed.version()
-    }
-}
-
-impl HasVersion for CertificationShare {
-    fn version(&self) -> &ReplicaVersion {
-        self.signed.version()
-    }
-}
-
-impl HasVersion for CertificationMessage {
-    fn version(&self) -> &ReplicaVersion {
-        match self {
-            CertificationMessage::Certification(x) => x.version(),
-            CertificationMessage::CertificationShare(x) => x.version(),
-        }
     }
 }
 

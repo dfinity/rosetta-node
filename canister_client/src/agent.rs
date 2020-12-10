@@ -87,6 +87,10 @@ impl Sender {
         Sender::KeyPair(ClonableKeyPair::new(kp))
     }
 
+    pub fn from_external_hsm(pub_key: Vec<u8>, sign: SignF) -> Self {
+        Sender::ExternalHsm { pub_key, sign }
+    }
+
     pub fn get_principal_id(&self) -> PrincipalId {
         match self {
             Self::KeyPair(keypair) => PrincipalId::new_self_authenticating(
@@ -356,7 +360,10 @@ impl Agent {
                 .max(MAX_POLL_INTERVAL);
             next_poll_time = self.time_source.get_relative_time() + poll_interval;
         }
-        Ok(None)
+        Err(format!(
+            "Request took longer than {:?} to complete.",
+            timeout
+        ))
     }
 
     /// Requests the status of a pending request once.
@@ -557,7 +564,7 @@ mod tests {
         HttpCanisterUpdate, HttpRequestStatus, HttpUserQuery, SignedIngress, SignedReadRequest,
     };
     use ic_types::{PrincipalId, Time, UserId};
-    use ic_validator::ingress_validation::{authenticate_ingress_message, verify_signature};
+    use ic_validator::{validate_ingress_message, verify_signature};
     use rand_chacha::ChaChaRng;
     use rand_core::SeedableRng;
     use tokio_test::assert_ok;
@@ -573,7 +580,7 @@ mod tests {
     }
 
     /// Create a SignedIngress message with a non-anonymous user and then verify
-    /// that `authenticate_ingress_message` manages to authenticate it.
+    /// that `validate_ingress_message` manages to authenticate it.
     #[test]
     fn sign_and_verify_submit_content() {
         let current_time = FastForwardTimeSource::new().get_relative_time();
@@ -612,11 +619,11 @@ mod tests {
 
         // The envelope can be successfully authenticated
         let validator = temp_crypto_component_with_fake_registry(node_test_id(VALIDATOR_NODE_ID));
-        authenticate_ingress_message(&validator, &id, &signed_ingress, time_now()).unwrap();
+        validate_ingress_message(&validator, &id, &signed_ingress, time_now()).unwrap();
     }
 
     /// Create a SignedIngress message with an explicit anonymous user and then
-    /// verify that `authenticate_ingress_message` manages to authenticate it.
+    /// verify that `validate_ingress_message` manages to authenticate it.
     #[test]
     fn sign_and_verify_submit_content_explicit_anonymous() {
         let current_time = FastForwardTimeSource::new().get_relative_time();
@@ -645,7 +652,7 @@ mod tests {
 
         // The envelope can be successfully authenticated
         let validator = temp_crypto_component_with_fake_registry(node_test_id(VALIDATOR_NODE_ID));
-        authenticate_ingress_message(&validator, &id, &signed_ingress, time_now()).unwrap();
+        validate_ingress_message(&validator, &id, &signed_ingress, time_now()).unwrap();
     }
 
     #[test]

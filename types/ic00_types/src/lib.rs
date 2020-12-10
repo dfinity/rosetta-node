@@ -3,9 +3,10 @@
 use candid::{CandidType, Decode, Deserialize, Encode};
 use ic_base_types::{
     CanisterId, CanisterInstallMode, CanisterStatusType, NodeId, NumBytes, PrincipalId,
-    RegistryVersion,
+    RegistryVersion, SubnetId,
 };
 use ic_error_types::{ErrorCode, UserError};
+use ic_protobuf::registry::crypto::v1::PublicKey;
 use ic_protobuf::registry::subnet::v1::InitialNiDkgTranscriptRecord;
 use num_traits::cast::ToPrimitive;
 use std::{collections::BTreeSet, convert::TryFrom};
@@ -255,6 +256,8 @@ impl SetupInitialDKGArgs {
 pub struct SetupInitialDKGResponse {
     pub low_threshold_transcript_record: InitialNiDkgTranscriptRecord,
     pub high_threshold_transcript_record: InitialNiDkgTranscriptRecord,
+    pub fresh_subnet_id: SubnetId,
+    pub subnet_threshold_public_key: PublicKey,
 }
 
 impl SetupInitialDKGResponse {
@@ -267,22 +270,35 @@ impl SetupInitialDKGResponse {
         let transcript_records = (
             &self.low_threshold_transcript_record,
             &self.high_threshold_transcript_record,
+            &self.fresh_subnet_id,
+            &self.subnet_threshold_public_key,
         );
         serde_cbor::to_vec(&transcript_records).unwrap()
     }
 
     pub fn decode(blob: &[u8]) -> Result<Self, UserError> {
         let serde_encoded_transcript_records = Decode!(blob, Vec<u8>)?;
-        match serde_cbor::from_slice::<(InitialNiDkgTranscriptRecord, InitialNiDkgTranscriptRecord)>(
-            &serde_encoded_transcript_records,
-        ) {
+        match serde_cbor::from_slice::<(
+            InitialNiDkgTranscriptRecord,
+            InitialNiDkgTranscriptRecord,
+            SubnetId,
+            PublicKey,
+        )>(&serde_encoded_transcript_records)
+        {
             Err(err) => Err(UserError::new(
                 ErrorCode::CanisterContractViolation,
                 format!("Payload deserialization error: '{}'", err),
             )),
-            Ok((low_threshold_transcript_record, high_threshold_transcript_record)) => Ok(Self {
+            Ok((
                 low_threshold_transcript_record,
                 high_threshold_transcript_record,
+                fresh_subnet_id,
+                subnet_threshold_public_key,
+            )) => Ok(Self {
+                low_threshold_transcript_record,
+                high_threshold_transcript_record,
+                fresh_subnet_id,
+                subnet_threshold_public_key,
             }),
         }
     }

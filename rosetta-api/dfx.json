@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "canisters": {
+    "ledger": {
+      "type": "custom",
+      "candid": "../nns/ledger.did",
+      "wasm": "../target/wasm32-unknown-unknown/release/ledger-canister-min.wasm",
+      "build": "./build-ledger.sh"
+    }
+  },
+  "networks": {
+    "nnstestnet": {
+      "providers": [
+        "http://dcs-nns-8.dfinity.systems:8080"
+      ],
+      "type": "persistent"
+    },
+      "local": {
+        "bind": "127.0.0.1:8080"
+      },
+      "ic": {
+          "providers": ["https://gw.dfinity.network"],
+          "type": "persistent"
+      }
+  }
+}

@@ -567,6 +567,18 @@ version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
+name = "chrono"
+version = "0.4.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "libc 0.2.80 (registry+https://github.com/rust-lang/crates.io-index)",
+ "num-integer 0.1.43 (registry+https://github.com/rust-lang/crates.io-index)",
+ "num-traits 0.2.12 (registry+https://github.com/rust-lang/crates.io-index)",
+ "time 0.1.43 (registry+https://github.com/rust-lang/crates.io-index)",
+ "winapi 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "clap"
 version = "2.33.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1308,6 +1320,7 @@ name = "ic-registry-transport"
 version = "0.1.0"
 dependencies = [
  "bytes 0.5.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "candid 0.6.10 (registry+https://github.com/rust-lang/crates.io-index)",
  "ic-protobuf 0.1.0",
  "prost 0.6.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "prost-build 0.6.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1353,6 +1366,8 @@ version = "0.1.0"
 dependencies = [
  "byteorder 1.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "enum_dispatch 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hex 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "ic-crypto-sha256 0.1.0",
  "ic-utils 0.1.0",
  "lazy_static 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.80 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1370,6 +1385,7 @@ dependencies = [
  "bincode 1.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "byte-unit 3.1.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "candid 0.6.10 (registry+https://github.com/rust-lang/crates.io-index)",
+ "chrono 0.4.19 (registry+https://github.com/rust-lang/crates.io-index)",
  "crc32fast 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "derive_more 0.99.8-alpha.0 (git+https://github.com/dfinity-lab/derive_more)",
  "hex 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1567,9 +1583,12 @@ dependencies = [
  "candid 0.6.10 (registry+https://github.com/rust-lang/crates.io-index)",
  "dfn_candid 0.1.0",
  "dfn_core 0.1.0",
+ "digest 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hex 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "ic-crypto-sha256 0.1.0",
  "ic-types 0.1.0",
  "lazy_static 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "phantom_newtype 0.1.0",
  "serde 1.0.115 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -3351,6 +3370,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 "checksum cc 1.0.54 (registry+https://github.com/rust-lang/crates.io-index)" = "7bbb73db36c1246e9034e307d0fba23f9a2e251faa47ade70c1bd252220c8311"
 "checksum cfg-if 0.1.10 (registry+https://github.com/rust-lang/crates.io-index)" = "4785bdd1c96b2a846b2bd7cc02e86b6b3dbf14e7e53446c4f54c92a361040822"
 "checksum cfg-if 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)" = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
+"checksum chrono 0.4.19 (registry+https://github.com/rust-lang/crates.io-index)" = "670ad68c9088c2a963aaa298cb369688cf3f9465ce5e2d4ca10e6e0098a1ce73"
 "checksum clap 2.33.3 (registry+https://github.com/rust-lang/crates.io-index)" = "37e58ac78573c40708d45522f0d80fa2f01cc4f9b4e2bf749807255454312002"
 "checksum clear_on_drop 0.2.4 (registry+https://github.com/rust-lang/crates.io-index)" = "c9cc5db465b294c3fa986d5bbb0f3017cd850bff6dd6c52f9ccff8b4d21b7b08"
 "checksum cloudabi 0.0.3 (registry+https://github.com/rust-lang/crates.io-index)" = "ddfc5b9aa5d4507acaf872de71051dfd0e309860e88966e1051e462a077aac4f"

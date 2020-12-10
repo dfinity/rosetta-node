@@ -40,5 +40,5 @@ thread_local = "1.0.1"
 # ic-scenario-tests = { path = "../scenario_tests" }
 
 [[test]]
-name = "tests"
+name = "rosetta-api-tests"
 path = "test/test_utils.rs"
