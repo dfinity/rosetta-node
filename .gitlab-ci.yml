@@ -27,7 +27,18 @@ build:
     paths:
       - rosetta-api/target/release/ic-rosetta-api
 
-docker:
+docker push to registry.gitlab.com:
+  stage: docker
+  image:
+    name: gcr.io/kaniko-project/executor:debug
+    entrypoint: [""]
+  script:
+    - mkdir -p /kaniko/.docker
+    - echo "{\"auths\":{\"$CI_REGISTRY\":{\"username\":\"$CI_REGISTRY_USER\",\"password\":\"$CI_REGISTRY_PASSWORD\"},\"https://index.docker.io/v1/\":{\"username\":\"$DOCKER_HUB_USER\",\"password\":\"$DOCKER_HUB_PASSWORD\"}}}" > /kaniko/.docker/config.json
+    - /kaniko/executor --context $CI_PROJECT_DIR/rosetta-api --dockerfile $CI_PROJECT_DIR/rosetta-api/Dockerfile --destination $CI_REGISTRY_IMAGE/rosetta-api:$CI_COMMIT_TAG --destination
+      # - /kaniko/executor --context $CI_PROJECT_DIR/rosetta-api --dockerfile $CI_PROJECT_DIR/rosetta-api/Dockerfile --destination dfinity/rosetta-api:$CI_COMMIT_TAG
+
+docker push to registry.gitlab.com and hub.docker.com from master:
   stage: docker
   image:
     name: gcr.io/kaniko-project/executor:debug
@@ -37,3 +48,5 @@ docker:
     - echo "{\"auths\":{\"$CI_REGISTRY\":{\"username\":\"$CI_REGISTRY_USER\",\"password\":\"$CI_REGISTRY_PASSWORD\"},\"https://index.docker.io/v1/\":{\"username\":\"$DOCKER_HUB_USER\",\"password\":\"$DOCKER_HUB_PASSWORD\"}}}" > /kaniko/.docker/config.json
     - /kaniko/executor --context $CI_PROJECT_DIR/rosetta-api --dockerfile $CI_PROJECT_DIR/rosetta-api/Dockerfile --destination $CI_REGISTRY_IMAGE/rosetta-api:$CI_COMMIT_TAG --destination dfinity/rosetta-api:$CI_COMMIT_TAG
       # - /kaniko/executor --context $CI_PROJECT_DIR/rosetta-api --dockerfile $CI_PROJECT_DIR/rosetta-api/Dockerfile --destination dfinity/rosetta-api:$CI_COMMIT_TAG
+  only:
+    - master
