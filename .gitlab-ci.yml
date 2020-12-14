@@ -38,7 +38,7 @@ docker push to registry.gitlab.com:
     - /kaniko/executor --context $CI_PROJECT_DIR/rosetta-api --dockerfile $CI_PROJECT_DIR/rosetta-api/Dockerfile --destination $CI_REGISTRY_IMAGE/rosetta-api:$CI_COMMIT_TAG
       # - /kaniko/executor --context $CI_PROJECT_DIR/rosetta-api --dockerfile $CI_PROJECT_DIR/rosetta-api/Dockerfile --destination dfinity/rosetta-api:$CI_COMMIT_TAG
 
-docker push to registry.gitlab.com and hub.docker.com from master:
+docker push to registry.gitlab.com and hub.docker.com from main:
   stage: docker
   image:
     name: gcr.io/kaniko-project/executor:debug
@@ -49,4 +49,4 @@ docker push to registry.gitlab.com and hub.docker.com from master:
     - /kaniko/executor --context $CI_PROJECT_DIR/rosetta-api --dockerfile $CI_PROJECT_DIR/rosetta-api/Dockerfile --destination $CI_REGISTRY_IMAGE/rosetta-api:$CI_COMMIT_TAG --destination dfinity/rosetta-api:$CI_COMMIT_TAG
       # - /kaniko/executor --context $CI_PROJECT_DIR/rosetta-api --dockerfile $CI_PROJECT_DIR/rosetta-api/Dockerfile --destination dfinity/rosetta-api:$CI_COMMIT_TAG
   only:
-    - master
+    - main
