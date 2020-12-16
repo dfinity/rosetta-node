@@ -31,9 +31,9 @@ pub use inter_canister::{
     CallContextId, CallbackId, Payload, RejectContext, Request, RequestOrResponse, Response,
 };
 pub use message_id::{MessageId, MessageIdError, EXPECTED_MESSAGE_ID_LENGTH};
-pub use query::{SignedUserQuery, UserQuery};
-pub use read_state::{ReadState, SignedReadState};
-pub use request_status::{RequestStatus, SignedRequestStatus};
+pub use query::{SignedUserQuery, SignedUserQueryContent, UserQuery};
+pub use read_state::{ReadState, SignedReadState, SignedReadStateContent};
+pub use request_status::{RequestStatus, SignedRequestStatus, SignedRequestStatusContent};
 use serde::{Deserialize, Serialize};
 use std::{convert::TryFrom, error::Error, fmt};
 pub use webauthn::{WebAuthnEnvelope, WebAuthnSignature};
@@ -216,9 +216,7 @@ impl fmt::Display for HttpHandlerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             HttpHandlerError::InvalidMessageId(msg) => write!(f, "invalid message ID: {}", msg),
-            HttpHandlerError::InvalidIngressExpiry(msg) => {
-                write!(f, "invalid ingress expiry time: {}", msg)
-            }
+            HttpHandlerError::InvalidIngressExpiry(msg) => write!(f, "{}", msg),
             HttpHandlerError::InvalidPrincipalId(msg) => write!(f, "invalid princial id: {}", msg),
             HttpHandlerError::MissingPubkeyOrSignature(msg) => {
                 write!(f, "missing pubkey or signature: {}", msg)
@@ -253,9 +251,9 @@ impl SignedReadRequest {
 
     pub fn message_id(&self) -> MessageId {
         match self {
-            Self::Query(query) => MessageId::from(&query.content),
-            Self::RequestStatus(request_status) => MessageId::from(&request_status.content),
-            Self::ReadState(read_state) => MessageId::from(&read_state.content),
+            Self::Query(query) => MessageId::from(query.content()),
+            Self::RequestStatus(request_status) => MessageId::from(request_status.content()),
+            Self::ReadState(read_state) => MessageId::from(read_state.content()),
         }
     }
 }
@@ -280,12 +278,13 @@ impl TryFrom<(HttpRequestEnvelope<HttpReadContent>, Time)> for SignedReadRequest
                             sender_delegation: delegation,
                         };
                         Ok(Self::Query(SignedUserQuery {
-                            content,
+                            content: SignedUserQueryContent::new(content),
                             signature: Some(signature),
                         }))
                     }
                     (None, None, None) => Ok(Self::Query(SignedUserQuery {
-                        content,
+                        content: SignedUserQueryContent::new(content),
+
                         signature: None,
                     })),
                     rest => Err(Self::Error::MissingPubkeyOrSignature(format!(
@@ -309,12 +308,12 @@ impl TryFrom<(HttpRequestEnvelope<HttpReadContent>, Time)> for SignedReadRequest
                             sender_delegation: delegation,
                         };
                         Ok(Self::RequestStatus(SignedRequestStatus {
-                            content,
+                            content: SignedRequestStatusContent::new(content),
                             signature: Some(signature),
                         }))
                     }
                     (None, None, None) => Ok(Self::RequestStatus(SignedRequestStatus {
-                        content,
+                        content: SignedRequestStatusContent::new(content),
                         signature: None,
                     })),
                     rest => Err(Self::Error::MissingPubkeyOrSignature(format!(
@@ -338,12 +337,12 @@ impl TryFrom<(HttpRequestEnvelope<HttpReadContent>, Time)> for SignedReadRequest
                             sender_delegation: delegation,
                         };
                         Ok(SignedReadRequest::ReadState(SignedReadState {
-                            content,
+                            content: SignedReadStateContent::new(content),
                             signature: Some(signature),
                         }))
                     }
                     (None, None, None) => Ok(Self::ReadState(SignedReadState {
-                        content,
+                        content: SignedReadStateContent::new(content),
                         signature: None,
                     })),
                     rest => Err(Self::Error::MissingPubkeyOrSignature(format!(
@@ -379,14 +378,18 @@ pub fn validate_ingress_expiry_range(
     ingress_expiry: u64,
     current_time: Time,
 ) -> Result<(), HttpHandlerError> {
-    let min_allowed_expiry = current_time.as_nanos_since_unix_epoch();
-    let range = min_allowed_expiry..=(min_allowed_expiry + MAX_INGRESS_TTL.as_nanos() as u64);
-    if !range.contains(&ingress_expiry) {
+    let provided_expiry = Time::from_nanos_since_unix_epoch(ingress_expiry);
+    let min_allowed_expiry = current_time;
+    let max_allowed_expiry = min_allowed_expiry + MAX_INGRESS_TTL;
+    let system_time = chrono::Utc::now();
+    if !(min_allowed_expiry <= provided_expiry && provided_expiry <= max_allowed_expiry) {
         let msg = format!(
-            "Specified ingress_expiry {}ns is not in the expected time range [{} .. {}]",
-            ingress_expiry,
-            range.start(),
-            range.end()
+            "Specified ingress_expiry not within expected range:\n\
+             Minimum allowed expiry: {}\n\
+             Maximum allowed expiry: {}\n\
+             Provided expiry:        {}\n\
+             Local time:             {}",
+            min_allowed_expiry, max_allowed_expiry, provided_expiry, system_time,
         );
         return Err(HttpHandlerError::InvalidIngressExpiry(msg));
     }

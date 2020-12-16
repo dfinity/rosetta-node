@@ -2,12 +2,27 @@ use super::{RawHttpRequest, UserSignature};
 use crate::{crypto::Signed, CanisterId, PrincipalId, UserId};
 use std::convert::TryFrom;
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct SignedUserQueryContent(RawHttpRequest);
+
+impl SignedUserQueryContent {
+    pub(crate) fn new(raw_http_request: RawHttpRequest) -> Self {
+        Self(raw_http_request)
+    }
+}
+
 /// Describes the signed query that was received from the end user.  The only
 /// way to construct this is `TryFrom<HttpRequestEnvelope<HttpReadContent>> for
 /// SignedUserQueryOrRequestStatus` which should guarantee that all the
 /// necessary fields are accounted for and all the necessary checks have been
 /// performed.
-pub type SignedUserQuery = Signed<RawHttpRequest, Option<UserSignature>>;
+pub type SignedUserQuery = Signed<SignedUserQueryContent, Option<UserSignature>>;
+
+impl SignedUserQuery {
+    pub fn content(&self) -> &RawHttpRequest {
+        &self.content.0
+    }
+}
 
 /// Represents a Query that is sent by an end user to a canister.
 #[derive(Clone, PartialEq, Debug)]
@@ -20,9 +35,9 @@ pub struct UserQuery {
 
 // This conversion should be error free as long as we performed all the
 // validation checks when we computed the SignedUserQuery.
-impl From<SignedUserQuery> for UserQuery {
-    fn from(input: SignedUserQuery) -> Self {
-        let mut raw_http_request = input.content;
+impl From<SignedUserQueryContent> for UserQuery {
+    fn from(content: SignedUserQueryContent) -> Self {
+        let mut raw_http_request = content.0;
         Self {
             source: raw_http_request.take_sender(),
             receiver: CanisterId::try_from(

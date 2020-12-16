@@ -4,7 +4,7 @@ use super::{
     HttpHandlerError, HttpRequestEnvelope, HttpSubmitContent, MessageId, RawHttpRequest,
     RawHttpRequestVal, UserSignature, UserSignatureOnly,
 };
-use crate::{crypto::Signed, CanisterId, PrincipalId, Time, UserId};
+use crate::{crypto::Signed, CanisterId, CountBytes, PrincipalId, Time, UserId};
 use ic_protobuf::{
     log::ingress_message_log_entry::v1::IngressMessageLogEntry,
     proxy::{try_from_option_field, ProxyDecodeError},
@@ -12,22 +12,39 @@ use ic_protobuf::{
     types::v1 as pb_types,
 };
 use serde::{Deserialize, Serialize};
-use std::convert::{From, TryFrom, TryInto};
-use std::time::Duration;
+use std::{
+    convert::{From, TryFrom, TryInto},
+    time::Duration,
+};
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct SignedIngressContent(RawHttpRequest);
+
+impl SignedIngressContent {
+    pub(crate) fn new(raw_http_request: RawHttpRequest) -> Self {
+        Self(raw_http_request)
+    }
+}
+
+impl CountBytes for SignedIngressContent {
+    fn count_bytes(&self) -> usize {
+        self.0.count_bytes()
+    }
+}
 
 /// Describes the signed ingress message that was received from the end user.
 /// The only way to construct this is
 /// `TryFrom<HttpRequestEnvelope<HttpSubmitContent>>` which should guarantee
 /// that all the necessary fields are accounted for and all the necessary checks
 /// have been performed.
-pub type SignedIngress = Signed<RawHttpRequest, Option<UserSignature>>;
+pub type SignedIngress = Signed<SignedIngressContent, Option<UserSignature>>;
 
 impl From<&SignedIngress> for pb_types::SignedIngress {
     fn from(signed_ingress: &SignedIngress) -> Self {
+        let raw_http_request = &signed_ingress.content.0;
         Self {
             signature: bincode::serialize(&signed_ingress.signature).unwrap(),
-            content: signed_ingress
-                .content
+            content: raw_http_request
                 .0
                 .iter()
                 .map(|(key, v)| pb_types::HttpRequestKv {
@@ -64,19 +81,19 @@ impl From<&SignedIngress> for IngressMessageLogEntry {
             }
         }
 
-        let content = &ingress.content;
+        let raw_http_request = &ingress.content.0;
         Self {
-            canister_id: get_id("canister_id", content),
-            compute_allocation: get_u64("compute_allocation", content),
-            desired_id: get_id("desired_id", content),
-            expiry_time: get_u64("ingress_expiry", content),
-            memory_allocation: get_u64("memory_allocation", content),
-            message_id: Some(format!("{}", MessageId::from(&ingress.content))),
-            method_name: get_string("method_name", content),
-            mode: get_string("mode", content),
+            canister_id: get_id("canister_id", raw_http_request),
+            compute_allocation: get_u64("compute_allocation", raw_http_request),
+            desired_id: get_id("desired_id", raw_http_request),
+            expiry_time: get_u64("ingress_expiry", raw_http_request),
+            memory_allocation: get_u64("memory_allocation", raw_http_request),
+            message_id: Some(format!("{}", MessageId::from(raw_http_request))),
+            method_name: get_string("method_name", raw_http_request),
+            mode: get_string("mode", raw_http_request),
             reason: None,
-            request_type: get_string("request_type", content),
-            sender: get_id("sender", content),
+            request_type: get_string("request_type", raw_http_request),
+            sender: get_id("sender", raw_http_request),
             size: None,
             batch_time: None,
             batch_time_plus_ttl: None,
@@ -85,8 +102,13 @@ impl From<&SignedIngress> for IngressMessageLogEntry {
 }
 
 impl SignedIngress {
+    pub fn content(&self) -> &RawHttpRequest {
+        &self.content.0
+    }
+
     pub fn sender(&self) -> UserId {
-        match self.content.0.get("sender") {
+        let raw_http_request = &self.content.0;
+        match raw_http_request.0.get("sender") {
             Some(bytes) => match bytes {
                 RawHttpRequestVal::Bytes(raw) => {
                     UserId::from(PrincipalId::try_from(&raw[..]).expect("failed to decode user id"))
@@ -98,7 +120,8 @@ impl SignedIngress {
     }
 
     pub fn canister_id(&self) -> CanisterId {
-        match self.content.0.get("canister_id") {
+        let raw_http_request = &self.content.0;
+        match raw_http_request.0.get("canister_id") {
             Some(bytes) => match bytes {
                 RawHttpRequestVal::Bytes(raw) => CanisterId::new(
                     PrincipalId::try_from(&raw[..]).expect("failed to decode canister id"),
@@ -111,7 +134,8 @@ impl SignedIngress {
     }
 
     pub fn method_name(&self) -> Result<String, ()> {
-        match self.content.0.get("method_name") {
+        let raw_http_request = &self.content.0;
+        match raw_http_request.0.get("method_name") {
             Some(bytes) => match bytes {
                 RawHttpRequestVal::String(name) => Ok(name.to_owned()),
                 _ => Err(()),
@@ -121,7 +145,8 @@ impl SignedIngress {
     }
 
     pub fn method_arg(&self) -> Result<Vec<u8>, ()> {
-        match self.content.0.get("arg") {
+        let raw_http_request = &self.content.0;
+        match raw_http_request.0.get("arg") {
             Some(bytes) => match bytes {
                 RawHttpRequestVal::Bytes(raw) => Ok(raw.to_vec()),
                 _ => Err(()),
@@ -135,8 +160,8 @@ impl SignedIngress {
     }
 
     pub fn expiry_time(&self) -> Time {
-        let value = self
-            .content
+        let raw_http_request = &self.content.0;
+        let value = raw_http_request
             .0
             .get("ingress_expiry")
             .expect("Expected SignedIngress to carry a `ingress_expiry` field");
@@ -156,14 +181,14 @@ impl TryFrom<(HttpRequestEnvelope<HttpSubmitContent>, Time)> for SignedIngress {
         let (request, current_time) = input;
         match request.content {
             HttpSubmitContent::Call { update } => {
-                let content = RawHttpRequest::try_from((update, current_time))?;
+                let raw_http_request = RawHttpRequest::try_from((update, current_time))?;
                 match (
                     request.sender_pubkey,
                     request.sender_sig,
                     request.sender_delegation,
                 ) {
                     (None, None, None) => Ok(SignedIngress {
-                        content,
+                        content: SignedIngressContent::new(raw_http_request),
                         signature: None,
                     }),
                     (Some(pubkey), Some(signature), delegation) => {
@@ -173,7 +198,7 @@ impl TryFrom<(HttpRequestEnvelope<HttpSubmitContent>, Time)> for SignedIngress {
                             sender_delegation: delegation,
                         };
                         Ok(SignedIngress {
-                            content,
+                            content: SignedIngressContent::new(raw_http_request),
                             signature: Some(signature),
                         })
                     }
@@ -204,7 +229,7 @@ pub struct Ingress {
 impl From<(SignedIngress, MessageId)> for Ingress {
     fn from(input: (SignedIngress, MessageId)) -> Self {
         let (signed_ingress, message_id) = input;
-        let mut raw_http_request = signed_ingress.content;
+        let mut raw_http_request = signed_ingress.content.0;
         let request_type = raw_http_request.take_string("request_type");
 
         match request_type.as_str() {

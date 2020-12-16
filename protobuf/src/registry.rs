@@ -127,3 +127,9 @@ import_mod!("registry", routing_table, v1, "routing_table.v1");
 import_mod!("registry", subnet, v1, "subnet.v1");
 import_mod!("registry", dc, v1, "dc.v1");
 import_mod!("registry", nns, v1, "nns.v1");
+import_mod!(
+    "registry",
+    provisional_whitelist,
+    v1,
+    "provisional_whitelist.v1"
+);

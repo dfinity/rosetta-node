@@ -13,7 +13,9 @@ message ThresholdSignature {
 
 // State tree root hash.
 message CertificationContent {
-  string version = 1;
+  reserved 1;
+  reserved "version";
+
   bytes hash = 2;
 }
 

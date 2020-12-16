@@ -322,7 +322,7 @@ impl From<&SignedIngress> for IngressMessageId {
     fn from(signed_ingress: &SignedIngress) -> Self {
         IngressMessageId::new(
             signed_ingress.expiry_time(),
-            MessageId::from(&signed_ingress.content),
+            MessageId::from(signed_ingress.content()),
         )
     }
 }

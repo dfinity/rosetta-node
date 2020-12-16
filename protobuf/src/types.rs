@@ -13,14 +13,18 @@ pub mod v1 {
         pub fn read_from_file<P: AsRef<Path> + std::fmt::Debug>(
             filepath: P,
         ) -> Result<Self, String> {
-            let mut cup_file = File::open(&filepath)
-                .map_err(|e| format!("Failed to open protobuf file at {:?} {:?}", filepath, e))?;
+            let cup_file = File::open(&filepath)
+                .map_err(|e| format!("open failed: {:?}: {:?}", filepath, e))?;
+            Self::read_from_reader(cup_file)
+        }
+
+        /// Deserialize a protobuf CatchUpPackage from the provided reader
+        pub fn read_from_reader<R: Read>(mut reader: R) -> Result<Self, String> {
             let mut buf = Vec::new();
-            cup_file
+            reader
                 .read_to_end(&mut buf)
-                .map_err(|e| format!("Failed to read file {:?} {:?}", filepath, e))?;
-            Self::decode(&buf[..])
-                .map_err(|e| format!("Failed decode protobuf at {:?} {:?}", filepath, e))
+                .map_err(|e| format!("read failed: {:?}", e))?;
+            Self::decode(&buf[..]).map_err(|e| format!("protobuf decode failed: {:?}", e))
         }
 
         /// Write the protobuf to the provided file.

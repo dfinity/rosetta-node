@@ -1,38 +1,79 @@
 use candid::CandidType;
+use ic_crypto_sha256::Sha256;
 use ic_types::PrincipalId;
 use lazy_static::lazy_static;
-use serde::{de::Error, Deserialize, Serialize};
+use phantom_newtype::Id;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::convert::TryInto;
+use std::fmt;
 use std::sync::RwLock;
-use std::time::SystemTime;
+use std::{
+    str::FromStr,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 mod icpts;
 pub use icpts::{ICPTs, DECIMAL_PLACES, ICP_SUBDIVIDABLE_BY};
 
-// pub struct Hash {inner: [u8; 32]}
-// TODO make this a proper hash (sha 256)
-pub type Hash = u64;
+#[derive(Serialize, Deserialize, CandidType, Clone, Hash, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct HashOf<T> {
+    inner: Id<T, [u8; 32]>,
+}
 
-#[derive(
-    Serialize, Deserialize, CandidType, Clone, Copy, Hash, Debug, PartialEq, Eq, PartialOrd, Ord,
-)]
-pub struct Message(pub u64);
+impl<T: std::clone::Clone> Copy for HashOf<T> {}
 
-impl Default for Message {
-    fn default() -> Message {
-        Message(0)
+impl<T> HashOf<T> {
+    pub fn into_bytes(self) -> [u8; 32] {
+        self.inner.get()
+    }
+
+    pub fn new(bs: [u8; 32]) -> Self {
+        HashOf { inner: Id::new(bs) }
+    }
+}
+
+impl<T> fmt::Display for HashOf<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let res = hex::encode(self.inner.get());
+        write!(f, "{}", res)
+    }
+}
+
+impl<T> FromStr for HashOf<T> {
+    type Err = String;
+    fn from_str(s: &str) -> Result<HashOf<T>, String> {
+        let v = hex::decode(s).map_err(|e| e.to_string())?;
+        let slice = v.as_slice();
+        match slice.try_into() {
+            Ok(ba) => Ok(HashOf::new(ba)),
+            Err(_) => Err(format!(
+                "Expected a Vec of length {} but it was {}",
+                32,
+                v.len(),
+            )),
+        }
     }
 }
 
 #[derive(
     Serialize, Deserialize, CandidType, Clone, Copy, Hash, Debug, PartialEq, Eq, PartialOrd, Ord,
 )]
-pub struct BlockHeight(pub u64);
+pub struct Memo(pub u64);
 
-pub type SubmitArgs = (Message, ICPTs, PrincipalId, Option<BlockHeight>);
+impl Default for Memo {
+    fn default() -> Memo {
+        Memo(0)
+    }
+}
 
-pub type Certification = Hash;
+pub type BlockHeight = u64;
+
+pub type SubmitArgs = (Memo, ICPTs, PrincipalId, Option<BlockHeight>);
+
+// This type will change when we implement certification
+pub type Certification = u64;
 
 /// Describes the state of users accounts at the tip of the chain
 #[derive(Default)]
@@ -43,14 +84,14 @@ pub struct Balances {
 }
 
 impl Balances {
-    pub fn add_payment(&mut self, payment: &Transaction) {
+    pub fn add_payment(&mut self, payment: &Transfer) {
         match payment {
-            Transaction::Send { from, to, amount } => {
+            Transfer::Send { from, to, amount } => {
                 self.debit(from, *amount);
                 self.credit(to, *amount);
             }
-            Transaction::Burn { from, amount, .. } => self.debit(from, *amount),
-            Transaction::Mint { to, amount, .. } => self.credit(to, *amount),
+            Transfer::Burn { from, amount, .. } => self.debit(from, *amount),
+            Transfer::Mint { to, amount, .. } => self.credit(to, *amount),
         }
     }
 
@@ -78,8 +119,9 @@ impl Balances {
     }
 }
 
-#[derive(CandidType, Serialize, Deserialize, Hash, Debug, PartialEq, Eq, Clone)]
-pub enum Transaction {
+/// An operation which modifies account balances
+#[derive(Serialize, Deserialize, CandidType, Clone, Hash, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Transfer {
     Burn {
         from: PrincipalId,
         amount: ICPTs,
@@ -95,162 +137,140 @@ pub enum Transaction {
     },
 }
 
-#[derive(CandidType, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+/// A transfer with the metadata the client generated attached to it
+#[derive(Serialize, Deserialize, CandidType, Clone, Hash, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Transaction {
+    pub transfer: Transfer,
+    pub memo: Memo,
+    pub created_at: BlockHeight,
+}
+
+impl Transaction {
+    pub fn new(
+        from: PrincipalId,
+        to: PrincipalId,
+        amount: ICPTs,
+        memo: Memo,
+        created_at: BlockHeight,
+    ) -> Self {
+        let transfer = Transfer::Send { from, to, amount };
+        Transaction {
+            transfer,
+            memo,
+            created_at,
+        }
+    }
+
+    /// This hash function gives us a globally unique identifier for each
+    /// transaction. This hashes the transfer, the memo and the height the
+    /// transaction was 'created_at'. A transaction is 'created' not when it is
+    /// added to the ledger, but rather it is created at the height of the
+    /// ledger last observed by the person signing the transaction.
+    ///
+    /// This means that if you create a transaction using a cold wallet, you can
+    /// track that transactions identifier once it reaches the ledger.
+    pub fn hash(&self) -> HashOf<Transaction> {
+        let mut state = Sha256::new();
+        let amount = match self.transfer {
+            Transfer::Send { from, to, amount } => {
+                state.write(from.as_slice());
+                state.write(to.as_slice());
+                amount
+            }
+            Transfer::Burn { from, amount } => {
+                state.write(from.as_slice());
+                amount
+            }
+            Transfer::Mint { to, amount } => {
+                state.write(to.as_slice());
+                amount
+            }
+        };
+        state.write(&amount.get_doms().to_be_bytes());
+        state.write(&self.memo.0.to_be_bytes());
+        state.write(&self.created_at.to_be_bytes());
+        let inner = state.finish();
+        HashOf::new(inner)
+    }
+}
+
+/// A transaction with the metadata the canister generated attached to it
+#[derive(CandidType, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Block {
-    pub payment: Transaction,
+    pub transaction: Transaction,
     pub timestamp: SystemTime,
-    pub message: Message,
-    pub parent_hash: Option<Hash>,
-    pub index: usize,
-    pub created_at_offset: u32,
 }
 
 impl Block {
-    pub fn new(
-        payment: Transaction,
-        message: Message,
-        parent_hash: Option<Hash>,
-        index: usize,
-        created_at: Option<BlockHeight>,
-    ) -> Result<Block, String> {
+    pub fn new(transfer: Transfer, memo: Memo, created_at: BlockHeight) -> Result<Block, String> {
         let timestamp = dfn_core::api::now();
-        // TODO check created_at is between now and 24 hours in the past
-        let created_at_offset: u32 = match created_at {
-            Some(ca) => u32::try_from((index as u64) - ca.0).map_err(|e| e.to_string())?,
-            None => 1,
+        let transaction = Transaction {
+            transfer,
+            memo,
+            created_at,
         };
         Ok(Block {
-            payment,
+            transaction,
             timestamp,
-            message,
-            parent_hash,
-            index,
-            created_at_offset,
         })
     }
 
-    fn hash(&self) -> Hash {
-        // TODO hash properly
-        self.parent_hash.unwrap_or(0) + 1
-    }
-}
-
-// We do this manually here because we want to prevent construction in the
-// crate, whereas non_exhaustive only protects other crates from constructing
-// things
-#[allow(clippy::manual_non_exhaustive)]
-#[derive(CandidType, Serialize, Clone, Debug, PartialEq, Eq)]
-pub struct HashedBlock {
-    pub block: Block,
-    pub hash: Hash,
-    #[serde(skip_serializing)]
-    __inner: (),
-}
-
-mod hidden {
-    use serde::Deserialize;
-
-    #[derive(Deserialize)]
-    pub struct HashedBlock {
-        pub block: super::Block,
-        pub hash: super::Hash,
-    }
-}
-
-impl HashedBlock {
-    pub fn hash_block(block: Block) -> HashedBlock {
-        HashedBlock {
-            hash: block.hash(),
-            block,
-            __inner: (),
+    /// This hash function exists so we can create a hash chain of blocks back
+    /// to the genesis of this canister. It is a hash of the time this
+    /// block was made, the transaction in this block and the previous blocks
+    /// hash.
+    pub fn hash(&self, parent_hash: Option<HashOf<Block>>) -> HashOf<Block> {
+        let mut state = Sha256::new();
+        let ns_since_epoch = self
+            .timestamp
+            .duration_since(UNIX_EPOCH)
+            .expect("Time went backwards")
+            .as_nanos();
+        state.write(&ns_since_epoch.to_be_bytes());
+        state.write(&self.transaction.hash().into_bytes());
+        if let Some(ph) = parent_hash {
+            state.write(&ph.into_bytes());
         }
-    }
-}
-
-/// We have this custom implementation make sure that the HashedBlock is always
-/// constructed correctly
-impl<'de> Deserialize<'de> for HashedBlock {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let hidden::HashedBlock { block, hash } = Deserialize::deserialize(deserializer)?;
-        if block.hash() != hash {
-            return Err(Error::custom(
-                "The block failed do deserialize, hash checking failed",
-            ));
-        }
-        Ok(HashedBlock {
-            block,
-            hash,
-            __inner: (),
-        })
+        HashOf::new(state.finish())
     }
 }
 
 /// Stores a chain of transactions with their metadata
 #[derive(Default)]
 pub struct BlockChain {
-    pub inner: HashMap<Hash, Block>,
-    pub last_hash: Option<Hash>,
+    pub inner: Vec<Block>,
+    pub last_hash: Option<HashOf<Block>>,
 }
 
 impl BlockChain {
     pub fn add_payment(
         &mut self,
-        message: Message,
-        payment: Transaction,
+        message: Memo,
+        payment: Transfer,
         created_at: Option<BlockHeight>,
-    ) -> Result<usize, String> {
+    ) -> Result<BlockHeight, String> {
         // Either the caller specified the height that the block was created at, or we
         // assume it was created at the current height
-        let parent_hash = self.last_block_hash();
-        let this_index = match self.last_block() {
-            Some(last_block) => last_block.block.index + 1,
-            None => 0,
-        };
-        let block = Block::new(
-            payment,
-            message,
-            parent_hash.cloned(),
-            this_index,
-            created_at,
-        )?;
-
-        let block_hash = block.hash();
-        self.last_hash = Some(block_hash);
-        let res = self.inner.insert(block_hash, block);
-        assert_eq!(res, None);
-        Ok(this_index)
+        // TODO check created_at is between now and 24 hours in the past
+        let created_at = created_at.unwrap_or_else(|| self.height());
+        let block = Block::new(payment, message, created_at)?;
+        let parent_hash = self.last_hash;
+        self.last_hash = Some(block.hash(parent_hash));
+        self.inner.push(block);
+        Ok(self.height())
     }
 
-    pub fn get(&self, hash: Hash) -> Option<HashedBlock> {
-        let block = self.inner.get(&hash)?.clone();
-        Some(HashedBlock {
-            block,
-            hash,
-            __inner: (),
-        })
-    }
-
-    pub fn last_block_hash(&self) -> Option<&Hash> {
-        self.last_hash.as_ref()
-    }
-
-    pub fn last_block(&self) -> Option<HashedBlock> {
-        let last = self.last_block_hash()?;
-        self.get(*last)
+    pub fn get(&self, height: BlockHeight) -> Option<&Block> {
+        self.inner.get(usize::try_from(height).unwrap())
     }
 
     pub fn height(&self) -> BlockHeight {
-        BlockHeight(self.inner.len() as u64)
+        self.inner.len() as u64 - 1
     }
 
-    // At what blockheight was the block at the specified height created at
-    // pub fn created_at_height(&self, height: BlockHeight) -> BlockHeight {
-    //     let height = height.0 + (self.offset as u64);
-    //     BlockHeight(height)
-    // }
+    pub fn last(&self) -> Option<&Block> {
+        self.inner.last()
+    }
 }
 
 #[derive(Default)]
@@ -262,10 +282,10 @@ pub struct State {
 impl State {
     pub fn add_payment(
         &mut self,
-        message: Message,
-        payment: Transaction,
+        message: Memo,
+        payment: Transfer,
         created_at: Option<BlockHeight>,
-    ) -> Result<usize, String> {
+    ) -> Result<BlockHeight, String> {
         self.balances.add_payment(&payment);
         self.transactions.add_payment(message, payment, created_at)
     }
@@ -276,8 +296,8 @@ impl State {
         minting_canister: PrincipalId,
     ) {
         self.add_payment(
-            Message::default(),
-            Transaction::Mint {
+            Memo::default(),
+            Transfer::Mint {
                 to: minting_canister,
                 amount: ICPTs::MAX,
             },
@@ -286,8 +306,8 @@ impl State {
         .expect("Creating the minting canister account failed");
         for (to, amount) in initial_values.into_iter() {
             self.add_payment(
-                Message::default(),
-                Transaction::Send {
+                Memo::default(),
+                Transfer::Send {
                     from: minting_canister,
                     to,
                     amount,
@@ -305,13 +325,13 @@ lazy_static! {
 
 /// This is the only function that should write to state
 pub fn add_payment(
-    message: Message,
-    payment: Transaction,
+    message: Memo,
+    payment: Transfer,
     created_at: Option<BlockHeight>,
-) -> usize {
+) -> BlockHeight {
     STATE
         .write()
         .unwrap()
         .add_payment(message, payment, created_at)
-        .expect("Transaction failed")
+        .expect("Transfer failed")
 }

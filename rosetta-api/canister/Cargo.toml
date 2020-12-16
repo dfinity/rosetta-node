@@ -13,6 +13,9 @@ lazy_static = "1.4.0"
 serde = "1.0"
 ic-crypto-sha256 = {path = "../../crypto/sha256/"}
 ic-types = { path = "../../types/types" }
+hex = "0.4.2"
+digest = "0.9.0"
+phantom_newtype = { path = "../../phantom_newtype" }
 
 [[bin]]
 name = "ledger-canister"

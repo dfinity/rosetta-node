@@ -1,0 +1,14 @@
+#!/bin/bash
+set -euo pipefail
+
+# TODO replace this with some rust code
+# This doesn't deploy a real ledger, just a staging one for coinbase to test out
+
+YOUR_CID=$(dfx identity get-principal)
+
+read -r -p "Are you sure you want to wipe Coinbase's staging ledger canister? [y/N] " response
+if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+    # dfx canister --network ic create ledger # This may fail but it will return 0
+    # dfx canister --network=ic install -m reinstall ledger  "(principal \"$YOUR_CID\", vec {})"
+    dfx deploy --network=local ledger --argument "(principal \"$YOUR_CID\", vec {})"
+fi

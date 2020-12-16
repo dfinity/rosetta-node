@@ -175,6 +175,7 @@ fn build_registry_proto() {
         "def/registry/nns/v1/nns.proto",
         "def/registry/node/v1/node.proto",
         "def/registry/routing_table/v1/routing_table.proto",
+        "def/registry/provisional_whitelist/v1/provisional_whitelist.proto",
         "def/registry/subnet/v1/subnet.proto",
         "def/registry/replica_version/v1/replica_version.proto",
     ];

@@ -35,6 +35,7 @@ message Block {
 	// Payloads
 	IngressPayload ingress_payload = 9;
 	XNetPayload xnet_payload = 10;
+	bytes payload_hash = 11;
 }
 
 message RandomBeacon {

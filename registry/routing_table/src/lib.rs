@@ -34,8 +34,14 @@ pub fn resolve_destination(
     match method {
         Ok(Ic00Method::CreateCanister)
         | Ok(Ic00Method::RawRand)
-        | Ok(Ic00Method::ProvisionalCreateCanisterWithCycles)
-        | Ok(Ic00Method::SetupInitialDKG) => Ok(own_subnet),
+        | Ok(Ic00Method::ProvisionalCreateCanisterWithCycles) => Ok(own_subnet),
+        // This message needs to be routed to the NNS subnet.  We assume that
+        // this message can only be sent by canisters on the NNS subnet hence
+        // returning `own_subnet` here is fine.
+        //
+        // It might be cleaner to pipe in the actual NNS subnet id to this
+        // function and return that instead.
+        Ok(Ic00Method::SetupInitialDKG) => Ok(own_subnet),
         Ok(Ic00Method::InstallCode) => {
             // Find the destination canister from the payload.
             let args = Decode!(payload, InstallCodeArgs)?;
@@ -230,7 +236,7 @@ pub fn routing_table_insert_subnet(
 /// Stores an ordered map mapping CanisterId ranges to SubnetIds.  The ranges
 /// tracked are inclusive of start and end i.e. can be denoted as [a, b].
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RoutingTable(BTreeMap<CanisterIdRange, SubnetId>);
+pub struct RoutingTable(pub BTreeMap<CanisterIdRange, SubnetId>);
 
 impl RoutingTable {
     pub fn new(map: BTreeMap<CanisterIdRange, SubnetId>) -> Self {

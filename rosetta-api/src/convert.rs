@@ -3,11 +3,14 @@ use crate::models::{
     AccountIdentifier, Amount, ApiError, BlockIdentifier, Currency, Operation, Timestamp,
     TransactionIdentifier,
 };
+use crate::sync::HashedBlock;
 use core::fmt::Display;
 use dfn_candid::Candid;
 use ic_types::messages::{HttpRequestEnvelope, HttpSubmitContent};
 use ic_types::PrincipalId;
-use ledger_canister::{Hash, HashedBlock, ICPTs, SubmitArgs, Transaction, DECIMAL_PLACES};
+use ledger_canister::{
+    BlockHeight, HashOf, ICPTs, SubmitArgs, Transaction, Transfer, DECIMAL_PLACES,
+};
 use on_wire::{FromWire, IntoWire};
 use serde_json::map::Map;
 use serde_json::{from_value, Value};
@@ -36,7 +39,7 @@ const MINT: &str = "MINT";
 const BURN: &str = "BURN";
 
 pub fn transaction(
-    transaction: &Transaction,
+    transaction: &Transfer,
     transaction_identifier: TransactionIdentifier,
 ) -> Result<models::Transaction, ApiError> {
     let operations = operations(transaction)?;
@@ -44,13 +47,13 @@ pub fn transaction(
 }
 
 // This currently only takes a transation
-pub fn operations(transaction: &Transaction) -> Result<Vec<Operation>, ApiError> {
+pub fn operations(transaction: &Transfer) -> Result<Vec<Operation>, ApiError> {
     // The spec just says if there aren't smart contracts all statuses should
     // be the same
     let status = STATUS.to_string();
 
     let ops = match transaction {
-        Transaction::Send { from, to, amount } => {
+        Transfer::Send { from, to, amount } => {
             let from_account = Some(account_identifier(from));
             let to_account = Some(account_identifier(to));
             let amount = i128::try_from(amount.get_doms())
@@ -73,13 +76,13 @@ pub fn operations(transaction: &Transaction) -> Result<Vec<Operation>, ApiError>
             vec![db, cr]
         }
         // TODO include the destination in the metadata
-        Transaction::Mint { to, amount, .. } => {
+        Transfer::Mint { to, amount, .. } => {
             let account = Some(account_identifier(to));
             let amount = Some(amount_(*amount)?);
             let op = Operation::new(0, MINT.to_string(), status, account, amount);
             vec![op]
         }
-        Transaction::Burn { from, amount, .. } => {
+        Transfer::Burn { from, amount, .. } => {
             let amount = i128::try_from(amount.get_doms())
                 .map_err(|_| ApiError::InternalError(true, None))?;
             let account = Some(account_identifier(from));
@@ -91,7 +94,7 @@ pub fn operations(transaction: &Transaction) -> Result<Vec<Operation>, ApiError>
     Ok(ops)
 }
 
-pub fn from_operations(ops: Vec<Operation>) -> Result<Vec<Transaction>, ApiError> {
+pub fn from_operations(ops: Vec<Operation>) -> Result<Vec<Transfer>, ApiError> {
     fn min_identifier_index(op: &Operation) -> i64 {
         let op_index = op.operation_identifier.index;
         let mut related_indicies: Vec<i64> = match &op.related_operations {
@@ -150,7 +153,7 @@ pub fn from_operations(ops: Vec<Operation>) -> Result<Vec<Transaction>, ApiError
         Ok((amount, account))
     }
 
-    fn to_transaction(mut ops: Vec<Operation>) -> Result<Transaction, ApiError> {
+    fn to_transaction(mut ops: Vec<Operation>) -> Result<Transfer, ApiError> {
         ops.sort_by_key(|v| v.operation_identifier.index);
 
         let handle_error = move |id| {
@@ -177,8 +180,8 @@ pub fn from_operations(ops: Vec<Operation>) -> Result<Vec<Transaction>, ApiError
                     return error("Credit account + Debit amount must net to zero");
                 }
 
-                let amount = if db_amount > 0 {
-                    ICPTs::from_doms(db_amount as u64)
+                let amount = if cr_amount > 0 {
+                    ICPTs::from_doms(cr_amount as u64)
                 } else {
                     return error("Debit amount must be greater than zero");
                 };
@@ -187,7 +190,7 @@ pub fn from_operations(ops: Vec<Operation>) -> Result<Vec<Transaction>, ApiError
                     return error("Transactions can't start and finish in the same place");
                 }
 
-                Ok(Transaction::Send { from, to, amount })
+                Ok(Transfer::Send { from, to, amount })
             }
             // TODO support Burn here
             wrong => Err(ApiError::InvalidTransaction(
@@ -248,12 +251,12 @@ pub fn icp() -> Currency {
 }
 
 pub fn block_id(block: &HashedBlock) -> Result<BlockIdentifier, ApiError> {
-    let idx = i64::try_from(block.block.index).map_err(internal_error)?;
+    let idx = i64::try_from(block.index).map_err(internal_error)?;
     Ok(BlockIdentifier::new(idx, from_hash(&block.hash)))
 }
 
-pub fn transaction_identifier(hash: &Hash) -> TransactionIdentifier {
-    TransactionIdentifier::new(hex::encode(hash.to_be_bytes()))
+pub fn transaction_identifier(hash: &HashOf<Transaction>) -> TransactionIdentifier {
+    TransactionIdentifier::new(format!("{}", hash))
 }
 
 pub fn account_identifier(uid: &PrincipalId) -> AccountIdentifier {
@@ -271,21 +274,19 @@ pub fn user_id(aid: &AccountIdentifier) -> Result<PrincipalId, String> {
     }
 }
 
-const LAST_HASH: &str = "last_hash";
+const LAST_HEIGHT: &str = "last_height";
 
 // Last hash is an option because there may be no blocks on the system
-pub fn from_metadata(mut ob: models::Object) -> Result<Option<Hash>, ApiError> {
+pub fn from_metadata(mut ob: models::Object) -> Result<BlockHeight, ApiError> {
     let v = ob
-        .remove(LAST_HASH)
+        .remove(LAST_HEIGHT)
         .ok_or(ApiError::InternalError(false, None))?;
     from_value(v).map_err(|_| ApiError::InternalError(false, None))
 }
 
-pub fn into_metadata(hash: Option<Hash>) -> models::Object {
+pub fn into_metadata(h: BlockHeight) -> models::Object {
     let mut m = Map::new();
-    if let Some(h) = hash {
-        m.insert(LAST_HASH.to_string(), Value::from(h));
-    }
+    m.insert(LAST_HEIGHT.to_string(), Value::from(h));
     m
 }
 
@@ -308,17 +309,25 @@ pub fn from_hex(hex: String) -> Result<Vec<u8>, ApiError> {
     })
 }
 
-pub fn transaction_id(signed_transaction: &str) -> Result<TransactionIdentifier, ApiError> {
-    let envelope: HttpRequestEnvelope<HttpSubmitContent> =
-        serde_json::from_str(signed_transaction).map_err(internal_error)?;
+pub fn to_hex(v: &[u8]) -> String {
+    hex::encode(v)
+}
 
-    let arg = match envelope.content {
-        HttpSubmitContent::Call { update } => update.arg,
+pub fn transaction_id(
+    signed_transaction: HttpRequestEnvelope<HttpSubmitContent>,
+) -> Result<TransactionIdentifier, ApiError> {
+    let update = match signed_transaction.content {
+        HttpSubmitContent::Call { update } => update,
     };
-    let (message, _, _, _) = from_arg(arg.0)?;
+    let from = PrincipalId::try_from(update.sender.0).map_err(|e| internal_error(e.to_string()))?;
+    let (memo, amount, to, bh) = from_arg(update.arg.0)?;
+    let created_at = bh.ok_or_else(|| internal_error(
+        "A transaction ID cannot be generated from a constructed transaction without an explicit block height"
+    ))?;
 
-    // TODO fix this in the next PR
-    Ok(transaction_identifier(&message.0))
+    let hash = Transaction::new(from, to, amount, memo, created_at).hash();
+
+    Ok(transaction_identifier(&hash))
 }
 
 pub fn internal_error<D: Display>(msg: D) -> ApiError {
@@ -345,10 +354,10 @@ pub fn to_arg(args: SubmitArgs) -> Vec<u8> {
     Candid(args).into_bytes().expect("Serialization failed")
 }
 
-pub fn from_hash(hash: &Hash) -> String {
+pub fn from_hash<T>(hash: &HashOf<T>) -> String {
     format!("{}", *hash)
 }
 
-pub fn to_hash(s: &str) -> Result<Hash, ApiError> {
+pub fn to_hash<T>(s: &str) -> Result<HashOf<T>, ApiError> {
     s.parse().map_err(|_| ApiError::InternalError(false, None))
 }
