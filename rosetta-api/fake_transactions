@@ -1,0 +1,21 @@
+#!/bin/bash
+set -euo pipefail
+
+# Go from a hex to a canister id
+function textual_encode() {
+    (
+        echo "$1" | xxd -r -p | /usr/bin/crc32 /dev/stdin
+        echo -n "$1"
+    ) \
+        | xxd -r -p | base32 | tr A-Z a-z \
+        | tr -d = | fold -w5 | paste -sd'-' -
+}
+
+# Create 10_000 random transactions on the sodium ledger
+for i in {1..100}; do
+    # Generate random hex
+    HEX=$(hexdump -n 16 -e '4/4 "%08X" 1 "\n"' /dev/random)
+    # Generate a random canister ID
+    CID=$(textual_encode $HEX)
+    dfx canister --network=local call ledger send "($RANDOM, record {doms= $RANDOM}, principal \"$CID\" , null)" &
+done

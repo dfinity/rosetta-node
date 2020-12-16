@@ -59,45 +59,26 @@ fn into_fork(left_tree: HashTree, right_tree: HashTree) -> HashTree {
     }
 }
 
-// Wraps the given hash_trees pairwise into HashTree::HashFork-entries.
-// panic!s if hash_trees is empty or has an odd number of entries.
-fn into_pairwise_forks(mut hash_trees: VecDeque<HashTree>) -> VecDeque<HashTree> {
-    if hash_trees.is_empty() || hash_trees.len() % 2 != 0 {
-        panic!("Illegal state: an even number of hash trees required");
-    }
-    let mut forks = VecDeque::new();
-    while !hash_trees.is_empty() {
-        let left_tree = hash_trees.pop_front().unwrap();
-        let right_tree = hash_trees.pop_front().unwrap();
-        forks.push_back(into_fork(left_tree, right_tree));
-    }
-    forks
-}
-
 // Wraps the given hash_trees into a single HashTree, maintaining
 // the order of the subtrees.
 fn into_hash_tree(mut hash_trees: VecDeque<HashTree>) -> HashTree {
-    match hash_trees.len() {
-        // an empty subtree
-        0 => HashTree::Leaf {
+    if hash_trees.is_empty() {
+        return HashTree::Leaf {
             digest: empty_subtree_hash(),
-        },
-        // a subtree with a single sub-subtree
-        1 => hash_trees.pop_front().unwrap(),
-        // a subtree with at least 2 sub-subtrees
-        n => {
-            if n % 2 == 0 {
-                // even number, make forks in pairs
-                into_hash_tree(into_pairwise_forks(hash_trees))
-            } else {
-                // odd number, forks in pairs plus a singleton
-                let singleton = hash_trees.pop_back().unwrap();
-                let mut forks = into_pairwise_forks(hash_trees);
-                forks.push_back(singleton);
-                into_hash_tree(forks)
+        };
+    }
+
+    let mut combined_trees = VecDeque::with_capacity((hash_trees.len() + 1) / 2);
+    while hash_trees.len() != 1 {
+        while let Some(left) = hash_trees.pop_front() {
+            match hash_trees.pop_front() {
+                Some(right) => combined_trees.push_back(into_fork(left, right)),
+                None => combined_trees.push_back(left),
             }
         }
+        std::mem::swap(&mut hash_trees, &mut combined_trees);
     }
+    hash_trees.pop_front().unwrap()
 }
 
 fn write_labeled_tree<T: Debug>(
@@ -829,9 +810,8 @@ impl HashTreeBuilderImpl {
     // /////////////////////////////////////////////////////////
     // API for obtaining the constructed structures.
 
-    // Returns the HashTree corresponding to the constructed LabeledTree
-    // if the construction is complete, and `None` otherwise.
-    // Does not `panic!`.
+    /// Like `into_hash_tree`, but returns a copy of the hash tree.
+    /// Does not `panic!`.
     #[allow(dead_code)]
     pub fn as_hash_tree(&self) -> Option<HashTree> {
         if let Some(hash_tree) = self.hash_tree.as_ref() {
@@ -841,9 +821,15 @@ impl HashTreeBuilderImpl {
         }
     }
 
-    // Returns the constructed LabeledTree if the construction
-    // is complete, and `None` otherwise.
-    // Does not `panic!`.
+    /// Returns the HashTree corresponding to the traversed tree if the
+    /// construction is complete, and None otherwise.
+    pub fn into_hash_tree(self) -> Option<HashTree> {
+        self.hash_tree
+    }
+
+    /// Returns the constructed LabeledTree if the construction
+    /// is complete, and `None` otherwise.
+    /// Does not `panic!`.
     #[allow(dead_code)]
     pub fn as_labeled_tree(&self) -> Option<LabeledTree<Digest>> {
         if let Some(labeled_tree) = self.labeled_tree.as_ref() {
@@ -1000,13 +986,10 @@ impl HashTreeBuilder for HashTreeBuilderImpl {
             ActiveNode::SubTree {
                 children: finished_children,
                 label: finished_label,
-                hash_nodes: mut finished_hash_nodes,
+                hash_nodes: finished_hash_nodes,
             } => {
-                let labels: Vec<Label> = finished_hash_nodes.keys().cloned().collect();
-                let hash_trees: VecDeque<HashTree> = labels
-                    .iter()
-                    .map(|label| finished_hash_nodes.remove(label).unwrap())
-                    .collect();
+                let hash_trees: VecDeque<_> =
+                    finished_hash_nodes.into_iter().map(|(_k, v)| v).collect();
                 let hash_tree = into_hash_tree(hash_trees);
 
                 if self.curr_path.is_empty() {

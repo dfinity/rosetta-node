@@ -23,29 +23,30 @@ fn init(minting_canister: PrincipalId, initial_values: Vec<(PrincipalId, ICPTs)>
 /// with the specified amount of ICPTs. It returns the index of the resulting
 /// transaction
 fn send(
-    message: Message,
+    memo: Memo,
     amount: ICPTs,
     to: PrincipalId,
     blockheight: Option<BlockHeight>,
-) -> usize {
+) -> BlockHeight {
     let from = caller();
-    let payment = Transaction::Send { from, amount, to };
-    add_payment(message, payment, blockheight)
+    let transfer = Transfer::Send { from, amount, to };
+    add_payment(memo, transfer, blockheight)
 }
 
 /// This gives you the index of the last block added to the chain
 // Certification isn't implemented yet
-fn tip_of_chain() -> (Certification, Hash) {
-    let transactions = &STATE.read().unwrap().transactions;
-    let hash = transactions
-        .last_block_hash()
-        .expect("Ledger is never empty after init");
-    (*hash, *hash)
+fn tip_of_chain() -> (Certification, BlockHeight) {
+    let height = &STATE.read().unwrap().transactions.height();
+    (0, *height)
 }
 
-fn block(block_hash: Hash) -> Option<HashedBlock> {
-    let transactions = &STATE.read().unwrap().transactions;
-    transactions.get(block_hash)
+fn block(block_height: BlockHeight) -> Option<Block> {
+    STATE
+        .read()
+        .unwrap()
+        .transactions
+        .get(block_height)
+        .cloned()
 }
 
 /// Get an account balance.
@@ -61,6 +62,12 @@ fn account_balance(uid: PrincipalId) -> ICPTs {
 
 #[export_name = "canister_init"]
 fn main() {
+    upgrade()
+}
+
+// We don't support upgrade, so just run init
+#[export_name = "canister_post_upgrade"]
+fn upgrade() {
     over_init(|Candid((minting_canister, initial_values))| init(minting_canister, initial_values))
 }
 

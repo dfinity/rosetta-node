@@ -12,13 +12,14 @@ use ic_types::{
     time::Time,
     Height,
 };
+use serde::{Deserialize, Serialize};
 
 // tag::change_set[]
 pub type ChangeSet = Vec<ChangeAction>;
 
 // TODO(CON-272): Remove this clippy exception
 #[allow(clippy::large_enum_variant)]
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ChangeAction {
     AddToValidated(ConsensusMessage),
     MoveToValidated(ConsensusMessage),
@@ -236,18 +237,12 @@ pub trait HeightIndexedPool<T> {
 
 /// Reader of consensus related states.
 pub trait ConsensusPoolCache: Send + Sync {
-    /// Return the height of the latest/highest finalized block.
-    fn finalized_height(&self) -> Height;
-
     /// Return the latest/highest finalized block.
     fn finalized_block(&self) -> Block;
 
     /// Return the time as recorded in the latest/highest finalized block.
     /// Return None if there has not been any finalized block since genesis.
     fn consensus_time(&self) -> Option<Time>;
-
-    /// Return the height of the latest/highest CatchUpPackage.
-    fn catch_up_height(&self) -> Height;
 
     /// Return the latest/highest CatchUpPackage.
     fn catch_up_package(&self) -> CatchUpPackage;

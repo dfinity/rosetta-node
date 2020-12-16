@@ -7,4 +7,12 @@ features! {
     pub mod cow_state_feature {
         const cow_state = 0b0000_0001
     }
+
+}
+
+features! {
+    // Sandboxed Execution
+    pub mod sandboxed_execution_feature {
+        const sandboxed_execution = 0b0000_0001
+    }
 }

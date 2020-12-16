@@ -5,7 +5,7 @@
 use crate::{
     consensus::{
         certification::{Certification, CertificationContent},
-        HasVersion, ThresholdSignature,
+        ThresholdSignature,
     },
     crypto::{CombinedThresholdSig, CombinedThresholdSigOf, Signed},
     replica_version::ReplicaVersionParseError,
@@ -47,7 +47,6 @@ impl<T> TryFrom<pb::ThresholdSignature> for ThresholdSignature<T> {
 impl From<CertificationContent> for pb::CertificationContent {
     fn from(value: CertificationContent) -> Self {
         Self {
-            version: value.version().to_string(),
             hash: value.hash.get().0,
         }
     }

@@ -171,6 +171,12 @@ pub fn node_id_try_from_protobuf(value: pb::NodeId) -> Result<NodeId, PrincipalI
     Ok(NodeId::from(principal_id))
 }
 
+/// Represents an amount of weighted instructions that can be used as the
+/// execution cutoff point for messages. This amount can be used to charge the
+/// respective amount of `Cycles` on a canister's balance for message execution.
+pub struct NumInstructionsTag;
+pub type NumInstructions = AmountOf<NumInstructionsTag, u64>;
+
 pub struct QueueIndexTag;
 /// Index into a queue; used in the context of `InputQueue` / `OutputQueue` to
 /// define message order.
@@ -262,15 +268,15 @@ impl std::ops::Sub for QueryAllocation {
     }
 }
 
-impl Into<Cycles> for QueryAllocation {
-    fn into(self) -> Cycles {
-        Cycles::from(self.0)
+impl Into<NumInstructions> for QueryAllocation {
+    fn into(self) -> NumInstructions {
+        NumInstructions::from(self.0)
     }
 }
 
-impl From<Cycles> for QueryAllocation {
-    fn from(cycles: Cycles) -> QueryAllocation {
-        QueryAllocation(cycles.get())
+impl From<NumInstructions> for QueryAllocation {
+    fn from(num_instructions: NumInstructions) -> QueryAllocation {
+        QueryAllocation(num_instructions.get())
     }
 }
 
@@ -409,11 +415,12 @@ fn display_canister_id() {
 #[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq, Serialize, Hash)]
 pub struct MemoryAllocation(NumBytes);
 
-// According to the Internet Computer's public spec the default
-// `MemoryAllocation` is 8GiB.
+// The default memory allocation is set to 10MiB so that we allow for (best
+// case) in the order of thousands (~3000) canisters to exist in a subnet given
+// the `SUBNET_MEMORY_CAPACITY` is set to 30GiB.
 impl Default for MemoryAllocation {
     fn default() -> Self {
-        MemoryAllocation(NumBytes::from(8 * 1024 * 1024 * 1024))
+        MemoryAllocation(NumBytes::from(10 * 1024 * 1024))
     }
 }
 
@@ -425,7 +432,10 @@ pub struct InvalidMemoryAllocationError {
 }
 
 const MIN_MEMORY_ALLOCATION: u64 = 0;
-const MAX_MEMORY_ALLOCATION: u64 = 1 << 48;
+// Set the maximum allowed memory allocation to 8GB to ensure that no single
+// canister can claim the full subnet's capacity (set to 30GiB, see
+// `SUBNET_MEMORY_CAPACITY`).
+const MAX_MEMORY_ALLOCATION: u64 = 8 * 1024 * 1024 * 1024;
 
 impl InvalidMemoryAllocationError {
     pub fn new(given: u64) -> Self {
