@@ -80,7 +80,12 @@ pub trait ArtifactClient<Artifact: artifact::ArtifactKind>: Send + Sync {
     ///
     /// TODO: Consider random tape height here too, which comes after
     /// finalization.
-    fn get_filter(&self, _filter: &mut Artifact::Filter) {}
+    fn get_filter(&self) -> Artifact::Filter
+    where
+        Artifact::Filter: Default,
+    {
+        Default::default()
+    }
 
     /// Get adverts of all validated artifacts by the filter. This filter is
     /// used to derive only the relevant adverts.

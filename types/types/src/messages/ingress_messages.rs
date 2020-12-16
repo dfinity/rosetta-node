@@ -2,7 +2,7 @@
 
 use super::{
     HttpHandlerError, HttpRequestEnvelope, HttpSubmitContent, MessageId, RawHttpRequest,
-    RawHttpRequestVal, UserSignature, UserSignatureOnly,
+    RawHttpRequestVal, UserSignature,
 };
 use crate::{crypto::Signed, CanisterId, CountBytes, PrincipalId, Time, UserId};
 use ic_protobuf::{
@@ -193,7 +193,7 @@ impl TryFrom<(HttpRequestEnvelope<HttpSubmitContent>, Time)> for SignedIngress {
                     }),
                     (Some(pubkey), Some(signature), delegation) => {
                         let signature = UserSignature {
-                            signature: UserSignatureOnly::from(signature.0),
+                            signature: signature.0,
                             signer_pubkey: pubkey.0,
                             sender_delegation: delegation,
                         };
