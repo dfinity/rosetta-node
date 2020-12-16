@@ -38,8 +38,8 @@ actix-rt = "*"
 [dev-dependencies]
 rand_distr = "0.3.0"
 thread_local = "1.0.1"
-ic-scenario-tests = { path = "../scenario_tests" }
-canister-test = { path = "../rust_canisters/canister_test" }
+# ic-scenario-tests = { path = "../scenario_tests" }
+# canister-test = { path = "../rust_canisters/canister_test" }
 ed25519-dalek = "1.0.0-pre.3"
 async-std = "1.8.0"
 
