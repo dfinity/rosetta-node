@@ -1,4 +1,4 @@
-use crate::{artifact_pool::UnvalidatedArtifact, consensus_pool::ConsensusPool};
+use crate::artifact_pool::UnvalidatedArtifact;
 use ic_types::{
     artifact::{DkgArtifact, PriorityFn},
     consensus::dkg,
@@ -7,11 +7,7 @@ use ic_types::{
 };
 
 pub trait Dkg: Send {
-    fn on_state_change(
-        &self,
-        consensus_pool: &dyn ConsensusPool,
-        dkg_pool: &dyn DkgPool,
-    ) -> ChangeSet;
+    fn on_state_change(&self, dkg_pool: &dyn DkgPool) -> ChangeSet;
 }
 
 pub trait DkgGossip: Send + Sync {
@@ -28,6 +24,8 @@ pub trait DkgPool: Send + Sync {
     /// sections is that they correspond to a DKG Id with the start height
     /// equal to current_start_height.
     fn get_current_start_height(&self) -> Height;
+    /// Checks if the message is present in the validated section.
+    fn validated_contains(&self, msg: &dkg::Message) -> bool;
 }
 
 /// Trait containing only mutable functions wrt. DkgPool

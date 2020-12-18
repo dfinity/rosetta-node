@@ -30,7 +30,7 @@ impl CountBytes for IngressPoolObject {
 
 impl From<SignedIngress> for IngressPoolObject {
     fn from(signed_ingress: SignedIngress) -> Self {
-        let message_id = MessageId::from(&signed_ingress.content);
+        let message_id = MessageId::from(signed_ingress.content());
         let byte_size = signed_ingress.count_bytes();
         Self {
             signed_ingress,

@@ -86,17 +86,17 @@ impl UtilityCommand {
 
     /// Create the utility command that, when called, reads the public key from
     /// the USB HSM.
-    pub fn read_public_key(key_id: Option<&str>) -> Self {
+    pub fn read_public_key(hsm_slot: Option<&str>, key_id: Option<&str>) -> Self {
         Self::new(
             "pkcs11-tool".to_string(),
             vec![
-                "--read-object",        // operation
-                "--slot",               //
-                "0",                    // default: 0
-                "--type",               //
-                "pubkey",               // type
-                "--id",                 //
-                key_id.unwrap_or("01"), // default: 01
+                "--read-object",         // operation
+                "--slot",                //
+                hsm_slot.unwrap_or("0"), // default: 0
+                "--type",                //
+                "pubkey",                // type
+                "--id",                  //
+                key_id.unwrap_or("01"),  // default: 01
             ]
             .into_iter()
             .map(|s| s.to_string())
@@ -104,11 +104,18 @@ impl UtilityCommand {
         )
     }
 
-    pub fn sign_message(msg: Vec<u8>, pin: Option<&str>, key_id: Option<&str>) -> Self {
+    pub fn sign_message(
+        msg: Vec<u8>,
+        hsm_slot: Option<&str>,
+        pin: Option<&str>,
+        key_id: Option<&str>,
+    ) -> Self {
         Self::new(
             "pkcs11-tool".to_string(),
             vec![
                 "--login",               // login to the hsm
+                "--slot",                // choose HSM slot
+                hsm_slot.unwrap_or("0"), // default: 0
                 "--pin",                 //
                 pin.unwrap_or("358138"), // default:
                 "--sign",                // operation

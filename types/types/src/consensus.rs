@@ -967,6 +967,7 @@ impl From<&Block> for pb::Block {
             time: block.context.time.as_nanos_since_unix_epoch(),
             xnet_payload,
             ingress_payload,
+            payload_hash: block.payload.get_hash().clone().get().0,
         }
     }
 }

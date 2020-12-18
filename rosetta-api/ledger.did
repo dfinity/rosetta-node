@@ -1,0 +1,16 @@
+type Message = record {
+     0: nat64;
+};
+
+type ICPTs = record {
+     doms: nat64;
+};
+
+type BlockHeight = record {
+     0: nat64;
+};
+
+service: (minting_canister: principal, initial_values: vec record {0: principal; 1: ICPTs}) -> {
+  "send": (nat64, ICPTs, principal, opt nat64) -> (nat64);
+  "account_balance": (principal) -> (ICPTs) query;
+}

@@ -76,8 +76,6 @@ pub mod state_sync;
 pub mod time;
 pub mod transport;
 pub mod user_error;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod wasm;
 pub mod xnet;
 
 use crate::messages::CanisterInstallMode;
@@ -88,7 +86,7 @@ pub use funds::*;
 pub use ic_base_types::{
     subnet_id_into_protobuf, subnet_id_try_from_protobuf, CanisterId, CanisterIdError,
     CanisterStatusType, NodeId, NodeTag, NumBytes, PrincipalId, PrincipalIdBlobParseError,
-    RegistryVersion, SubnetId,
+    PrincipalIdParseError, RegistryVersion, SubnetId,
 };
 pub use ic_crypto_internal_types::NodeIndex;
 use ic_error_types::{ErrorCode, UserError};
@@ -415,11 +413,12 @@ fn display_canister_id() {
 #[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq, Serialize, Hash)]
 pub struct MemoryAllocation(NumBytes);
 
-// According to the Internet Computer's public spec the default
-// `MemoryAllocation` is 8GiB.
+// The default memory allocation is set to 10MiB so that we allow for (best
+// case) in the order of thousands (~3000) canisters to exist in a subnet given
+// the `SUBNET_MEMORY_CAPACITY` is set to 30GiB.
 impl Default for MemoryAllocation {
     fn default() -> Self {
-        MemoryAllocation(NumBytes::from(8 * 1024 * 1024 * 1024))
+        MemoryAllocation(NumBytes::from(10 * 1024 * 1024))
     }
 }
 
@@ -431,7 +430,10 @@ pub struct InvalidMemoryAllocationError {
 }
 
 const MIN_MEMORY_ALLOCATION: u64 = 0;
-const MAX_MEMORY_ALLOCATION: u64 = 1 << 48;
+// Set the maximum allowed memory allocation to 8GB to ensure that no single
+// canister can claim the full subnet's capacity (set to 30GiB, see
+// `SUBNET_MEMORY_CAPACITY`).
+const MAX_MEMORY_ALLOCATION: u64 = 8 * 1024 * 1024 * 1024;
 
 impl InvalidMemoryAllocationError {
     pub fn new(given: u64) -> Self {

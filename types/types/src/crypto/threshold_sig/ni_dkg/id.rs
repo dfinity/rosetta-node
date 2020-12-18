@@ -7,9 +7,14 @@ mod tests;
 /// The ID for non-interactive DKG. Identifies a DKG epoch.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct NiDkgId {
+    /// This field refers to the height of the block denoting the start of the
+    /// computation of this DKG instance (resulting into a transcript later).
     pub start_block_height: Height,
+    /// The id of the subnet performing the DKG computation.
     pub dealer_subnet: SubnetId,
+    /// Differentiator for the threshold level of DKGs.
     pub dkg_tag: NiDkgTag,
+    /// Indicates which subnet will use the result of this DKG.
     pub target_subnet: NiDkgTargetSubnet,
 }
 

@@ -30,6 +30,7 @@ ledger-canister = {path = "canister"}
 rand = "0.7"
 structopt = "0.3.20"
 async-trait = "0.1.41"
+tokio = {version = "0.3.6", features = ["sync"]}
 
 #temporarily copied from dev-dependencies
 actix-rt = "*"
@@ -37,7 +38,10 @@ actix-rt = "*"
 [dev-dependencies]
 rand_distr = "0.3.0"
 thread_local = "1.0.1"
-# ic-scenario-tests = { path = "../scenario_tests" }
+ic-scenario-tests = { path = "../scenario_tests" }
+canister-test = { path = "../rust_canisters/canister_test" }
+ed25519-dalek = "1.0.0-pre.3"
+async-std = "1.8.0"
 
 [[test]]
 name = "rosetta-api-tests"

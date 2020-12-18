@@ -6,12 +6,12 @@ pub mod sync;
 
 use crate::convert::account_from_public_key;
 use crate::convert::operations;
+use crate::sync::HashedBlock;
 use ic_interfaces::crypto::DOMAIN_IC_REQUEST;
 use ic_types::messages::{
     Blob, HttpCanisterUpdate, HttpRequestEnvelope, HttpSubmitContent, MessageId, RawHttpRequest,
 };
 use ic_types::time::current_time_and_expiry_time;
-use ledger_canister::HashedBlock;
 use models::*;
 use rand::Rng;
 
@@ -22,6 +22,7 @@ use crate::convert::{
     transaction_id,
 };
 use crate::ledger_client::LedgerAccess;
+use convert::{from_metadata, into_metadata, to_arg};
 use ledger_canister::{BlockHeight, Memo, Transfer};
 use serde_json::{json, map::Map};
 use std::convert::TryFrom;
@@ -56,9 +57,9 @@ fn create_parent_block_id(
     blocks: &ledger_client::Blocks,
     block: &HashedBlock,
 ) -> Result<BlockIdentifier, ApiError> {
-    let idx = std::cmp::max(0, to_index(block.block.index)? - 1);
+    let idx = std::cmp::max(0, to_index(block.index)? - 1);
 
-    let parent = blocks.get_at(idx as usize)?;
+    let parent = blocks.get_at(idx as u64)?;
     Ok(convert::block_id(&parent)?)
 }
 
@@ -76,8 +77,7 @@ fn get_block(
             if block_height < 0 {
                 return Err(ApiError::InvalidBlockId(false, None));
             }
-            let idx = block_height as usize;
-            let block = blocks.get_at(idx)?;
+            let block = blocks.get_at(block_height as u64)?;
 
             if block.hash != hash {
                 return Err(ApiError::InvalidBlockId(false, None));
@@ -93,7 +93,7 @@ fn get_block(
                 return Err(ApiError::InvalidBlockId(false, None));
             }
             let idx = block_height as usize;
-            blocks.get_at(idx)?
+            blocks.get_at(idx as u64)?
         }
         Some(PartialBlockIdentifier {
             index: None,
@@ -144,13 +144,10 @@ impl RosettaRequestHandler {
             .and_then(|x| CanisterId::try_from(x).ok())
             .ok_or(ApiError::InvalidAccountId(false, None))?;
 
-        let blocks = self.ledger.read_blocks();
+        let blocks = self.ledger.read_blocks().await;
         let block = get_block(&blocks, msg.block_identifier)?;
 
-        let icp = blocks
-            .get_balances(block.hash)?
-            .get(canister_id.get())
-            .ok_or(ApiError::InvalidAccountId(true, None))?;
+        let icp = blocks.get_balances(block.hash)?.get(canister_id.get());
         let amount = convert::amount_(icp)?;
         let b = convert::block_id(&block)?;
         Ok(AccountBalanceResponse::new(b, vec![amount]))
@@ -160,7 +157,7 @@ impl RosettaRequestHandler {
     pub async fn block(&self, msg: models::BlockRequest) -> Result<BlockResponse, ApiError> {
         verify_network_id(self.ledger.ledger_canister_id(), &msg.network_identifier)?;
 
-        let blocks = self.ledger.read_blocks();
+        let blocks = self.ledger.read_blocks().await;
         let b = get_block(&blocks, Some(msg.block_identifier))?;
         let b_id = convert::block_id(&b)?;
         let parent_id = create_parent_block_id(&blocks, &b)?;
@@ -186,7 +183,7 @@ impl RosettaRequestHandler {
         msg: models::BlockTransactionRequest,
     ) -> Result<BlockTransactionResponse, ApiError> {
         verify_network_id(self.ledger.ledger_canister_id(), &msg.network_identifier)?;
-        let blocks = self.ledger.read_blocks();
+        let blocks = self.ledger.read_blocks().await;
         let b_id = Some(PartialBlockIdentifier {
             index: Some(msg.block_identifier.index),
             hash: Some(msg.block_identifier.hash),
@@ -293,7 +290,12 @@ impl RosettaRequestHandler {
         msg: models::ConstructionMetadataRequest,
     ) -> Result<ConstructionMetadataResponse, ApiError> {
         verify_network_id(self.ledger.ledger_canister_id(), &msg.network_identifier)?;
-        Ok(ConstructionMetadataResponse::new(Map::new()))
+        let last_index: BlockHeight = match self.ledger.read_blocks().await.last()? {
+            Some(hb) => hb.index,
+            None => 0,
+        };
+        let meta = into_metadata(last_index);
+        Ok(ConstructionMetadataResponse::new(meta))
     }
 
     /// Parse a Transfer
@@ -350,21 +352,22 @@ impl RosettaRequestHandler {
     ) -> Result<ConstructionPayloadsResponse, ApiError> {
         verify_network_id(self.ledger.ledger_canister_id(), &msg.network_identifier)?;
 
-        let ops = msg.operations;
+        let ops = msg.operations.clone();
         let transactions = convert::from_operations(ops)?;
         let mut payloads: Vec<_> = transactions
-            .iter()
+            .into_iter()
             .map(|t| match t {
                 Transfer::Send { from, to, amount } => {
-                    // What we send to the canister
                     let mut rng = rand::thread_rng();
-                    // TODO make transaction ID a distinct type maybe get this to include a previous
-                    // hash?
-                    let transaction_id: Memo = Memo(rng.gen());
+                    let memo: Memo = Memo(rng.gen());
+                    let metadata = msg
+                        .metadata
+                        .clone()
+                        .ok_or_else(|| internal_error("missing metadata"))?;
+                    let height = from_metadata(metadata)?;
 
-                    // TODO add transaction ID to the canister
-                    let argument =
-                        serde_json::to_vec(&(transaction_id, to, amount)).expect("Encoding failed");
+                    // What we send to the canister
+                    let argument = to_arg((memo, amount, to, Some(height)));
 
                     let (current_time, expiry) = current_time_and_expiry_time();
 
@@ -395,16 +398,16 @@ impl RosettaRequestHandler {
 
                     let payload = SigningPayload {
                         address: None,
-                        account_identifier: Some(account_identifier(from)),
+                        account_identifier: Some(account_identifier(&from)),
                         hex_bytes: hex::encode(sig_data),
                         signature_type: Some(SignatureType::ED25519),
                     };
 
-                    (unsigned_transaction, payload)
+                    Ok((unsigned_transaction, payload))
                 }
                 _ => panic!("This should be impossible"),
             })
-            .collect();
+            .collect::<Result<Vec<_>, ApiError>>()?;
 
         // TODO remove this restriction
         if payloads.len() == 1 {
@@ -521,7 +524,7 @@ impl RosettaRequestHandler {
                     ApiError::BlockchainEmpty(false, None),
                     ApiError::InvalidTransaction(false, None),
                 ],
-                "historical_balance_lookup": false
+                "historical_balance_lookup": true
             }
         });
         Ok(serde_json::from_value(resp).unwrap())
@@ -533,7 +536,7 @@ impl RosettaRequestHandler {
         msg: models::NetworkRequest,
     ) -> Result<NetworkStatusResponse, ApiError> {
         verify_network_id(self.ledger.ledger_canister_id(), &msg.network_identifier)?;
-        let blocks = self.ledger.read_blocks();
+        let blocks = self.ledger.read_blocks().await;
         let tip = blocks
             .last()?
             .ok_or(ApiError::BlockchainEmpty(true, None))?;
@@ -544,10 +547,13 @@ impl RosettaRequestHandler {
         let genesis_block_id = convert::block_id(&genesis_block)?;
         let peers = vec![];
 
+        let sync_status = SyncStatus::new(tip.index as i64);
+
         Ok(NetworkStatusResponse::new(
             tip_id,
             tip_timestamp,
             genesis_block_id,
+            sync_status,
             peers,
         ))
     }

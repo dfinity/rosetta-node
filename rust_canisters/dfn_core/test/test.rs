@@ -1,7 +1,6 @@
 use canister_test::*;
 use dfn_core::bytes;
 
-#[ignore]
 #[test]
 fn reverse_test() {
     local_test_e(|r| async move {
@@ -9,7 +8,7 @@ fn reverse_test() {
 
         let canister = proj.cargo_bin("wasm").install_(&r, Vec::new()).await?;
 
-        let res = canister.query_("reverse", bytes, vec![1, 2, 3]).await?;
+        let res = canister.query_("reverse", bytes, vec![0, 1, 2, 3]).await?;
 
         assert_eq!(res, vec![3, 2, 1, 0]);
         Ok(())

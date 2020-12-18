@@ -21,3 +21,9 @@ phantom_newtype = { path = "../../phantom_newtype" }
 name = "ledger-canister"
 path = "src/main.rs"
 
+[dev-dependencies]
+canister-test = {path = "../../rust_canisters/canister_test"}
+
+[[test]]
+name = "test"
+path = "test/test.rs"

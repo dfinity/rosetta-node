@@ -248,3 +248,17 @@ pub enum FuncRef {
 
     QueryClosure(WasmClosure),
 }
+
+impl FuncRef {
+    /// We utilize the function reference `FuncRef` to decide if a
+    /// state modification resulting from evaluating of the proposed
+    /// function reference should be committed or not.
+    pub fn to_commit(&self) -> bool {
+        match self {
+            FuncRef::Method(WasmMethod::Update(_))
+            | FuncRef::Method(WasmMethod::System(_))
+            | FuncRef::UpdateClosure(_) => true,
+            FuncRef::QueryClosure(_) | FuncRef::Method(WasmMethod::Query(_)) => false,
+        }
+    }
+}

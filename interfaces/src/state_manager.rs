@@ -243,6 +243,20 @@ pub trait StateManager: StateReader {
     /// * This function panics if StateManager doesn't own the TIP. See
     ///   `take_tip` for more details.
     fn take_tip_at(&self, height: Height) -> StateManagerResult<Self::State>;
+
+    /// Reports that the given `height` diverged, i.e., consensus agreed on the
+    /// hash of state at `height`, and this was not the state produced by this
+    /// state manager.
+    ///
+    /// This function triggers non-determinism recovery procedure, which
+    /// involves pruning all the states that might be diverged as well.
+    ///
+    /// # Panics
+    ///
+    /// This function always panics because there is no point in continuing the
+    /// normal operation.  We rely on node manager restarting the replica, which
+    /// in turn will initiate the normal recovery procedure.
+    fn report_diverged_state(&self, height: Height);
 }
 // end::state-manager-interface[]
 

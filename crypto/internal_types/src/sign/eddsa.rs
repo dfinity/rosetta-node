@@ -39,6 +39,39 @@ pub mod ed25519 {
         }
     }
 
+    #[derive(Copy, Clone, Eq, PartialEq, Hash)]
+    pub struct SecretKey(pub [u8; SecretKey::SIZE]);
+    crate::derive_serde!(SecretKey, SecretKey::SIZE);
+
+    impl SecretKey {
+        pub const SIZE: usize = 32;
+
+        /// The bytes of a public key, in raw encoding.
+        pub fn as_bytes(&self) -> &[u8] {
+            &self.0[..]
+        }
+    }
+    impl fmt::Debug for SecretKey {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "SecretKey(0x{})", hex::encode(&self.0[..]))
+        }
+    }
+
+    impl TryFrom<&[u8]> for SecretKey {
+        type Error = SecretKeyByteConversionError;
+        fn try_from(bytes: &[u8]) -> Result<Self, SecretKeyByteConversionError> {
+            if bytes.len() != Self::SIZE {
+                Err(SecretKeyByteConversionError {
+                    length: bytes.len(),
+                })
+            } else {
+                let mut buffer = [0u8; Self::SIZE];
+                buffer.copy_from_slice(&bytes);
+                Ok(Self(buffer))
+            }
+        }
+    }
+
     #[derive(Copy, Clone)]
     pub struct Signature(pub [u8; Signature::SIZE]);
     crate::derive_serde!(Signature, Signature::SIZE);
@@ -73,6 +106,20 @@ pub mod ed25519 {
                 f,
                 "ERROR: ED25519 public key must have {} bytes but received {}",
                 PublicKey::SIZE,
+                self.length
+            )
+        }
+    }
+
+    pub struct SecretKeyByteConversionError {
+        pub length: usize,
+    }
+    impl fmt::Debug for SecretKeyByteConversionError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "ERROR: ED25519 secret key must have {} bytes but received {}",
+                SecretKey::SIZE,
                 self.length
             )
         }

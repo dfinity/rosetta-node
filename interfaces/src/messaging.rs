@@ -35,10 +35,16 @@ pub trait MessageRouting: Send + Sync {
 
 /// Interface for selecting `Streams` for inclusion into a `Payload`.
 pub trait XNetPayloadBuilder: Send + Sync {
-    /// Produces an `XNetPayload` of maximum byte size `max_bytes` that is valid
-    /// given a `ValidationContext` (certified height plus registry version) and
-    /// `past_payloads` (the `XNetPayloads` from all blocks above the certified
-    /// height, in descending block height order).
+    /// Produces an `XNetPayload` of maximum byte size `byte_limit` that is
+    /// valid given a `ValidationContext` (certified height plus registry
+    /// version) and `past_payloads` (the `XNetPayloads` from all blocks
+    /// above the certified height, in descending block height order).
+    /// With the current implementation, if no valid XNetPayload of size
+    /// 'byte_limit' exists, then the function returns the smallest
+    /// XNetPayload which is valid. For practical parameters,
+    /// for the current implementation XNetPayload will no be more than
+    /// byte_limit+2kB. More details here:
+    /// https://docs.google.com/document/d/1cC1-U000cts3GHiEf9OUNhp4clKt2XCG08Zxo35xoWw/edit#
     fn get_xnet_payload(
         &self,
         validation_context: &ValidationContext,

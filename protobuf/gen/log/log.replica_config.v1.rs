@@ -1,5 +1,5 @@
 #[derive(Clone, PartialEq, ::prost::Message)]
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct ReplicaConfig {
     #[prost(bytes, tag="1")]
     pub node_id: std::vec::Vec<u8>,

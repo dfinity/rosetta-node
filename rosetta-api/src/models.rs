@@ -1272,6 +1272,7 @@ impl NetworkStatusResponse {
         current_block_identifier: BlockIdentifier,
         current_block_timestamp: Timestamp,
         genesis_block_identifier: BlockIdentifier,
+        sync_status: SyncStatus,
         peers: Vec<Peer>,
     ) -> NetworkStatusResponse {
         NetworkStatusResponse {
@@ -1279,7 +1280,7 @@ impl NetworkStatusResponse {
             current_block_timestamp,
             genesis_block_identifier,
             oldest_block_identifier: None,
-            sync_status: None,
+            sync_status: Some(sync_status),
             peers,
         }
     }

@@ -8,8 +8,8 @@
  "http_timeout": 10,
  "max_retries": 5,
  "retry_elapsed_time": 0,
- "max_online_connections": 120,
- "max_sync_concurrency": 64,
+ "max_online_connections": 6,
+ "max_sync_concurrency": 8,
  "tip_delay": 300,
  "max_reorg_depth": 100,
  "log_configuration": false,
@@ -17,8 +17,8 @@
  "memory_limit_disabled": false,
  "construction": null,
  "data": {
-  "active_reconciliation_concurrency": 16,
-  "inactive_reconciliation_concurrency": 4,
+  "active_reconciliation_concurrency": 4,
+  "inactive_reconciliation_concurrency": 2,
   "inactive_reconciliation_frequency": 250,
   "log_blocks": false,
   "log_transactions": false,
@@ -39,7 +39,9 @@
   "initial_balance_fetch_disabled": false,
   "end_conditions": {
    "reconciliation_coverage": {
-    "coverage": 1.0
+    "coverage": 0.95,
+    "from_tip": true,
+    "tip": true
    }
   }
  }
