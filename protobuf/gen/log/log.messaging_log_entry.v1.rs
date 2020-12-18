@@ -1,5 +1,5 @@
 #[derive(Clone, PartialEq, ::prost::Message)]
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct MessagingLogEntry {
     #[prost(message, optional, tag="1")]
     #[serde(skip_serializing_if = "Option::is_none")]

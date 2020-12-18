@@ -1,5 +1,5 @@
 use dfn_candid::{candid, candid_one, Candid};
-use dfn_core::{api::caller, over, over_init};
+use dfn_core::{api::caller, over, over_init, printer, setup, stable, BytesS};
 use ic_types::PrincipalId;
 use ledger_canister::*;
 
@@ -35,17 +35,18 @@ fn send(
 
 /// This gives you the index of the last block added to the chain
 // Certification isn't implemented yet
-fn tip_of_chain() -> (Certification, HashOf<Block>) {
-    let transactions = &STATE.read().unwrap().transactions;
-    let hash = transactions
-        .last_block_hash()
-        .expect("Ledger is never empty after init");
-    (0, *hash)
+fn tip_of_chain() -> (Certification, BlockHeight) {
+    let height = &STATE.read().unwrap().transactions.height();
+    (0, *height)
 }
 
-fn block(block_hash: HashOf<Block>) -> Option<HashedBlock> {
-    let transactions = &STATE.read().unwrap().transactions;
-    transactions.get(block_hash)
+fn block(block_height: BlockHeight) -> Option<Block> {
+    STATE
+        .read()
+        .unwrap()
+        .transactions
+        .get(block_height)
+        .cloned()
 }
 
 /// Get an account balance.
@@ -59,11 +60,49 @@ fn account_balance(uid: PrincipalId) -> ICPTs {
         .unwrap_or_else(ICPTs::zero)
 }
 
+/// Start and upgrade methods
 #[export_name = "canister_init"]
 fn main() {
     over_init(|Candid((minting_canister, initial_values))| init(minting_canister, initial_values))
 }
 
+#[export_name = "canister_post_upgrade"]
+fn post_upgrade() {
+    over_init(|_: BytesS| {
+        let bytes = stable::get();
+        let chain: Vec<Block> = candid::decode_one(&bytes).expect("Decoding stable memory failed");
+        let mut state = STATE.write().unwrap();
+        for b in chain.into_iter() {
+            state.add_block(b).expect("Add block failed");
+        }
+    })
+}
+
+#[export_name = "canister_pre_upgrade"]
+fn pre_upgrade() {
+    setup::START.call_once(|| {
+        printer::hook();
+    });
+
+    let chain: &[Block] = &STATE
+        .read()
+        // This should never happen, but it's better to be safe than sorry
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .transactions
+        .inner;
+    let bytes = candid::encode_one(chain);
+    match bytes {
+        Ok(bs) => stable::set(&bs),
+        // If candid fails for some reason we may be able to recover something
+        // This is only going to work on small ledgers, because the encoding is not compact
+        Err(e) => {
+            let bs = format!("{} {:?}", e, chain);
+            stable::set(bs.as_bytes());
+        }
+    };
+}
+
+/// Canister endpoints
 #[export_name = "canister_update send"]
 fn send_() {
     over(

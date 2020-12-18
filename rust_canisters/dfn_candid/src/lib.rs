@@ -1,13 +1,9 @@
 use candid::de::IDLDeserialize;
 use candid::CandidType;
+pub use candid::{de::ArgumentDecoder, decode_args, encode_args, encode_one, ser::ArgumentEncoder};
 use on_wire::witness;
 use on_wire::{FromWire, IntoWire, NewType};
 use serde::de::DeserializeOwned;
-
-pub mod decode;
-pub mod encode;
-
-use decode::DecodeArguments;
 
 pub struct Candid<T>(pub T);
 
@@ -21,17 +17,15 @@ impl<T> NewType for Candid<T> {
     }
 }
 
-impl<Tuple: encode::EncodeArguments> IntoWire for Candid<Tuple> {
+impl<Tuple: ArgumentEncoder> IntoWire for Candid<Tuple> {
     fn into_bytes(self) -> Result<Vec<u8>, String> {
-        encode::encode_args(self.0).map_err(|e| e.to_string())
+        encode_args(self.0).map_err(|e| e.to_string())
     }
 }
 
-impl<Tuple: for<'a> DecodeArguments<'a>> FromWire for Candid<Tuple> {
+impl<Tuple: for<'a> ArgumentDecoder<'a>> FromWire for Candid<Tuple> {
     fn from_bytes(bytes: Vec<u8>) -> Result<Self, String> {
-        let de = IDLDeserialize::new(&bytes[..]).map_err(|e| e.to_string())?;
-        let (de, res) = DecodeArguments::decode_arguments(de).map_err(|e| e.to_string())?;
-        de.done().map_err(|e| e.to_string())?;
+        let res = decode_args(&bytes).map_err(|e| e.to_string())?;
         Ok(Candid(res))
     }
 }
@@ -50,7 +44,7 @@ impl<T> NewType for CandidOne<T> {
 
 impl<T: CandidType> IntoWire for CandidOne<T> {
     fn into_bytes(self) -> Result<Vec<u8>, String> {
-        encode::encode_one(self.0).map_err(|e| e.to_string())
+        encode_one(self.0).map_err(|e| e.to_string())
     }
 }
 

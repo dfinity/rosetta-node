@@ -16,10 +16,10 @@ struct Opt {
     #[structopt(
         short = "c",
         long = "canister-id",
-        default_value = "2xh5f-viaaa-aaaab-aae3q-cai"
+        default_value = "5v3p4-iyaaa-aaaaa-qaaaa-cai"
     )]
     ic_canister_id: String,
-    #[structopt(long = "ic-url", default_value = "https://gw.dfinity.network")]
+    #[structopt(long = "ic-url", default_value = "https://exchanges.dfinity.network")]
     ic_url: String,
 }
 
@@ -35,6 +35,7 @@ async fn main() -> std::io::Result<()> {
     let url = reqwest::Url::parse(&opt.ic_url[..]).unwrap();
 
     let client = ledger_client::LedgerClient::create_on_disk(url, canister_id)
+        .await
         .expect("Failed to initialize ledger client");
 
     let ledger = Arc::new(client);

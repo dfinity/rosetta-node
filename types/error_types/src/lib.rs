@@ -2,6 +2,7 @@ use candid::Error;
 use ic_protobuf::proxy::ProxyDecodeError;
 use serde::{Deserialize, Serialize};
 use std::{convert::TryFrom, fmt};
+use strum_macros::EnumIter;
 
 /// Reject codes are integers that canisters should pass to msg.reject
 /// system API calls. These errors are designed for programmatic error
@@ -93,7 +94,7 @@ impl From<ErrorCode> for RejectCode {
 /// convention: the most significant digit is the corresponding reject
 /// code and the rest is just a sequentially assigned two-digit
 /// number.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, EnumIter, Eq, Hash, Serialize, Deserialize)]
 pub enum ErrorCode {
     SubnetOversubscribed = 101,
     CanisterOutputQueueFull = 201,
@@ -218,16 +219,33 @@ impl std::error::Error for UserError {
     }
 }
 
-#[test]
-fn test_user_error_display() {
-    assert_eq!(
-        format!(
-            "{}",
-            UserError::new(
-                ErrorCode::CanisterOutOfCycles,
-                "Canister 42 ran out of cycles"
-            )
-        ),
-        "IC0501: Canister 42 ran out of cycles"
-    );
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use strum::IntoEnumIterator;
+
+    #[test]
+    fn test_user_error_display() {
+        assert_eq!(
+            format!(
+                "{}",
+                UserError::new(
+                    ErrorCode::CanisterOutOfCycles,
+                    "Canister 42 ran out of cycles"
+                )
+            ),
+            "IC0501: Canister 42 ran out of cycles"
+        );
+    }
+
+    #[test]
+    fn can_decode_error_code_from_u64() {
+        for code in ErrorCode::iter() {
+            let int_code = code as u64;
+            match ErrorCode::try_from(int_code) {
+                Ok(decoded_code) => assert_eq!(code, decoded_code),
+                Err(err) => panic!("Could not decode {} to an ErrorCode: {}.", int_code, err),
+            }
+        }
+    }
 }

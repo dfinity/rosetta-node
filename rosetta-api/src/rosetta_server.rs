@@ -240,7 +240,7 @@ impl RosettaApiServer {
                 }
             }
             tx.send(())
-                .expect("Blockchain sync thread: faild to send finish notification");
+                .expect("Blockchain sync thread: failed to send finish notification");
             println!("Blockchain sync thread finished");
         });
         self.server.clone().await
@@ -257,6 +257,6 @@ impl RosettaApiServer {
             .take()
             .unwrap()
             .await
-            .expect("Error on waitinf for blockchain thread to finish");
+            .expect("Error on waiting for blockchain thread to finish");
     }
 }

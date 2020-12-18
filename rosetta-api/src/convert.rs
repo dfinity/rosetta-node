@@ -3,19 +3,19 @@ use crate::models::{
     AccountIdentifier, Amount, ApiError, BlockIdentifier, Currency, Operation, Timestamp,
     TransactionIdentifier,
 };
+use crate::sync::HashedBlock;
 use core::fmt::Display;
 use dfn_candid::Candid;
 use ic_types::messages::{HttpRequestEnvelope, HttpSubmitContent};
 use ic_types::PrincipalId;
 use ledger_canister::{
-    Block, HashOf, HashedBlock, ICPTs, SubmitArgs, Transaction, Transfer, DECIMAL_PLACES,
+    BlockHeight, HashOf, ICPTs, SubmitArgs, Transaction, Transfer, DECIMAL_PLACES,
 };
 use on_wire::{FromWire, IntoWire};
 use serde_json::map::Map;
 use serde_json::{from_value, Value};
 use std::collections::HashMap;
 use std::convert::TryFrom;
-use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// This module converts from ledger_canister data structures to Rosetta data
@@ -180,8 +180,8 @@ pub fn from_operations(ops: Vec<Operation>) -> Result<Vec<Transfer>, ApiError> {
                     return error("Credit account + Debit amount must net to zero");
                 }
 
-                let amount = if db_amount > 0 {
-                    ICPTs::from_doms(db_amount as u64)
+                let amount = if cr_amount > 0 {
+                    ICPTs::from_doms(cr_amount as u64)
                 } else {
                     return error("Debit amount must be greater than zero");
                 };
@@ -251,7 +251,7 @@ pub fn icp() -> Currency {
 }
 
 pub fn block_id(block: &HashedBlock) -> Result<BlockIdentifier, ApiError> {
-    let idx = i64::try_from(block.block.index).map_err(internal_error)?;
+    let idx = i64::try_from(block.index).map_err(internal_error)?;
     Ok(BlockIdentifier::new(idx, from_hash(&block.hash)))
 }
 
@@ -274,20 +274,19 @@ pub fn user_id(aid: &AccountIdentifier) -> Result<PrincipalId, String> {
     }
 }
 
-const LAST_HASH: &str = "last_hash";
+const LAST_HEIGHT: &str = "last_height";
 
 // Last hash is an option because there may be no blocks on the system
-pub fn from_metadata(mut ob: models::Object) -> Result<HashOf<Block>, ApiError> {
+pub fn from_metadata(mut ob: models::Object) -> Result<BlockHeight, ApiError> {
     let v = ob
-        .remove(LAST_HASH)
+        .remove(LAST_HEIGHT)
         .ok_or(ApiError::InternalError(false, None))?;
-    let s: String = from_value(v).map_err(|_| ApiError::InternalError(false, None))?;
-    HashOf::from_str(&s[..]).map_err(internal_error)
+    from_value(v).map_err(|_| ApiError::InternalError(false, None))
 }
 
-pub fn into_metadata(h: HashOf<Block>) -> models::Object {
+pub fn into_metadata(h: BlockHeight) -> models::Object {
     let mut m = Map::new();
-    m.insert(LAST_HASH.to_string(), Value::from(format!("{}", h)));
+    m.insert(LAST_HEIGHT.to_string(), Value::from(h));
     m
 }
 
@@ -308,6 +307,10 @@ pub fn from_hex(hex: String) -> Result<Vec<u8>, ApiError> {
     hex::decode(hex).map_err(|e| {
         ApiError::InvalidRequest(false, into_error(format!("Hex could not be decoded {}", e)))
     })
+}
+
+pub fn to_hex(v: &[u8]) -> String {
+    hex::encode(v)
 }
 
 pub fn transaction_id(

@@ -36,9 +36,6 @@ strum = "0.18.0"
 strum_macros = "0.18.0"
 thiserror = "1.0"
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-ic-sys = { path = "../../sys" }
-
 [dev-dependencies]
 assert_matches = "1.3.0"
 hex-literal = "0.2.1"

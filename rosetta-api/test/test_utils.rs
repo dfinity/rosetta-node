@@ -5,34 +5,45 @@ use lazy_static::lazy_static;
 use reqwest::Url;
 
 use ic_rosetta_api::models::*;
+use ic_rosetta_api::sync::HashedBlock;
 use ic_types::{CanisterId, PrincipalId};
-use ledger_canister::{self, Block, BlockHeight, HashedBlock, ICPTs, Memo, Transaction, Transfer};
-use std::sync::RwLock;
+use ledger_canister::{self, Block, BlockHeight, ICPTs, Memo, Transaction, Transfer};
+use tokio::sync::RwLock;
 
-use rand::{rngs::StdRng, RngCore, SeedableRng};
+use rand::{
+    rngs::{OsRng, StdRng},
+    RngCore, SeedableRng,
+};
 use rand_distr::Distribution;
 use thread_local::ThreadLocal;
 
 // TODO remove after disconnecting tests
+use async_std::task::sleep;
 use async_trait::async_trait;
+use dfn_candid::Candid;
 #[allow(unused_imports)]
 use ic_rosetta_api::convert::{
-    from_arg, from_hash, internal_error, to_hash, transaction_id, transaction_identifier,
+    from_arg, from_hash, from_hex, internal_error, operations, to_hash, to_hex, transaction_id,
+    transaction_identifier,
 };
-use ic_rosetta_api::ledger_client::{Blocks, LedgerAccess};
+use ic_rosetta_api::ledger_client::{self, Blocks, LedgerAccess};
 use ic_rosetta_api::rosetta_server::RosettaApiServer;
 use ic_rosetta_api::RosettaRequestHandler;
 use ic_scenario_tests::{
     api::system::builder::Subnet, api::system::handle::IcHandle, system_test::InternetComputer,
 };
 use ic_types::messages::{HttpCanisterUpdate, HttpRequestEnvelope, HttpSubmitContent};
+use serde_json::Map;
 use std::collections::{BTreeMap, VecDeque};
 use std::convert::TryFrom;
 use std::ops::{Deref, DerefMut};
 use std::process::Command;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
+use std::{
+    path::PathBuf,
+    time::{Duration, SystemTime},
+};
 
 const SEED: u64 = 137;
 
@@ -91,15 +102,15 @@ impl TestLedger {
         self
     }
 
-    fn last_submitted(&self) -> Result<Option<HashedBlock>, ApiError> {
-        match self.submit_queue.read().unwrap().last() {
+    async fn last_submitted(&self) -> Result<Option<HashedBlock>, ApiError> {
+        match self.submit_queue.read().await.last() {
             Some(b) => Ok(Some(b.clone())),
-            None => self.read_blocks().last(),
+            None => self.read_blocks().await.last(),
         }
     }
 
-    fn add_block(&self, hb: HashedBlock) -> Result<(), ApiError> {
-        self.blockchain.write().unwrap().add_block(hb)
+    async fn add_block(&self, hb: HashedBlock) -> Result<(), ApiError> {
+        self.blockchain.write().await.add_block(hb)
     }
 }
 
@@ -111,15 +122,15 @@ impl Default for TestLedger {
 
 #[async_trait]
 impl LedgerAccess for TestLedger {
-    fn read_blocks<'a>(&'a self) -> Box<dyn Deref<Target = Blocks> + 'a> {
-        Box::new(self.blockchain.read().unwrap())
+    async fn read_blocks<'a>(&'a self) -> Box<dyn Deref<Target = Blocks> + 'a> {
+        Box::new(self.blockchain.read().await)
     }
 
     async fn sync_blocks(&self) -> Result<(), ApiError> {
-        let mut queue = self.submit_queue.write().unwrap();
+        let mut queue = self.submit_queue.write().await;
 
         {
-            let mut blockchain = self.blockchain.write().unwrap();
+            let mut blockchain = self.blockchain.write().await;
             for hb in queue.iter() {
                 blockchain.add_block(hb.clone())?;
             }
@@ -160,17 +171,16 @@ impl LedgerAccess for TestLedger {
 
         let transaction = Transfer::Send { from, to, amount };
 
-        let (parent_hash, index) = match self.last_submitted()? {
+        let (parent_hash, index) = match self.last_submitted().await? {
             None => (None, 0),
-            Some(hb) => (Some(hb.hash), hb.block.index + 1),
+            Some(hb) => (Some(hb.hash), hb.index + 1),
         };
 
-        let block =
-            Block::new(transaction, message, parent_hash, index, None).map_err(internal_error)?;
+        let block = Block::new(transaction, message, index - 1).map_err(internal_error)?;
 
-        let hb = HashedBlock::hash_block(block);
+        let hb = HashedBlock::hash_block(block, parent_hash, index);
 
-        self.submit_queue.write().unwrap().push(hb.clone());
+        self.submit_queue.write().await.push(hb.clone());
 
         Ok(transaction_identifier(&hb.block.transaction.hash()))
     }
@@ -204,9 +214,7 @@ impl Scribe {
     }
 
     fn time(&self) -> SystemTime {
-        //2010.01.01 1:0:0 + int
-        std::time::UNIX_EPOCH
-            + std::time::Duration::from_millis(1262307600000 + self.blockchain.len() as u64)
+        std::time::SystemTime::now()
     }
 
     fn next_message(&self) -> Memo {
@@ -227,7 +235,10 @@ impl Scribe {
     }
 
     pub fn add_block(&mut self, block: Block) {
-        self.blockchain.push_back(HashedBlock::hash_block(block));
+        let parent_hash = self.blockchain.back().map(|hb| hb.hash);
+        let index = self.next_index();
+        self.blockchain
+            .push_back(HashedBlock::hash_block(block, parent_hash, index));
     }
 
     pub fn buy(&mut self, uid: PrincipalId, amount: u64) {
@@ -242,8 +253,6 @@ impl Scribe {
         let block = Block {
             transaction,
             timestamp: self.time(),
-            index: self.next_index(),
-            parent_hash: self.blockchain.back().map(|hb| hb.hash),
         };
         self.balance_history.push_back(self.balance_book.clone());
         self.add_block(block);
@@ -261,10 +270,9 @@ impl Scribe {
         let block = Block {
             transaction,
             timestamp: self.time(),
-            index: self.next_index(),
-            parent_hash: self.blockchain.back().map(|hb| hb.hash),
         };
         self.balance_history.push_back(self.balance_book.clone());
+
         self.add_block(block);
     }
 
@@ -287,8 +295,6 @@ impl Scribe {
         let block = Block {
             transaction,
             timestamp: self.time(),
-            index: self.next_index(),
-            parent_hash: self.blockchain.back().map(|hb| hb.hash),
         };
         self.balance_history.push_back(self.balance_book.clone());
         self.add_block(block);
@@ -362,7 +368,7 @@ async fn smoke_test_with_server() {
     let ledger = Arc::new(TestLedger::new());
     let req_handler = RosettaRequestHandler::new(ledger.clone());
     for b in &scribe.blockchain {
-        ledger.add_block(b.clone()).ok();
+        ledger.add_block(b.clone()).await.ok();
     }
 
     let serv_ledger = ledger.clone();
@@ -417,13 +423,157 @@ async fn smoke_test_with_server() {
     serv.stop().await;
 }
 
-#[ignore] // ICSUP-133 work in progress.
+// ignored because this takes 30 seconds
+// TODO put it somewhere where it can run slowly
+#[ignore]
 #[actix_rt::test]
-async fn simple_ic_test() {
+async fn simple_ic_test() -> Result<(), String> {
+    use canister_test::*;
+
     let ic = InternetComputer::new()
-        .with_subnet(Subnet::new().add_nodes(5))
+        .with_subnet(Subnet::new().add_nodes(1))
         .start()
-        .await;
-    let ic = ic.ready().await.expect("Not ready yet");
-    let _ledger = TestLedger::new().with_ic(ic);
+        .await
+        .ready()
+        .await
+        .expect("Not ready");
+    let a_subnet_id = ic.subnet_ids().into_iter().next().unwrap();
+    let a_subnet = ic.subnet(a_subnet_id);
+    let a_node_id = a_subnet.node_ids().into_iter().next().unwrap();
+    let a_node = a_subnet.node(a_node_id);
+    let url = a_node.api_url();
+
+    let r = a_node.api();
+
+    let path = PathBuf::new()
+        .join(env!("CARGO_MANIFEST_DIR"))
+        .join("canister");
+    let proj = Project::new(path);
+
+    let keypair = {
+        let mut rng = OsRng::default(); // use `ChaChaRng::seed_from_u64` for deterministic keys
+        ed25519_dalek::Keypair::generate(&mut rng)
+    };
+
+    // Generate an arbitrary public key
+    let public_key = PublicKey {
+        hex_bytes: to_hex(&keypair.public.to_bytes()),
+        // This is a guess
+        curve_type: CurveType::SECP256K1,
+    };
+
+    let tester = PrincipalId::new_self_authenticating(&keypair.public.to_bytes()[..]);
+
+    // Install the ledger canister with one account owned by the arbitrary public
+    // key
+
+    let recipients: Vec<(PrincipalId, ICPTs)> = Vec::new();
+
+    let canister = proj
+        .cargo_bin("ledger-canister")
+        .install_(&r, Candid((tester, recipients)))
+        .await?;
+
+    // Setup the ledger + request handler
+    let client = ledger_client::LedgerClient::create_on_disk(url, canister.canister_id())
+        .await
+        .expect("Failed to initialize ledger client");
+
+    let ledger = Arc::new(client);
+    let req_handler = RosettaRequestHandler::new(ledger.clone());
+
+    let network_identifier = req_handler.network_id();
+
+    let public_keys = None;
+
+    // Go through the submit workflow
+    let metadata = req_handler
+        .construction_metadata(ConstructionMetadataRequest {
+            network_identifier: network_identifier.clone(),
+            options: Map::new(),
+            public_keys: public_keys.clone(),
+        })
+        .await
+        .unwrap()
+        .metadata;
+
+    let operations = operations(&Transfer::Send {
+        from: tester,
+        to: CanisterId::ic_00().get(),
+        amount: ICPTs::from_doms(100),
+    })
+    .unwrap();
+
+    let ConstructionPayloadsResponse {
+        unsigned_transaction,
+        payloads,
+    } = req_handler
+        .construction_payloads(ConstructionPayloadsRequest {
+            network_identifier: network_identifier.clone(),
+            metadata: Some(metadata),
+            operations,
+            public_keys: public_keys.clone(),
+        })
+        .await
+        .unwrap();
+
+    // Sign the transactions using the public key
+    let signatures = payloads
+        .into_iter()
+        .map(|p| {
+            let bytes = from_hex(p.hex_bytes.clone()).unwrap();
+            let signature_bytes = keypair.sign(&bytes).to_bytes();
+            let hex_bytes = to_hex(&signature_bytes);
+            Signature {
+                signing_payload: p,
+                public_key: public_key.clone(),
+                signature_type: SignatureType::ED25519,
+                hex_bytes,
+            }
+        })
+        .collect();
+
+    let signed_transaction = req_handler
+        .construction_combine(ConstructionCombineRequest {
+            network_identifier: network_identifier.clone(),
+            signatures,
+            unsigned_transaction,
+        })
+        .await
+        .unwrap()
+        .signed_transaction;
+
+    let sent_tid = req_handler
+        .construction_submit(ConstructionSubmitRequest {
+            network_identifier: network_identifier.clone(),
+            signed_transaction,
+        })
+        .await
+        .unwrap()
+        .transaction_identifier;
+
+    // Wait for the block to arrive on the ledger
+    sleep(Duration::from_secs(5)).await;
+    ledger.sync_blocks().await.unwrap();
+
+    // Check the block has arrived on the ledger
+    let block = req_handler
+        .block(BlockRequest {
+            network_identifier,
+            block_identifier: PartialBlockIdentifier {
+                index: Some(1),
+                hash: None,
+            },
+        })
+        .await
+        .unwrap()
+        .block
+        .unwrap();
+
+    let recieved_tid = &block.transactions.first().unwrap().transaction_identifier;
+
+    // Check the transaction hash is the same off and on the ledger
+    assert_eq!(&sent_tid, recieved_tid);
+
+    Ok(())
 }

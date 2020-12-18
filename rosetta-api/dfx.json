@@ -3,7 +3,7 @@
   "canisters": {
     "ledger": {
       "type": "custom",
-      "candid": "../nns/ledger.did",
+      "candid": "ledger.did",
       "wasm": "../target/wasm32-unknown-unknown/release/ledger-canister-min.wasm",
       "build": "./build-ledger.sh"
     }
@@ -20,6 +20,10 @@
       },
       "ic": {
           "providers": ["https://gw.dfinity.network"],
+          "type": "persistent"
+      },
+      "exchanges": {
+          "providers": ["https://exchanges.dfinity.network"],
           "type": "persistent"
       }
   }

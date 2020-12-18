@@ -1,5 +1,5 @@
 #[derive(Clone, PartialEq, ::prost::Message)]
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct LogEntry {
     #[prost(string, tag="1")]
     pub level: std::string::String,

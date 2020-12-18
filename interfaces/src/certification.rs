@@ -5,7 +5,7 @@ use ic_types::{
     consensus::certification::{Certification, CertificationMessage, CertificationShare},
     crypto::CryptoError,
     registry::RegistryClientError,
-    CryptoHashOfPartialState, Height, RegistryVersion, SubnetId,
+    Height, RegistryVersion, SubnetId,
 };
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
@@ -131,13 +131,11 @@ pub enum VerifierError {
 pub trait Verifier: Send + Sync {
     /// This method verifies whether the given certification contains a valid
     /// signature on the given hash on behalf of the subnet specified in
-    /// subnet_id with respect to the registry_version given inside registry
-    /// version.
+    /// subnet_id with respect to the `registry_version`.
     fn validate(
         &self,
         subnet_id: SubnetId,
         certification: &Certification,
         registry_version: RegistryVersion,
-        hash: &CryptoHashOfPartialState,
     ) -> ValidationResult<VerifierError>;
 }

@@ -7,3 +7,5 @@ edition = "2018"
 candid = "0.6.3"
 ic-protobuf = { path = "../../protobuf" }
 serde = { version = "1.0.99", features = ["derive", "rc"] }
+strum = "0.20.0"
+strum_macros = "0.20.0"

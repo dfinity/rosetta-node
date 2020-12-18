@@ -9,10 +9,8 @@ mod request_status;
 mod webauthn;
 
 use crate::{
-    crypto::{BasicSig, BasicSigOf},
-    ingress::MAX_INGRESS_TTL,
-    user_id_into_protobuf, user_id_try_from_protobuf, CanisterId, CanisterIdError, CountBytes,
-    Funds, NumBytes, PrincipalId, Time, UserId,
+    ingress::MAX_INGRESS_TTL, user_id_into_protobuf, user_id_try_from_protobuf, CanisterId,
+    CanisterIdError, CountBytes, Funds, NumBytes, PrincipalId, Time, UserId,
 };
 pub use blob::Blob;
 pub use http::{
@@ -31,9 +29,9 @@ pub use inter_canister::{
     CallContextId, CallbackId, Payload, RejectContext, Request, RequestOrResponse, Response,
 };
 pub use message_id::{MessageId, MessageIdError, EXPECTED_MESSAGE_ID_LENGTH};
-pub use query::{SignedUserQuery, UserQuery};
-pub use read_state::{ReadState, SignedReadState};
-pub use request_status::{RequestStatus, SignedRequestStatus};
+pub use query::{SignedUserQuery, SignedUserQueryContent, UserQuery};
+pub use read_state::{ReadState, SignedReadState, SignedReadStateContent};
+pub use request_status::{RequestStatus, SignedRequestStatus, SignedRequestStatusContent};
 use serde::{Deserialize, Serialize};
 use std::{convert::TryFrom, error::Error, fmt};
 pub use webauthn::{WebAuthnEnvelope, WebAuthnSignature};
@@ -45,7 +43,7 @@ pub use webauthn::{WebAuthnEnvelope, WebAuthnSignature};
 /// their blocks notarized; and when the consensus protocol is configured for
 /// smaller messages, a large message in the network can cause the finalization
 /// rate to drop.
-pub const MAX_INTER_CANISTER_PAYLOAD_IN_BYTES: NumBytes = NumBytes::new(3 * 1024 * 1024); // 3 MiB
+pub const MAX_INTER_CANISTER_PAYLOAD_IN_BYTES: NumBytes = NumBytes::new(2 * 1024 * 1024); // 2 MiB
 
 /// The maximum size of an inter-canister request or response that the IC can
 /// support.
@@ -56,13 +54,13 @@ pub const MAX_INTER_CANISTER_PAYLOAD_IN_BYTES: NumBytes = NumBytes::new(3 * 1024
 /// fields (e.g. sender: CanisterId), so it is not possible to statically
 /// compute an upper bound on their sizes.  Hopefully the additional space we
 /// have allocated here is sufficient.
-pub const MAX_INTER_CANISTER_MESSAGE_IN_BYTES: NumBytes = NumBytes::new(2 * 1024 * 1024); // 2 MiB
+pub const MAX_XNET_PAYLOAD_IN_BYTES: NumBytes = NumBytes::new(2202009); // 2.1 MiB
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct UserSignature {
     /// The actual signature.  End users should sign the MessageId computed from
     /// the message that they are signing.
-    pub signature: UserSignatureOnly,
+    pub signature: Vec<u8>,
     /// The user's public key whose corresponding private key should have been
     /// used to sign the MessageId.
     pub signer_pubkey: Vec<u8>,
@@ -70,36 +68,9 @@ pub struct UserSignature {
     pub sender_delegation: Option<Vec<SignedDelegation>>,
 }
 
-/// Represents the signature that an end user places on messages that they sign
-/// along with the metadata needed to verify the signature.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum UserSignatureOnly {
-    Plain(BasicSigOf<MessageId>),
-    WebAuthn(WebAuthnSignature),
-}
-
-impl From<Vec<u8>> for UserSignatureOnly {
-    fn from(raw_bytes: Vec<u8>) -> Self {
-        // Does the signature parse as WebAuthnSignature? Else, use it as BasicSig.
-        match WebAuthnSignature::try_from(&raw_bytes[..]) {
-            Ok(sig) => UserSignatureOnly::WebAuthn(sig),
-            Err(_e) => UserSignatureOnly::Plain(BasicSigOf::from(BasicSig(raw_bytes))),
-        }
-    }
-}
-
 impl CountBytes for UserSignature {
     fn count_bytes(&self) -> usize {
-        self.signature.count_bytes() + self.signer_pubkey.len()
-    }
-}
-
-impl CountBytes for UserSignatureOnly {
-    fn count_bytes(&self) -> usize {
-        match &self {
-            UserSignatureOnly::Plain(sig) => sig.count_bytes(),
-            UserSignatureOnly::WebAuthn(sig) => sig.count_bytes(),
-        }
+        self.signature.len() + self.signer_pubkey.len()
     }
 }
 
@@ -251,9 +222,9 @@ impl SignedReadRequest {
 
     pub fn message_id(&self) -> MessageId {
         match self {
-            Self::Query(query) => MessageId::from(&query.content),
-            Self::RequestStatus(request_status) => MessageId::from(&request_status.content),
-            Self::ReadState(read_state) => MessageId::from(&read_state.content),
+            Self::Query(query) => MessageId::from(query.content()),
+            Self::RequestStatus(request_status) => MessageId::from(request_status.content()),
+            Self::ReadState(read_state) => MessageId::from(read_state.content()),
         }
     }
 }
@@ -273,17 +244,18 @@ impl TryFrom<(HttpRequestEnvelope<HttpReadContent>, Time)> for SignedReadRequest
                 ) {
                     (Some(pubkey), Some(signature), delegation) => {
                         let signature = UserSignature {
-                            signature: UserSignatureOnly::from(signature.0),
+                            signature: signature.0,
                             signer_pubkey: pubkey.0,
                             sender_delegation: delegation,
                         };
                         Ok(Self::Query(SignedUserQuery {
-                            content,
+                            content: SignedUserQueryContent::new(content),
                             signature: Some(signature),
                         }))
                     }
                     (None, None, None) => Ok(Self::Query(SignedUserQuery {
-                        content,
+                        content: SignedUserQueryContent::new(content),
+
                         signature: None,
                     })),
                     rest => Err(Self::Error::MissingPubkeyOrSignature(format!(
@@ -302,17 +274,17 @@ impl TryFrom<(HttpRequestEnvelope<HttpReadContent>, Time)> for SignedReadRequest
                 ) {
                     (Some(pubkey), Some(signature), delegation) => {
                         let signature = UserSignature {
-                            signature: UserSignatureOnly::from(signature.0),
+                            signature: signature.0,
                             signer_pubkey: pubkey.0,
                             sender_delegation: delegation,
                         };
                         Ok(Self::RequestStatus(SignedRequestStatus {
-                            content,
+                            content: SignedRequestStatusContent::new(content),
                             signature: Some(signature),
                         }))
                     }
                     (None, None, None) => Ok(Self::RequestStatus(SignedRequestStatus {
-                        content,
+                        content: SignedRequestStatusContent::new(content),
                         signature: None,
                     })),
                     rest => Err(Self::Error::MissingPubkeyOrSignature(format!(
@@ -331,17 +303,17 @@ impl TryFrom<(HttpRequestEnvelope<HttpReadContent>, Time)> for SignedReadRequest
                 ) {
                     (Some(pubkey), Some(signature), delegation) => {
                         let signature = UserSignature {
-                            signature: UserSignatureOnly::from(signature.0),
+                            signature: signature.0,
                             signer_pubkey: pubkey.0,
                             sender_delegation: delegation,
                         };
                         Ok(SignedReadRequest::ReadState(SignedReadState {
-                            content,
+                            content: SignedReadStateContent::new(content),
                             signature: Some(signature),
                         }))
                     }
                     (None, None, None) => Ok(Self::ReadState(SignedReadState {
-                        content,
+                        content: SignedReadStateContent::new(content),
                         signature: None,
                     })),
                     rest => Err(Self::Error::MissingPubkeyOrSignature(format!(

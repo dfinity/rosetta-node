@@ -3,8 +3,9 @@ use ic_crypto_sha256::Sha256;
 use ic_types::PrincipalId;
 use lazy_static::lazy_static;
 use phantom_newtype::Id;
-use serde::{de::Error, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::convert::TryFrom;
 use std::convert::TryInto;
 use std::fmt;
 use std::sync::RwLock;
@@ -17,7 +18,6 @@ mod icpts;
 pub use icpts::{ICPTs, DECIMAL_PLACES, ICP_SUBDIVIDABLE_BY};
 
 #[derive(Serialize, Deserialize, CandidType, Clone, Hash, Debug, PartialEq, Eq, PartialOrd, Ord)]
-
 pub struct HashOf<T> {
     inner: Id<T, [u8; 32]>,
 }
@@ -199,32 +199,19 @@ impl Transaction {
 pub struct Block {
     pub transaction: Transaction,
     pub timestamp: SystemTime,
-    // TODO remove these
-    pub parent_hash: Option<HashOf<Block>>,
-    pub index: BlockHeight,
 }
 
 impl Block {
-    pub fn new(
-        payment: Transfer,
-        memo: Memo,
-        parent_hash: Option<HashOf<Block>>,
-        index: BlockHeight,
-        created_at: Option<BlockHeight>,
-    ) -> Result<Block, String> {
+    pub fn new(transfer: Transfer, memo: Memo, created_at: BlockHeight) -> Result<Block, String> {
         let timestamp = dfn_core::api::now();
-        // TODO check created_at is between now and 24 hours in the past
-        let created_at = created_at.unwrap_or_else(|| index - 1);
         let transaction = Transaction {
-            transfer: payment,
+            transfer,
             memo,
             created_at,
         };
         Ok(Block {
             transaction,
             timestamp,
-            parent_hash,
-            index,
         })
     }
 
@@ -232,7 +219,7 @@ impl Block {
     /// to the genesis of this canister. It is a hash of the time this
     /// block was made, the transaction in this block and the previous blocks
     /// hash.
-    pub fn hash(&self) -> HashOf<Block> {
+    pub fn hash(&self, parent_hash: Option<HashOf<Block>>) -> HashOf<Block> {
         let mut state = Sha256::new();
         let ns_since_epoch = self
             .timestamp
@@ -241,70 +228,17 @@ impl Block {
             .as_nanos();
         state.write(&ns_since_epoch.to_be_bytes());
         state.write(&self.transaction.hash().into_bytes());
-        if let Some(ph) = self.parent_hash {
+        if let Some(ph) = parent_hash {
             state.write(&ph.into_bytes());
         }
         HashOf::new(state.finish())
     }
 }
 
-// We do this manually here because we want to prevent construction in the
-// crate, whereas non_exhaustive only protects other crates from constructing
-// things
-#[allow(clippy::manual_non_exhaustive)]
-#[derive(CandidType, Serialize, Clone, Debug, PartialEq, Eq)]
-pub struct HashedBlock {
-    pub block: Block,
-    pub hash: HashOf<Block>,
-    #[serde(skip_serializing)]
-    __inner: (),
-}
-
-mod hidden {
-    use serde::Deserialize;
-
-    #[derive(Deserialize)]
-    pub struct HashedBlock {
-        pub block: super::Block,
-        pub hash: super::HashOf<super::Block>,
-    }
-}
-
-impl HashedBlock {
-    pub fn hash_block(block: Block) -> HashedBlock {
-        HashedBlock {
-            hash: block.hash(),
-            block,
-            __inner: (),
-        }
-    }
-}
-
-/// We have this custom implementation make sure that the HashedBlock is always
-/// constructed correctly
-impl<'de> Deserialize<'de> for HashedBlock {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let hidden::HashedBlock { block, hash } = Deserialize::deserialize(deserializer)?;
-        if block.hash() != hash {
-            return Err(Error::custom(
-                "The block failed do deserialize, hash checking failed",
-            ));
-        }
-        Ok(HashedBlock {
-            block,
-            hash,
-            __inner: (),
-        })
-    }
-}
-
 /// Stores a chain of transactions with their metadata
 #[derive(Default)]
 pub struct BlockChain {
-    pub inner: HashMap<HashOf<Block>, Block>,
+    pub inner: Vec<Block>,
     pub last_hash: Option<HashOf<Block>>,
 }
 
@@ -317,53 +251,30 @@ impl BlockChain {
     ) -> Result<BlockHeight, String> {
         // Either the caller specified the height that the block was created at, or we
         // assume it was created at the current height
-        let parent_hash = self.last_block_hash();
-        let this_index = match self.last_block() {
-            Some(last_block) => last_block.block.index + 1,
-            None => 0,
-        };
-        let block = Block::new(
-            payment,
-            message,
-            parent_hash.cloned(),
-            this_index,
-            created_at,
-        )?;
-
-        let block_hash = block.hash();
-        self.last_hash = Some(block_hash);
-        let res = self.inner.insert(block_hash, block);
-        assert_eq!(res, None);
-        Ok(this_index)
+        // TODO check created_at is between now and 24 hours in the past
+        let created_at = created_at.unwrap_or_else(|| self.height());
+        let block = Block::new(payment, message, created_at)?;
+        self.add_block(block)
     }
 
-    pub fn get(&self, hash: HashOf<Block>) -> Option<HashedBlock> {
-        let block = self.inner.get(&hash)?.clone();
-        Some(HashedBlock {
-            block,
-            hash,
-            __inner: (),
-        })
+    pub fn add_block(&mut self, block: Block) -> Result<BlockHeight, String> {
+        let parent_hash = self.last_hash;
+        self.last_hash = Some(block.hash(parent_hash));
+        self.inner.push(block);
+        Ok(self.height())
     }
 
-    pub fn last_block_hash(&self) -> Option<&HashOf<Block>> {
-        self.last_hash.as_ref()
-    }
-
-    pub fn last_block(&self) -> Option<HashedBlock> {
-        let last = *self.last_block_hash()?;
-        self.get(last)
+    pub fn get(&self, height: BlockHeight) -> Option<&Block> {
+        self.inner.get(usize::try_from(height).unwrap())
     }
 
     pub fn height(&self) -> BlockHeight {
-        self.inner.len() as u64
+        self.inner.len() as u64 - 1
     }
 
-    // At what blockheight was the block at the specified height created at
-    // pub fn created_at_height(&self, height: BlockHeight) -> BlockHeight {
-    //     let height = height.0 + (self.offset as u64);
-    //     BlockHeight(height)
-    // }
+    pub fn last(&self) -> Option<&Block> {
+        self.inner.last()
+    }
 }
 
 #[derive(Default)]
@@ -373,6 +284,7 @@ pub struct State {
 }
 
 impl State {
+    /// This creates a block and adds it to the ledger
     pub fn add_payment(
         &mut self,
         message: Memo,
@@ -381,6 +293,13 @@ impl State {
     ) -> Result<BlockHeight, String> {
         self.balances.add_payment(&payment);
         self.transactions.add_payment(message, payment, created_at)
+    }
+
+    /// This adds a pre created block to the ledger. This should only be used
+    /// during canister migration or upgrade
+    pub fn add_block(&mut self, block: Block) -> Result<BlockHeight, String> {
+        self.balances.add_payment(&block.transaction.transfer);
+        self.transactions.add_block(block)
     }
 
     pub fn from_init(

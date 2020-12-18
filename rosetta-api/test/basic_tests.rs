@@ -22,12 +22,12 @@ async fn smoke_test() {
     let ledger = Arc::new(TestLedger::new());
     let req_handler = RosettaRequestHandler::new(ledger.clone());
     for b in &scribe.blockchain {
-        ledger.add_block(b.clone()).ok();
+        ledger.add_block(b.clone()).await.ok();
     }
 
     assert_eq!(
         scribe.blockchain.len() as u64,
-        ledger.read_blocks().last().unwrap().unwrap().block.index + 1
+        ledger.read_blocks().await.last().unwrap().unwrap().index + 1
     );
 
     for i in 0..num_accounts {
@@ -85,7 +85,7 @@ async fn blocks_test() {
     }
 
     for b in &scribe.blockchain {
-        ledger.add_block(b.clone()).ok();
+        ledger.add_block(b.clone()).await.ok();
     }
 
     let h = num_accounts as usize + 17;
@@ -154,7 +154,7 @@ async fn balances_test() {
 
     scribe.gen_accounts(2, 1_000_000);
     for b in &scribe.blockchain {
-        ledger.add_block(b.clone()).ok();
+        ledger.add_block(b.clone()).await.ok();
     }
 
     assert_eq!(
@@ -169,6 +169,7 @@ async fn balances_test() {
     scribe.buy(to_uid(0), 10);
     ledger
         .add_block(scribe.blockchain.back().unwrap().clone())
+        .await
         .ok();
     assert_eq!(
         get_balance(&req_handler, None, 0).await.unwrap(),
@@ -184,6 +185,7 @@ async fn balances_test() {
     scribe.sell(to_uid(0), 100);
     ledger
         .add_block(scribe.blockchain.back().unwrap().clone())
+        .await
         .ok();
     assert_eq!(
         get_balance(&req_handler, None, 0).await.unwrap(),
@@ -197,6 +199,7 @@ async fn balances_test() {
     scribe.transfer(to_uid(0), to_uid(1), 1000);
     ledger
         .add_block(scribe.blockchain.back().unwrap().clone())
+        .await
         .ok();
     assert_eq!(
         get_balance(&req_handler, None, 0).await.unwrap(),
