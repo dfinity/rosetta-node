@@ -6,29 +6,30 @@ pub mod sync;
 
 use crate::convert::account_from_public_key;
 use crate::convert::operations;
-use crate::sync::HashedBlock;
-use ic_interfaces::crypto::DOMAIN_IC_REQUEST;
-use ic_types::messages::{
-    Blob, HttpCanisterUpdate, HttpRequestEnvelope, HttpSubmitContent, MessageId, RawHttpRequest,
-};
-use ic_types::time::current_time_and_expiry_time;
-use models::*;
-use rand::Rng;
-
-use ic_types::{CanisterId, PrincipalId};
-
 use crate::convert::{
     account_identifier, from_arg, from_hex, from_public_key, internal_error, into_error,
     transaction_id,
 };
 use crate::ledger_client::LedgerAccess;
+
+use crate::sync::HashedBlock;
+
 use convert::{from_metadata, into_metadata, to_arg};
+use ic_interfaces::crypto::DOMAIN_IC_REQUEST;
+use ic_types::messages::{
+    Blob, HttpCanisterUpdate, HttpRequestEnvelope, HttpSubmitContent, MessageId, RawHttpRequest,
+};
+use ic_types::time::current_time_and_expiry_time;
+use ic_types::{CanisterId, PrincipalId};
 use ledger_canister::{BlockHeight, Memo, Transfer};
+use models::*;
+use rand::Rng;
 use serde_json::{json, map::Map};
 use std::convert::TryFrom;
+
 use std::sync::Arc;
 
-pub const API_VERSION: &str = "1.4.4";
+pub const API_VERSION: &str = "1.4.9";
 
 fn to_index(height: BlockHeight) -> Result<i128, ApiError> {
     i128::try_from(height).map_err(|_| ApiError::InternalError(true, None))
@@ -323,17 +324,21 @@ impl RosettaRequestHandler {
 
         let from =
             PrincipalId::try_from(update.sender.0).map_err(|e| internal_error(e.to_string()))?;
-        let from_ai = account_identifier(&from);
+        let from_ai = if signed {
+            vec![account_identifier(&from)]
+        } else {
+            Vec::new()
+        };
 
         // This is always a transaction
         let (_, amount, to, _) = from_arg(update.arg.0)?;
 
-        let operations = operations(&Transfer::Send { from, to, amount })?;
+        let operations = operations(&Transfer::Send { from, to, amount }, false)?;
 
         Ok(ConstructionParseResponse {
             operations,
             signers: None,
-            account_identifier_signers: Some(vec![from_ai]),
+            account_identifier_signers: Some(from_ai),
             metadata: None,
         })
     }
@@ -497,7 +502,7 @@ impl RosettaRequestHandler {
         // decide what to do with retriable flags in errors
         let resp = json!({
             "version": {
-               "rosetta_version": "1.2.5",
+               "rosetta_version": API_VERSION,
                "node_version": "1.0.2",
                "middleware_version": "0.2.7",
                "metadata": {}
@@ -547,7 +552,9 @@ impl RosettaRequestHandler {
         let genesis_block_id = convert::block_id(&genesis_block)?;
         let peers = vec![];
 
-        let sync_status = SyncStatus::new(tip.index as i64);
+        let sync_status = SyncStatus::new(tip.index as i64, None);
+        //let sync_status = SyncStatus::new(tip.index as i64, Some(true));
+        //sync_status.target_index = Some(sync_status.current_index);
 
         Ok(NetworkStatusResponse::new(
             tip_id,

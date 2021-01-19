@@ -223,12 +223,13 @@ impl RosettaApiServer {
         })
     }
 
-    pub async fn run(&self) -> std::io::Result<()> {
+    pub async fn run(&self, exit_on_sync: bool) -> std::io::Result<()> {
         println!("Starting Rosetta API server");
         let ledger = self.ledger.clone();
         let stopped = self.stopped.clone();
         let (tx, rx) = oneshot::channel::<()>();
         *self.sync_thread_join_handle.lock().unwrap() = Some(rx);
+        let server = self.server.clone();
         // Every second start downloading new blocks, when that's done update the index
         spawn(async move {
             let mut interval = interval(Duration::from_secs(1));
@@ -237,6 +238,13 @@ impl RosettaApiServer {
 
                 if let Err(err) = ledger.sync_blocks().await {
                     eprintln!("Error in syncing blocks: {:?}", err);
+                }
+
+                if exit_on_sync {
+                    println!("Blockchain synced, exiting");
+                    server.stop(true).await;
+                    println!("Stopping blockchain sync thread");
+                    break;
                 }
             }
             tx.send(())
@@ -258,5 +266,6 @@ impl RosettaApiServer {
             .unwrap()
             .await
             .expect("Error on waiting for blockchain thread to finish");
+        println!("Joined with blockchain sync thread");
     }
 }
