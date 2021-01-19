@@ -10,7 +10,7 @@
  "retry_elapsed_time": 0,
  "max_online_connections": 6,
  "max_sync_concurrency": 8,
- "tip_delay": 300,
+ "tip_delay": 9999999999,
  "max_reorg_depth": 100,
  "log_configuration": false,
  "compression_disabled": false,

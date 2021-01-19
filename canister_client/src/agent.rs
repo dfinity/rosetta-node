@@ -518,9 +518,6 @@ pub fn sign_read(
         HttpReadContent::Query { query } => {
             RawHttpRequest::try_from((query.clone(), current_time)).unwrap()
         }
-        HttpReadContent::RequestStatus { request_status } => {
-            RawHttpRequest::try_from((request_status.clone(), current_time)).unwrap()
-        }
         HttpReadContent::ReadState { read_state } => {
             RawHttpRequest::try_from((read_state.clone(), current_time)).unwrap()
         }
@@ -560,11 +557,9 @@ mod tests {
     use ic_test_utilities::{
         crypto::temp_crypto_component_with_fake_registry, FastForwardTimeSource,
     };
-    use ic_types::messages::{
-        HttpCanisterUpdate, HttpRequestStatus, HttpUserQuery, SignedIngress, SignedReadRequest,
-    };
+    use ic_types::messages::{HttpCanisterUpdate, HttpUserQuery, SignedIngress, SignedReadRequest};
     use ic_types::{PrincipalId, Time, UserId};
-    use ic_validator::{validate_message, verify_signature};
+    use ic_validator::{validate_message, validate_user_id_and_signature};
     use rand_chacha::ChaChaRng;
     use rand_core::SeedableRng;
     use tokio_test::assert_ok;
@@ -672,52 +667,6 @@ mod tests {
     }
 
     #[test]
-    fn sign_and_verify_request_status_content_valid_status_request() {
-        let current_time = FastForwardTimeSource::new().get_relative_time();
-        let expiry_time = current_time + Duration::from_secs(4 * 60);
-
-        // Set up an arbitrary legal input
-        let keypair = {
-            let mut rng = ChaChaRng::seed_from_u64(51 as u64);
-            ed25519_dalek::Keypair::generate(&mut rng)
-        };
-        let content = HttpReadContent::RequestStatus {
-            request_status: HttpRequestStatus {
-                request_id: Blob(vec![
-                    0, 1, 2, 3, 4, 5, 6, 7, // A valid request id is always 32 bytes
-                    3, 3, 3, 3, 3, 3, 3, 3, // but any content is valid
-                    5, 5, 5, 5, 5, 5, 5, 5, // so we just use something arbitrary
-                    0, 0, 0, 0, 0, 0, 0, 0, // in this test.
-                ]),
-                nonce: None,
-                ingress_expiry: expiry_time.as_nanos_since_unix_epoch(),
-            },
-        };
-        // Workaround because HttpReadContent is not cloneable
-        let content_copy = serde_cbor::value::from_value::<HttpReadContent>(
-            serde_cbor::value::to_value(&content).unwrap(),
-        )
-        .unwrap();
-
-        let sender = Sender::from_keypair(&keypair);
-        let read = sign_read(content, &sender, current_time).unwrap();
-
-        // The wrapped content is content, without modification
-        assert_eq!(read.content, content_copy);
-
-        // The signature matches
-        let signed_read = SignedReadRequest::try_from((read, current_time)).unwrap();
-        let validator = temp_crypto_component_with_fake_registry(node_test_id(VALIDATOR_NODE_ID));
-        let message_id = signed_read.message_id();
-        assert_ok!(verify_signature(
-            &validator,
-            &message_id,
-            signed_read.signature().unwrap(),
-            time_now()
-        ));
-    }
-
-    #[test]
     fn sign_and_verify_request_status_content_valid_query() {
         let current_time = FastForwardTimeSource::new().get_relative_time();
         let expiry_time = current_time + Duration::from_secs(4 * 60);
@@ -727,18 +676,15 @@ mod tests {
             let mut rng = ChaChaRng::seed_from_u64(89 as u64);
             ed25519_dalek::Keypair::generate(&mut rng)
         };
+        let sender = UserId::from(PrincipalId::new_self_authenticating(
+            &ed25519_public_key_to_der(keypair.public.to_bytes().to_vec()),
+        ));
         let content = HttpReadContent::Query {
             query: HttpUserQuery {
                 canister_id: Blob(vec![67, 3]),
                 method_name: "foo".to_string(),
                 arg: Blob(vec![23, 19, 4]),
-                sender: Blob(
-                    UserId::from(PrincipalId::new_self_authenticating(
-                        &ed25519_public_key_to_der(keypair.public.to_bytes().to_vec()),
-                    ))
-                    .get()
-                    .into_vec(),
-                ),
+                sender: Blob(sender.get().into_vec()),
                 nonce: None,
                 ingress_expiry: expiry_time.as_nanos_since_unix_epoch(),
             },
@@ -749,8 +695,7 @@ mod tests {
         )
         .unwrap();
 
-        let sender = Sender::from_keypair(&keypair);
-        let read = sign_read(content, &sender, current_time).unwrap();
+        let read = sign_read(content, &Sender::from_keypair(&keypair), current_time).unwrap();
 
         // The wrapped content is content, without modification
         assert_eq!(read.content, content_copy);
@@ -759,10 +704,11 @@ mod tests {
         let signed_read = SignedReadRequest::try_from((read, current_time)).unwrap();
         let validator = temp_crypto_component_with_fake_registry(node_test_id(VALIDATOR_NODE_ID));
         let message_id = signed_read.message_id();
-        assert_ok!(verify_signature(
+        assert_ok!(validate_user_id_and_signature(
             &validator,
+            &sender,
             &message_id,
-            &signed_read.signature().unwrap(),
+            &signed_read.signature().cloned(),
             time_now()
         ));
     }

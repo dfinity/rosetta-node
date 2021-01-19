@@ -39,18 +39,24 @@ pub trait XNetPayloadBuilder: Send + Sync {
     /// valid given a `ValidationContext` (certified height plus registry
     /// version) and `past_payloads` (the `XNetPayloads` from all blocks
     /// above the certified height, in descending block height order).
+    ///
     /// With the current implementation, if no valid XNetPayload of size
     /// 'byte_limit' exists, then the function returns the smallest
     /// XNetPayload which is valid. For practical parameters,
     /// for the current implementation XNetPayload will no be more than
     /// byte_limit+2kB. More details here:
     /// https://docs.google.com/document/d/1cC1-U000cts3GHiEf9OUNhp4clKt2XCG08Zxo35xoWw/edit#
+    ///
+    /// Because payload takes time to make, and this function should not block
+    /// its caller, An implementation can return `Pending` so that the
+    /// caller knows to poll again in the future.
     fn get_xnet_payload(
         &self,
+        height: Height,
         validation_context: &ValidationContext,
         past_payloads: &[&XNetPayload],
         byte_limit: NumBytes,
-    ) -> XNetPayload;
+    ) -> Result<XNetPayload, XNetPayloadError>;
 
     /// Checks whether the provided `XNetPayload` is valid given a
     /// `ValidationContext` (certified height and registry version) and
@@ -65,3 +71,18 @@ pub trait XNetPayloadBuilder: Send + Sync {
         byte_limit: NumBytes,
     ) -> ValidationResult<PayloadValidationError>;
 }
+
+/// Possible errors in making XNetPayload.
+#[derive(Clone, Debug)]
+pub enum XNetPayloadError {
+    /// Payload making has started, but the result is not ready yet.
+    Pending,
+}
+
+impl std::fmt::Display for XNetPayloadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl std::error::Error for XNetPayloadError {}

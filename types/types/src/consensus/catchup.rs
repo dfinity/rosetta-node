@@ -1,7 +1,7 @@
 use crate::{
     consensus::{
-        Block, BlockPayload, Committee, HasCommittee, HasHeight, HasVersion, HashedBlock,
-        HashedRandomBeacon, RandomBeacon, ThresholdSignature, ThresholdSignatureShare,
+        Block, Committee, HasCommittee, HasHeight, HasVersion, HashedBlock, HashedRandomBeacon,
+        RandomBeacon, ThresholdSignature, ThresholdSignatureShare,
     },
     crypto::threshold_sig::ni_dkg::NiDkgId,
     crypto::*,
@@ -20,6 +20,7 @@ pub type CatchUpContent = CatchUpContentT<HashedBlock>;
 /// A generic struct shared between CatchUpContent and CatchUpContentShare.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Ord, Hash)]
 pub struct CatchUpContentT<T> {
+    /// Replica version that was running when this CUP was created.
     version: ReplicaVersion,
     /// A finalized Block that contains DKG summary. We call its height the
     /// catchup height.
@@ -80,34 +81,31 @@ impl From<&CatchUpContent> for pb::CatchUpContent {
     }
 }
 
-pub fn catch_up_content_from_protobuf<
-    F: FnOnce(&BlockPayload) -> CryptoHashOf<BlockPayload> + Send + 'static,
->(
-    hash_func: F,
-    content: pb::CatchUpContent,
-) -> Result<CatchUpContent, String> {
-    let block = super::block_from_protobuf(
-        hash_func,
-        content
-            .block
-            .ok_or_else(|| String::from("Error: CUP missing block"))?,
-    )?;
-    let random_beacon = RandomBeacon::try_from(
-        content
-            .random_beacon
-            .ok_or_else(|| String::from("Error: CUP missing block"))?,
-    )?;
-    Ok(CatchUpContent::new(
-        HashedBlock {
-            hash: CryptoHashOf::from(CryptoHash(content.block_hash)),
-            value: block,
-        },
-        HashedRandomBeacon {
-            hash: CryptoHashOf::from(CryptoHash(content.random_beacon_hash)),
-            value: random_beacon,
-        },
-        CryptoHashOf::from(CryptoHash(content.state_hash)),
-    ))
+impl TryFrom<pb::CatchUpContent> for CatchUpContent {
+    type Error = String;
+    fn try_from(content: pb::CatchUpContent) -> Result<CatchUpContent, String> {
+        let block = super::Block::try_from(
+            content
+                .block
+                .ok_or_else(|| String::from("Error: CUP missing block"))?,
+        )?;
+        let random_beacon = RandomBeacon::try_from(
+            content
+                .random_beacon
+                .ok_or_else(|| String::from("Error: CUP missing block"))?,
+        )?;
+        Ok(Self::new(
+            HashedBlock {
+                hash: CryptoHashOf::from(CryptoHash(content.block_hash)),
+                value: block,
+            },
+            HashedRandomBeacon {
+                hash: CryptoHashOf::from(CryptoHash(content.random_beacon_hash)),
+                value: random_beacon,
+            },
+            CryptoHashOf::from(CryptoHash(content.state_hash)),
+        ))
+    }
 }
 
 impl SignedBytesWithoutDomainSeparator for CatchUpContent {
@@ -154,29 +152,26 @@ impl From<&CatchUpPackage> for pb::CatchUpPackage {
     }
 }
 
-pub fn catch_up_package_from_protobuf<
-    F: FnOnce(&BlockPayload) -> CryptoHashOf<BlockPayload> + Send + 'static,
->(
-    hash_func: F,
-    cup: &pb::CatchUpPackage,
-) -> Result<CatchUpPackage, String> {
-    Ok(CatchUpPackage {
-        content: catch_up_content_from_protobuf(
-            hash_func,
-            pb::CatchUpContent::decode(&cup.content[..])
-                .map_err(|e| format!("CatchUpContent failed to decode {:?}", e))?,
-        )?,
-        signature: ThresholdSignature {
-            signature: CombinedThresholdSigOf::new(CombinedThresholdSig(cup.signature.clone())),
-            signer: NiDkgId::try_from(
-                cup.signer
-                    .as_ref()
-                    .ok_or_else(|| String::from("Error: CUP signer not present"))?
-                    .clone(),
-            )
-            .map_err(|e| format!("Unable to decode CUP signer {:?}", e))?,
-        },
-    })
+impl TryFrom<&pb::CatchUpPackage> for CatchUpPackage {
+    type Error = String;
+    fn try_from(cup: &pb::CatchUpPackage) -> Result<CatchUpPackage, String> {
+        Ok(CatchUpPackage {
+            content: CatchUpContent::try_from(
+                pb::CatchUpContent::decode(&cup.content[..])
+                    .map_err(|e| format!("CatchUpContent failed to decode {:?}", e))?,
+            )?,
+            signature: ThresholdSignature {
+                signature: CombinedThresholdSigOf::new(CombinedThresholdSig(cup.signature.clone())),
+                signer: NiDkgId::try_from(
+                    cup.signer
+                        .as_ref()
+                        .ok_or_else(|| String::from("Error: CUP signer not present"))?
+                        .clone(),
+                )
+                .map_err(|e| format!("Unable to decode CUP signer {:?}", e))?,
+            },
+        })
+    }
 }
 
 /// Content of CatchUpPackageShare use the block hash to keep its size small.
@@ -236,6 +231,10 @@ impl From<&CatchUpPackage> for CatchUpPackageParam {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct CatchUpContentProtobufBytes(pub Vec<u8>);
 
+/// A catch up package paired with the original protobuf. Note that the protobuf
+/// contained in this struct is only partially deserialized and has the ORIGINAL
+/// bytes CatchUpContent bytes that were signed in yet to be deserialized form.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct CUPWithOriginalProtobuf {
     pub cup: CatchUpPackage,
     pub protobuf: pb::CatchUpPackage,

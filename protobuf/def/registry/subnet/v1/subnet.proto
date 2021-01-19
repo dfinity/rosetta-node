@@ -42,15 +42,29 @@ message SubnetRecord {
 
   // If set to yes, the subnet starts as a (new) NNS
   bool start_as_nns = 14;
+
+  // The type of subnet.
+  SubnetType subnet_type = 15;
 }
 
-// Contains the initial DKG transcripts for the subnet
+// Contains the initial DKG transcripts for the subnet and materials to construct a base CUP (i.e.
+// a CUP with no dependencies on previous CUPs or blocks). Such CUP materials can be used to
+// construct the genesis CUP or a recovery CUP in the event of a subnet stall.
 message CatchUpPackageContents {
   // Initial non-interactive low-threshold DKG transcript
   InitialNiDkgTranscriptRecord initial_ni_dkg_transcript_low_threshold = 1;
 
   // Initial non-interactive high-threshold DKG transcript
   InitialNiDkgTranscriptRecord initial_ni_dkg_transcript_high_threshold = 2;
+
+  // The blockchain height that the CUP should have
+  uint64 height = 3;
+
+  // Block time for the CUP's block
+  uint64 time = 4;
+
+  // The hash of the state that the subnet should use
+  bytes state_hash = 5;
 }
 
 // A list of subnet ids of all subnets present in this instance of the IC.
@@ -106,4 +120,17 @@ message GossipConfig {
   uint32 registry_poll_period_ms = 7;
   // period for sending a retransmission request
   uint32 retransmission_request_ms = 8;
+}
+
+// Represents the type of subnet. Subnets of different type might exhibit different 
+// behavior, e.g. being more restrictive in what operations are allowed or privileged 
+// compared to other subnet types.
+enum SubnetType {
+    SUBNET_TYPE_UNSPECIFIED = 0;
+    // A normal subnet where no restrictions are applied.
+    SUBNET_TYPE_APPLICATION = 1;
+    // A more privileged subnet where certain restrictions are applied, 
+    // like not charging for cycles or restricting who can create and 
+    // install canisters on it.
+    SUBNET_TYPE_SYSTEM = 2;
 }

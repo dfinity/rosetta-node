@@ -18,8 +18,12 @@ message LogEntry {
   string crate = 4;
   string module = 5;
   uint32 line = 6;
+  string node_id = 7;
+  string subnet_id = 8;
 
-  log.replica_config.v1.ReplicaConfig replica_config = 17;
+  // Moved node_id and subnet_id from replica_config to a top-level field above
+  reserved 17;
+  reserved "replica_config";
   log.consensus_log_entry.v1.ConsensusLogEntry consensus = 18;
   log.p2p_log_entry.v1.P2PLogEntry p2p = 19;
   log.messaging_log_entry.v1.MessagingLogEntry messaging = 20;

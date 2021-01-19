@@ -40,6 +40,7 @@ fn main() {
     build_registry_proto();
     build_messaging_proto();
     build_state_proto();
+    build_p2p_proto();
 }
 
 /// Generates Rust structs from logging Protobuf messages.
@@ -224,6 +225,10 @@ fn build_types_proto() {
     let mut config = base_config();
     config.out_dir("gen/types");
     config.type_attribute(".", "#[derive(serde::Serialize, serde::Deserialize)]");
+    config.type_attribute(".types.v1.CatchUpPackage", "#[derive(Eq, Hash)]");
+    config.type_attribute(".types.v1.SubnetId", "#[derive(Eq, Hash)]");
+    config.type_attribute(".types.v1.NiDkgId", "#[derive(Eq, Hash)]");
+    config.type_attribute(".types.v1.PrincipalId", "#[derive(Eq, Hash)]");
     let files = [
         "def/types/v1/types.proto",
         "def/types/v1/dkg.proto",
@@ -239,6 +244,15 @@ fn build_crypto_proto() {
     config.out_dir("gen/crypto");
     config.type_attribute(".", "#[derive(serde::Serialize, serde::Deserialize)]");
     let files = ["def/crypto/v1/crypto.proto"];
+    compile_protos(config, &files);
+}
+
+/// Generates Rust structs from crypto Protobuf messages.
+fn build_p2p_proto() {
+    let mut config = base_config();
+    config.out_dir("gen/p2p");
+    config.type_attribute(".", "#[derive(serde::Serialize, serde::Deserialize)]");
+    let files = ["def/p2p/v1/p2p.proto"];
     compile_protos(config, &files);
 }
 

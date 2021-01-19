@@ -5,22 +5,20 @@ mod inter_canister;
 mod message_id;
 mod query;
 mod read_state;
-mod request_status;
 mod webauthn;
 
 use crate::{
-    ingress::MAX_INGRESS_TTL, user_id_into_protobuf, user_id_try_from_protobuf, CanisterId,
-    CanisterIdError, CountBytes, Funds, NumBytes, PrincipalId, Time, UserId,
+    user_id_into_protobuf, user_id_try_from_protobuf, CountBytes, Funds, NumBytes, Time, UserId,
 };
 pub use blob::Blob;
 pub use http::{
     Certificate, CertificateDelegation, Delegation, HttpCanisterUpdate, HttpQueryResponse,
     HttpQueryResponseReply, HttpReadContent, HttpReadState, HttpReadStateResponse, HttpReply,
-    HttpRequestEnvelope, HttpRequestStatus, HttpRequestStatusResponse, HttpResponseStatus,
-    HttpStatusResponse, HttpSubmitContent, HttpUserQuery, RawHttpRequest, RawHttpRequestVal,
-    SignedDelegation,
+    HttpRequestEnvelope, HttpResponseStatus, HttpStatusResponse, HttpSubmitContent, HttpUserQuery,
+    RawHttpRequest, RawHttpRequestVal, SignedDelegation,
 };
 pub use ic_base_types::CanisterInstallMode;
+use ic_base_types::{CanisterId, CanisterIdError, PrincipalId};
 use ic_protobuf::proxy::{try_from_option_field, ProxyDecodeError};
 use ic_protobuf::state::canister_state_bits::v1 as pb;
 use ic_protobuf::types::v1 as pb_types;
@@ -31,7 +29,6 @@ pub use inter_canister::{
 pub use message_id::{MessageId, MessageIdError, EXPECTED_MESSAGE_ID_LENGTH};
 pub use query::{SignedUserQuery, SignedUserQueryContent, UserQuery};
 pub use read_state::{ReadState, SignedReadState, SignedReadStateContent};
-pub use request_status::{RequestStatus, SignedRequestStatus, SignedRequestStatusContent};
 use serde::{Deserialize, Serialize};
 use std::{convert::TryFrom, error::Error, fmt};
 pub use webauthn::{WebAuthnEnvelope, WebAuthnSignature};
@@ -207,7 +204,6 @@ impl From<CanisterIdError> for HttpHandlerError {
 #[derive(Debug, PartialEq)]
 pub enum SignedReadRequest {
     Query(SignedUserQuery),
-    RequestStatus(SignedRequestStatus),
     ReadState(SignedReadState),
 }
 
@@ -215,7 +211,6 @@ impl SignedReadRequest {
     pub fn signature(&self) -> Option<&UserSignature> {
         match self {
             Self::Query(query) => query.signature.as_ref(),
-            Self::RequestStatus(request_status) => request_status.signature.as_ref(),
             Self::ReadState(read_state) => read_state.signature.as_ref(),
         }
     }
@@ -223,7 +218,6 @@ impl SignedReadRequest {
     pub fn message_id(&self) -> MessageId {
         match self {
             Self::Query(query) => MessageId::from(query.content()),
-            Self::RequestStatus(request_status) => MessageId::from(request_status.content()),
             Self::ReadState(read_state) => MessageId::from(read_state.content()),
         }
     }
@@ -265,35 +259,6 @@ impl TryFrom<(HttpRequestEnvelope<HttpReadContent>, Time)> for SignedReadRequest
                 }
             }
 
-            HttpReadContent::RequestStatus { request_status } => {
-                let content = RawHttpRequest::try_from((request_status, current_time))?;
-                match (
-                    request.sender_pubkey,
-                    request.sender_sig,
-                    request.sender_delegation,
-                ) {
-                    (Some(pubkey), Some(signature), delegation) => {
-                        let signature = UserSignature {
-                            signature: signature.0,
-                            signer_pubkey: pubkey.0,
-                            sender_delegation: delegation,
-                        };
-                        Ok(Self::RequestStatus(SignedRequestStatus {
-                            content: SignedRequestStatusContent::new(content),
-                            signature: Some(signature),
-                        }))
-                    }
-                    (None, None, None) => Ok(Self::RequestStatus(SignedRequestStatus {
-                        content: SignedRequestStatusContent::new(content),
-                        signature: None,
-                    })),
-                    rest => Err(Self::Error::MissingPubkeyOrSignature(format!(
-                        "Got {:?}",
-                        rest
-                    ))),
-                }
-            }
-
             HttpReadContent::ReadState { read_state } => {
                 let content = RawHttpRequest::try_from((read_state, current_time))?;
                 match (
@@ -326,52 +291,10 @@ impl TryFrom<(HttpRequestEnvelope<HttpReadContent>, Time)> for SignedReadRequest
     }
 }
 
-/// Check if ingress_expiry has not expired with respect to the given time,
-/// i.e., it is greater than or equal to current_time.
-pub fn validate_ingress_expiry(
-    ingress_expiry: u64,
-    current_time: Time,
-) -> Result<(), HttpHandlerError> {
-    let min_allowed_expiry = current_time.as_nanos_since_unix_epoch();
-    if ingress_expiry < min_allowed_expiry {
-        let msg = format!(
-            "Specified ingress_expiry {}ns is less than allowed expiry time {}ns",
-            ingress_expiry, min_allowed_expiry,
-        );
-        return Err(HttpHandlerError::InvalidIngressExpiry(msg));
-    }
-    Ok(())
-}
-
-/// Check if ingress_expiry is within a proper range with respect to the given
-/// time, i.e., it is not expired yet and is not too far in the future.
-pub fn validate_ingress_expiry_range(
-    ingress_expiry: u64,
-    current_time: Time,
-) -> Result<(), HttpHandlerError> {
-    let provided_expiry = Time::from_nanos_since_unix_epoch(ingress_expiry);
-    let min_allowed_expiry = current_time;
-    let max_allowed_expiry = min_allowed_expiry + MAX_INGRESS_TTL;
-    let system_time = chrono::Utc::now();
-    if !(min_allowed_expiry <= provided_expiry && provided_expiry <= max_allowed_expiry) {
-        let msg = format!(
-            "Specified ingress_expiry not within expected range:\n\
-             Minimum allowed expiry: {}\n\
-             Maximum allowed expiry: {}\n\
-             Provided expiry:        {}\n\
-             Local time:             {}",
-            min_allowed_expiry, max_allowed_expiry, provided_expiry, system_time,
-        );
-        return Err(HttpHandlerError::InvalidIngressExpiry(msg));
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::time::current_time_and_expiry_time;
-    use assert_matches::assert_matches;
     use maplit::btreemap;
     use proptest::prelude::*;
     use serde_cbor::Value;
@@ -614,61 +537,5 @@ mod tests {
         let mut buffer = Cursor::new(&bytes);
         let signed_ingress1: SignedIngress = bincode::deserialize_from(&mut buffer).unwrap();
         assert_eq!(signed_ingress, signed_ingress1);
-    }
-
-    #[test]
-    fn too_big_message_id() {
-        let (current_time, expiry_time) = current_time_and_expiry_time();
-        let read_request = HttpRequestEnvelope::<HttpReadContent> {
-            content: HttpReadContent::RequestStatus {
-                request_status: HttpRequestStatus {
-                    request_id: Blob(vec![1; 33]),
-                    nonce: None,
-                    ingress_expiry: expiry_time.as_nanos_since_unix_epoch(),
-                },
-            },
-            sender_pubkey: Some(Blob(vec![])),
-            sender_sig: Some(Blob(vec![])),
-            sender_delegation: None,
-        };
-        let err = SignedReadRequest::try_from((read_request, current_time)).unwrap_err();
-        assert_matches!(err, HttpHandlerError::InvalidMessageId(_));
-    }
-
-    #[test]
-    fn too_small_message_id() {
-        let (current_time, expiry_time) = current_time_and_expiry_time();
-        let read_request = HttpRequestEnvelope::<HttpReadContent> {
-            content: HttpReadContent::RequestStatus {
-                request_status: HttpRequestStatus {
-                    request_id: Blob(vec![1; 31]),
-                    nonce: None,
-                    ingress_expiry: expiry_time.as_nanos_since_unix_epoch(),
-                },
-            },
-            sender_pubkey: Some(Blob(vec![])),
-            sender_sig: Some(Blob(vec![])),
-            sender_delegation: None,
-        };
-        let err = SignedReadRequest::try_from((read_request, current_time)).unwrap_err();
-        assert_matches!(err, HttpHandlerError::InvalidMessageId(_));
-    }
-
-    #[test]
-    fn exact_message_id() {
-        let (current_time, expiry_time) = current_time_and_expiry_time();
-        let read_request = HttpRequestEnvelope::<HttpReadContent> {
-            content: HttpReadContent::RequestStatus {
-                request_status: HttpRequestStatus {
-                    request_id: Blob(vec![1; 32]),
-                    nonce: None,
-                    ingress_expiry: expiry_time.as_nanos_since_unix_epoch(),
-                },
-            },
-            sender_pubkey: Some(Blob(vec![])),
-            sender_sig: Some(Blob(vec![])),
-            sender_delegation: None,
-        };
-        SignedReadRequest::try_from((read_request, current_time)).unwrap();
     }
 }

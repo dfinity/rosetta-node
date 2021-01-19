@@ -264,11 +264,24 @@ pub enum CryptoError {
         sig_bytes: Vec<u8>,
         internal_error: String,
     },
+    /// Pop could not be parsed or is otherwise invalid.
+    MalformedPop {
+        algorithm: AlgorithmId,
+        pop_bytes: Vec<u8>,
+        internal_error: String,
+    },
     /// Signature could not be verified.
     SignatureVerification {
         algorithm: AlgorithmId,
         public_key_bytes: Vec<u8>,
         sig_bytes: Vec<u8>,
+        internal_error: String,
+    },
+    /// Pop could not be verified.
+    PopVerification {
+        algorithm: AlgorithmId,
+        public_key_bytes: Vec<u8>,
+        pop_bytes: Vec<u8>,
         internal_error: String,
     },
     /// Multi-signature: inconsistent (multiple) algorithms.
@@ -343,6 +356,13 @@ impl CryptoError {
     pub fn is_signature_verification_error(&self) -> bool {
         match self {
             CryptoError::SignatureVerification { .. } => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_pop_verification_error(&self) -> bool {
+        match self {
+            CryptoError::PopVerification { .. } => true,
             _ => false,
         }
     }
@@ -457,6 +477,17 @@ impl fmt::Debug for CryptoError {
                 hex::encode(&sig_bytes),
                 internal_error
             ),
+            CryptoError::MalformedPop {
+                algorithm,
+                pop_bytes,
+                internal_error,
+            } => write!(
+                f,
+                "Malformed {:?} PoP: [{}] error: '{}'",
+                algorithm,
+                hex::encode(&pop_bytes),
+                internal_error
+            ),
 
             CryptoError::SignatureVerification {
                 algorithm,
@@ -469,6 +500,19 @@ impl fmt::Debug for CryptoError {
                 algorithm,
                 hex::encode(&public_key_bytes),
                 hex::encode(&sig_bytes),
+                internal_error,
+            ),
+            CryptoError::PopVerification {
+                algorithm,
+                public_key_bytes,
+                pop_bytes,
+                internal_error,
+            } => write!(
+                f,
+                "{:?} PoP could not be verified: public key {}, pop {}, error: {}",
+                algorithm,
+                hex::encode(&public_key_bytes),
+                hex::encode(&pop_bytes),
                 internal_error,
             ),
 

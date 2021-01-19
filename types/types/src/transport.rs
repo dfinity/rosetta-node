@@ -78,13 +78,6 @@ pub struct TransportFlowInfo {
     pub flow_tag: FlowTag,
 }
 
-/// Opaque handle to the per-client context.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct TransportClientContext {
-    pub nonce: u32,
-    pub client_type: TransportClientType,
-}
-
 /// Error codes returned by transport manager functions.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TransportErrorCode {

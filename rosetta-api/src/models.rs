@@ -611,7 +611,8 @@ pub struct ConstructionMetadataRequest {
     /// populate an options object to limit the metadata returned to only the
     /// subset required.
     #[serde(rename = "options")]
-    pub options: Object,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<Object>,
 
     #[serde(rename = "public_keys")]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -619,13 +620,10 @@ pub struct ConstructionMetadataRequest {
 }
 
 impl ConstructionMetadataRequest {
-    pub fn new(
-        network_identifier: NetworkIdentifier,
-        options: Object,
-    ) -> ConstructionMetadataRequest {
+    pub fn new(network_identifier: NetworkIdentifier) -> ConstructionMetadataRequest {
         ConstructionMetadataRequest {
             network_identifier,
-            options,
+            options: None,
             public_keys: None,
         }
     }
@@ -1317,7 +1315,7 @@ pub struct Operation {
     /// (all operations succeed or all operations fail) will have the same
     /// status for each operation.
     #[serde(rename = "status")]
-    pub status: String,
+    pub status: Option<String>,
 
     #[serde(rename = "account")]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1340,7 +1338,7 @@ impl Operation {
     pub fn new(
         op_id: i64,
         _type: String,
-        status: String,
+        status: Option<String>,
         account: Option<AccountIdentifier>,
         amount: Option<Amount>,
     ) -> Operation {
@@ -1675,14 +1673,20 @@ pub struct SyncStatus {
     #[serde(rename = "stage")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stage: Option<String>,
+
+    /// Stage is the phase of the sync process.
+    #[serde(rename = "synced")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub synced: Option<bool>,
 }
 
 impl SyncStatus {
-    pub fn new(current_index: i64) -> SyncStatus {
+    pub fn new(current_index: i64, synced: Option<bool>) -> SyncStatus {
         SyncStatus {
             current_index,
             target_index: None,
             stage: None,
+            synced,
         }
     }
 }

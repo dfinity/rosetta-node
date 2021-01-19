@@ -1,7 +1,7 @@
 // Include the prost-build generated registry protos.
 pub mod pb;
 
-use std::fmt;
+use std::{fmt, str};
 
 use crate::pb::v1::{
     registry_error::Code, registry_mutation::Type, Precondition, RegistryDelta, RegistryError,
@@ -31,19 +31,21 @@ impl fmt::Display for Error {
             Error::MalformedMessage(pb_error) => {
                 fmt.write_fmt(format_args!("PB error: {}", pb_error.to_string().as_str()))?
             }
-            Error::KeyNotPresent(key) => {
-                fmt.write_fmt(format_args!("Key not present: {:?}", key))?
-            }
-            Error::KeyAlreadyPresent(key) => {
-                fmt.write_fmt(format_args!("Key already present: {:?}", key))?
-            }
+            Error::KeyNotPresent(key) => fmt.write_fmt(format_args!(
+                "Key not present: {}",
+                std::str::from_utf8(&key).expect("key is not a str")
+            ))?,
+            Error::KeyAlreadyPresent(key) => fmt.write_fmt(format_args!(
+                "Key already present: {}",
+                std::str::from_utf8(&key).expect("key is not a str")
+            ))?,
             Error::VersionNotLatest(key) => fmt.write_fmt(format_args!(
-                "Specified version was not the last version of the key: {:?}",
-                key
+                "Specified version was not the last version of the key: {}",
+                std::str::from_utf8(&key).expect("key is not a str")
             ))?,
             Error::VersionBeyondLatest(key) => fmt.write_fmt(format_args!(
-                "Specified version for key {:?} is beyond the latest registry version",
-                key
+                "Specified version for key {} is beyond the latest registry version",
+                std::str::from_utf8(&key).expect("key is not a str")
             ))?,
             Error::RegistryUnreachable(error) => fmt.write_fmt(format_args!(
                 "Can't reach the registry canister: {}",

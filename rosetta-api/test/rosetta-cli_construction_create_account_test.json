@@ -9,12 +9,37 @@
  "retry_elapsed_time": 0,
  "max_online_connections": 120,
  "max_sync_concurrency": 64,
- "tip_delay": 9999999,
+ "tip_delay": 9999999999,
  "max_reorg_depth": 100,
  "log_configuration": false,
  "compression_disabled": false,
  "memory_limit_disabled": false,
  "construction": {
+   "offline_url": "http://localhost:8092",
+   "prefunded_accounts": [
+   {
+    "account_identifier": {
+        "address": "7c7ec16552f5fcb2e9e61aeb2141cde19f0800bee00a6ee8672d448202"
+    },
+    "privkey": "f9d6233c84708030355bd24a7c4b0dbda52e95ad24940d2e913427fe2af041cc",
+    "curve_type": "edwards25519",
+    "currency": {
+     "symbol": "ICP",
+     "decimals": 8
+    }
+   },
+   {
+    "account_identifier": {
+     "address": "46ed0873face9d8d0cc332bf834034f885a5e983372db0a0f0bd608f02"
+    },
+    "privkey": "fe44a9c31776d1f965bf1476a6ec8929afcf72cb66406f34922b3615a15aae10",
+    "curve_type": "edwards25519",
+    "currency": {
+     "symbol": "ICP",
+     "decimals": 8
+    }
+   }
+  ],
    "constructor_dsl_file": "rosetta_workflows.ros",
    "end_conditions": {
      "create_account": 10

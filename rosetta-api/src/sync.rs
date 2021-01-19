@@ -22,6 +22,7 @@ pub struct LedgerCanister {
     pub synced_to: Option<(HashOf<Block>, BlockHeight)>,
     pub verified_until: BlockHeight,
     init_time: Option<SystemTime>,
+    store_location: PathBuf,
 }
 
 impl LedgerCanister {
@@ -29,6 +30,7 @@ impl LedgerCanister {
         client: reqwest::Client,
         url: Url,
         canister_id: CanisterId,
+        store_location: &Path,
     ) -> Result<LedgerCanister, String> {
         let mut lc = LedgerCanister {
             agent: Agent::new_with_client(client, url, Sender::Anonymous),
@@ -36,6 +38,7 @@ impl LedgerCanister {
             synced_to: None,
             verified_until: 0,
             init_time: None,
+            store_location: store_location.to_path_buf(),
         };
         let genesis_block: Block = lc
             .block(0)
@@ -126,7 +129,7 @@ impl LedgerCanister {
         verify_tip(cert, synced_hash)?;
 
         if synced_height != ledger_height {
-            println!("You are all caught up to block height {}", ledger_height);
+            println!("You are all caught up to transaction {}", ledger_height);
         }
 
         self.verified_until = synced_height;
@@ -164,7 +167,7 @@ impl LedgerCanister {
     fn block_file_name(&self, height: BlockHeight) -> Box<Path> {
         self.chain_id()
             // TODO put this somewhere more sensible
-            .store_location(PathBuf::new())
+            .store_location(&self.store_location)
             .join(format!("{}.json", height))
             .into_boxed_path()
     }
@@ -214,7 +217,7 @@ struct ChainIdentifier {
 }
 
 impl ChainIdentifier {
-    fn store_location(&self, base: PathBuf) -> PathBuf {
+    fn store_location(&self, base: &Path) -> PathBuf {
         let time_ns = self
             .init_time
             .duration_since(UNIX_EPOCH)

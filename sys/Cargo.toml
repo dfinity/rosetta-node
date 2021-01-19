@@ -9,6 +9,7 @@ ic-crypto-sha256 = { path = "../crypto/sha256" }
 lazy_static = "1.4.0"
 libc = "0.2.74"
 nix = "0.15"
+wsl = "0.1.0"
 
 [dev-dependencies]
 tempfile = "3.1.0"
