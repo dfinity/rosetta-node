@@ -3,13 +3,12 @@
 //! This module defines the various http requests that the internet computer is
 //! prepared to handle.
 
-use super::{
-    validate_ingress_expiry, validate_ingress_expiry_range, Blob, HttpHandlerError, MessageId,
-};
+use super::{Blob, HttpHandlerError};
 use crate::{
-    crypto::SignedBytesWithoutDomainSeparator, messages::message_id::hash_of_map, CanisterId,
-    CountBytes, PrincipalId, Time, UserId,
+    crypto::SignedBytesWithoutDomainSeparator, ingress::MAX_INGRESS_TTL,
+    messages::message_id::hash_of_map, CountBytes, Time, UserId,
 };
+use ic_base_types::{CanisterId, PrincipalId};
 use ic_crypto_tree_hash::{MixedHashTree, Path};
 use ic_protobuf::types::v1 as pb;
 use maplit::btreemap;
@@ -20,6 +19,49 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     convert::TryFrom,
 };
+
+/// Check if ingress_expiry has not expired with respect to the given time,
+/// i.e., it is greater than or equal to current_time.
+fn validate_ingress_expiry(
+    ingress_expiry: u64,
+    current_time: Time,
+) -> Result<(), HttpHandlerError> {
+    let min_allowed_expiry = current_time.as_nanos_since_unix_epoch();
+    if ingress_expiry < min_allowed_expiry {
+        let msg = format!(
+            "Specified ingress_expiry {}ns is less than allowed expiry time {}ns",
+            ingress_expiry, min_allowed_expiry,
+        );
+        return Err(HttpHandlerError::InvalidIngressExpiry(msg));
+    }
+    Ok(())
+}
+
+/// Check if ingress_expiry is within a proper range with respect to the given
+/// time, i.e., it is not expired yet and is not too far in the future.
+fn validate_ingress_expiry_range(
+    ingress_expiry: u64,
+    current_time: Time,
+) -> Result<(), HttpHandlerError> {
+    let provided_expiry = Time::from_nanos_since_unix_epoch(ingress_expiry);
+    let min_allowed_expiry = current_time;
+    let max_allowed_expiry = min_allowed_expiry + MAX_INGRESS_TTL;
+    if !(min_allowed_expiry <= provided_expiry && provided_expiry <= max_allowed_expiry) {
+        let msg = format!(
+            "Specified ingress_expiry not within expected range:\n\
+             Minimum allowed expiry: {}\n\
+             Maximum allowed expiry: {}\n\
+             Provided expiry:        {}\n\
+             Local time:             {}",
+            min_allowed_expiry,
+            max_allowed_expiry,
+            provided_expiry,
+            chrono::Utc::now(),
+        );
+        return Err(HttpHandlerError::InvalidIngressExpiry(msg));
+    }
+    Ok(())
+}
 
 /// Describes the fields of a canister update call as defined in
 /// https://docs.dfinity.systems/public#api-update.
@@ -80,19 +122,6 @@ pub struct HttpUserQuery {
     pub nonce: Option<Blob>,
 }
 
-/// Describes the fields of a request status as defined in
-/// https://docs.dfinity.systems/public#api-request-status
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct HttpRequestStatus {
-    pub request_id: Blob,
-    /// Indicates when the message should expire.  Represented as nanoseconds
-    /// since UNIX epoch.
-    pub ingress_expiry: u64,
-    // Do not include omitted fields in MessageId calculation
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub nonce: Option<Blob>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HttpReadState {
     pub sender: Blob,
@@ -111,10 +140,6 @@ pub enum HttpReadContent {
     Query {
         #[serde(flatten)]
         query: HttpUserQuery,
-    },
-    RequestStatus {
-        #[serde(flatten)]
-        request_status: HttpRequestStatus,
     },
     ReadState {
         #[serde(flatten)]
@@ -392,34 +417,6 @@ impl TryFrom<(HttpUserQuery, Time)> for RawHttpRequest {
 }
 
 // This is the first time this http request is parsed.  Perform all the validity
-// checks here so that any further conversions do not need to do error checking.
-impl TryFrom<(HttpRequestStatus, Time)> for RawHttpRequest {
-    type Error = HttpHandlerError;
-
-    fn try_from(input: (HttpRequestStatus, Time)) -> Result<Self, Self::Error> {
-        use RawHttpRequestVal::*;
-        let (request_status, current_time) = input;
-        MessageId::try_from(request_status.request_id.0.as_slice()).map_err(|err| {
-            HttpHandlerError::InvalidMessageId(format!(
-                "Converting {:?} to MessageId failed with {}",
-                request_status.request_id, err
-            ))
-        })?;
-        validate_ingress_expiry(request_status.ingress_expiry, current_time)?;
-
-        let mut map = btreemap! {
-            "request_type".to_string() => String("request_status".to_string()),
-            "request_id".to_string() => Bytes(request_status.request_id.0),
-            "ingress_expiry".to_string() => U64(request_status.ingress_expiry),
-        };
-        if let Some(nonce) = request_status.nonce {
-            map.insert("nonce".to_string(), Bytes(nonce.0));
-        }
-        Ok(Self(map))
-    }
-}
-
-// This is the first time this http request is parsed.  Perform all the validity
 // checks (but not expiry check) here so that any further conversions do not
 // need to do error checking.
 impl TryFrom<(HttpReadState, Time)> for RawHttpRequest {
@@ -467,15 +464,6 @@ pub enum HttpResponseStatus {
         reject_code: u64,
         reject_message: String,
     },
-}
-
-/// The response to `/api/v1/read` with `request_type` set to `request_status`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub struct HttpRequestStatusResponse {
-    #[serde(flatten)]
-    pub status: HttpResponseStatus,
-    pub time: Time,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -667,25 +655,6 @@ mod test {
                 text("reject_message") => text("foo bar"),
             }),
         );
-    }
-
-    /// Check RequestStateResponse can roundtrip through CBOR.
-    #[test]
-    fn request_state_response_roundtrips() {
-        // An earlier version of the struct contained an i128, which doesn't roundtrip
-        // through serde_cbor.
-        let response = HttpRequestStatusResponse {
-            status: HttpResponseStatus::Rejected {
-                reject_code: 1,
-                reject_message: "Something went wrong".to_string(),
-            },
-            time: crate::time::UNIX_EPOCH,
-        };
-
-        let encoded = serde_cbor::to_vec(&response).unwrap();
-        let decoded: HttpRequestStatusResponse = serde_cbor::from_slice(&encoded[..]).unwrap();
-
-        assert_eq!(response, decoded);
     }
 
     #[test]

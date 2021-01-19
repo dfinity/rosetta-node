@@ -107,8 +107,8 @@ impl From<v1::Funds> for Funds {
 // Fees
 //////////////////////////////////////////////////////////////
 
-/// Cost for storing a single WASM page worth of data on disk, for one round.
-pub const CYCLES_PER_STORED_WASM_PAGE: Cycles = Cycles::new(1);
+/// Cost for using a single WASM page worth of data, for one round.
+pub const CYCLES_PER_ACTIVE_WASM_PAGE: Cycles = Cycles::new(1);
 
 /// Cycles charged per 1MiB of the memory allocation.
 pub const CYCLES_PER_MEMORY_ALLOCATION_MB: Cycles = Cycles::new(1);

@@ -96,6 +96,10 @@ impl<H, V> Hashed<H, V> {
         (self.hash, self.value)
     }
 
+    pub fn recompose(hash: H, value: V) -> Self {
+        Self { hash, value }
+    }
+
     /// Destruct a `Hashed<H, V>` and extract only its value.
     pub fn into_inner(self) -> V {
         self.value
