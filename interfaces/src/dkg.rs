@@ -5,6 +5,7 @@ use ic_types::{
     crypto::CryptoHashOf,
     Height,
 };
+use std::time::Duration;
 
 pub trait Dkg: Send {
     fn on_state_change(&self, dkg_pool: &dyn DkgPool) -> ChangeSet;
@@ -18,6 +19,11 @@ pub trait DkgGossip: Send + Sync {
 /// the process of executing dkg.
 pub trait DkgPool: Send + Sync {
     fn get_validated(&self) -> Box<dyn Iterator<Item = &dkg::Message> + '_>;
+    /// Returns the validated entries older than the age threshold
+    fn get_validated_older_than(
+        &self,
+        age_threshold: Duration,
+    ) -> Box<dyn Iterator<Item = &dkg::Message> + '_>;
     fn get_unvalidated(&self) -> Box<dyn Iterator<Item = &dkg::Message> + '_>;
     /// The start height of the currently _computed_ DKG interval; the invariant
     /// we want to maintain for all messages in validated and unvalidated

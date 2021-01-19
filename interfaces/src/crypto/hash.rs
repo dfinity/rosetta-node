@@ -16,15 +16,15 @@ use std::hash::Hash;
 /// request to the Internet Computer according to the public specification.
 pub const DOMAIN_IC_REQUEST: &[u8; 11] = b"\x0Aic-request";
 
-const DOMAIN_NOTARIZATION_CONTENT: &str = "notarization_content_domain";
+pub(crate) const DOMAIN_NOTARIZATION_CONTENT: &str = "notarization_content_domain";
 const DOMAIN_NOTARIZATION: &str = "notarization_domain";
 const DOMAIN_NOTARIZATION_SHARE: &str = "notarization_share_domain";
 
-const DOMAIN_FINALIZATION_CONTENT: &str = "finalization_content_domain";
+pub(crate) const DOMAIN_FINALIZATION_CONTENT: &str = "finalization_content_domain";
 const DOMAIN_FINALIZATION: &str = "finalization_domain";
 const DOMAIN_FINALIZATION_SHARE: &str = "finalization_share_domain";
 
-const DOMAIN_BLOCK: &str = "block_domain";
+pub(crate) const DOMAIN_BLOCK: &str = "block_domain";
 const DOMAIN_BLOCK_PROPOSAL: &str = "block_proposal_domain";
 
 const DOMAIN_INMEMORY_PAYLOAD: &str = "inmemory_payload_domain";
@@ -37,9 +37,9 @@ pub(crate) const DOMAIN_CERTIFICATION_CONTENT: &str = "ic-state-root";
 const DOMAIN_CERTIFICATION: &str = "certification_domain";
 const DOMAIN_CERTIFICATION_SHARE: &str = "certification_share_domain";
 
-const DOMAIN_DEALING_CONTENT_NI: &str = "dealing_content_non_interactive";
+pub(crate) const DOMAIN_DEALING_CONTENT: &str = "dealing_content_non_interactive";
 
-const DOMAIN_DKG_MESSAGE_NI: &str = "dkg_message_non_interactive";
+const DOMAIN_DKG_MESSAGE: &str = "dkg_message_non_interactive";
 
 const DOMAIN_HTTP_CANISTER_UPDATE: &str = "http_canister_update_domain";
 
@@ -233,13 +233,13 @@ impl CryptoHashDomain
 
 impl CryptoHashDomain for consensus_dkg::DealingContent {
     fn domain(&self) -> String {
-        DOMAIN_DEALING_CONTENT_NI.to_string()
+        DOMAIN_DEALING_CONTENT.to_string()
     }
 }
 
 impl CryptoHashDomain for consensus_dkg::Message {
     fn domain(&self) -> String {
-        DOMAIN_DKG_MESSAGE_NI.to_string()
+        DOMAIN_DKG_MESSAGE.to_string()
     }
 }
 

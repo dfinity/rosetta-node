@@ -13,9 +13,10 @@ pub struct LogEntry {
     pub module: std::string::String,
     #[prost(uint32, tag="6")]
     pub line: u32,
-    #[prost(message, optional, tag="17")]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub replica_config: ::std::option::Option<super::super::replica_config::v1::ReplicaConfig>,
+    #[prost(string, tag="7")]
+    pub node_id: std::string::String,
+    #[prost(string, tag="8")]
+    pub subnet_id: std::string::String,
     #[prost(message, optional, tag="18")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub consensus: ::std::option::Option<super::super::consensus_log_entry::v1::ConsensusLogEntry>,
