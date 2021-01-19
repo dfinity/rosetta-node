@@ -128,6 +128,25 @@ where
     })
 }
 
+/// Like over_async, but `reject`s the call when the function `f` given as
+/// argument returns an `Err`. If `f` returns an `Ok`, it calls `reply`.
+pub fn over_async_may_reject<In, Out, F, Witness, Fut>(_: Witness, f: F)
+where
+    In: FromWire + NewType,
+    Out: IntoWire + NewType,
+    F: FnOnce(In::Inner) -> Fut + 'static,
+    Fut: Future<Output = Result<Out::Inner, String>> + 'static,
+    Witness: FnOnce(Out, In::Inner) -> (Out::Inner, In),
+{
+    over_async_bytes_may_reject(|inp| async move {
+        let outer = In::from_bytes(inp).expect("Deserialization Failed");
+        let input = outer.into_inner();
+        f(input)
+            .await
+            .map(|output| Out::into_bytes(Out::from_inner(output)).expect("Serialization Failed"))
+    })
+}
+
 pub fn over_async_explicit<In, Out, F, Fut>(f: F)
 where
     In: FromWire + NewType,
@@ -186,6 +205,22 @@ where
     let bs = arg_data();
     let res = f(bs).map(move |bytes| {
         reply(&bytes);
+    });
+    kickstart(res)
+}
+
+pub fn over_async_bytes_may_reject<F, Fut>(f: F)
+where
+    F: FnOnce(Vec<u8>) -> Fut,
+    Fut: Future<Output = Result<Vec<u8>, String>> + 'static,
+{
+    setup::START.call_once(|| {
+        printer::hook();
+    });
+    let bs = arg_data();
+    let res = f(bs).map(move |result| match result {
+        Ok(output) => reply(&output),
+        Err(msg) => reject(msg.as_str()),
     });
     kickstart(res)
 }

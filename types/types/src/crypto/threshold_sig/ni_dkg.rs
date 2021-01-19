@@ -10,9 +10,9 @@ use ic_crypto_internal_types::sign::threshold_sig::ni_dkg::{CspNiDkgDealing, Csp
 use ic_protobuf::types::v1 as pb;
 use ic_protobuf::types::v1::NiDkgId as NiDkgIdProto;
 use phantom_newtype::Id;
-use serde::export::{Formatter, TryFrom};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
+use std::convert::TryFrom;
 use strum_macros::EnumIter;
 
 pub mod config;
@@ -91,7 +91,7 @@ pub enum DkgId {
 }
 
 impl fmt::Display for DkgId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:?}", &self)
     }
 }

@@ -27,10 +27,14 @@ impl ErrorReplication for CryptoError {
             CryptoError::MalformedSecretKey { .. } => {
                 panic!("Unexpected error {}, no secret keys involved", &self)
             }
-            // true, but this error may be removed TODO(DFN-1502)
+            // true, but this error may be removed TODO(CRP-224)
             CryptoError::MalformedSignature { .. } => true,
+            // true, but this error may be removed TODO(CRP-224)
+            CryptoError::MalformedPop { .. } => true,
             // true, as signature verification is stable across replicas
             CryptoError::SignatureVerification { .. } => true,
+            // true, as PoP verification is stable across replicas
+            CryptoError::PopVerification { .. } => true,
             // true, as it indicates inconsistent data in multi-sigs
             // (individual signatures of a multi sig belong to differing algorithms)
             CryptoError::InconsistentAlgorithms { .. } => true,

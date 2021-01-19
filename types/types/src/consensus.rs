@@ -285,6 +285,12 @@ impl Block {
     }
 }
 
+impl SignedBytesWithoutDomainSeparator for Block {
+    fn as_signed_bytes_without_domain_separator(&self) -> Vec<u8> {
+        serde_cbor::to_vec(&self).unwrap()
+    }
+}
+
 pub type HashedBlock = Hashed<CryptoHashOf<Block>, Block>;
 
 /// We store the hash of block in block proposal too.
@@ -319,6 +325,12 @@ impl NotarizationContent {
     }
 }
 
+impl SignedBytesWithoutDomainSeparator for NotarizationContent {
+    fn as_signed_bytes_without_domain_separator(&self) -> Vec<u8> {
+        serde_cbor::to_vec(&self).unwrap()
+    }
+}
+
 pub type Notarization = Signed<NotarizationContent, MultiSignature<NotarizationContent>>;
 
 pub type NotarizationShare = Signed<NotarizationContent, MultiSignatureShare<NotarizationContent>>;
@@ -337,6 +349,12 @@ impl FinalizationContent {
             height,
             block,
         }
+    }
+}
+
+impl SignedBytesWithoutDomainSeparator for FinalizationContent {
+    fn as_signed_bytes_without_domain_separator(&self) -> Vec<u8> {
+        serde_cbor::to_vec(&self).unwrap()
     }
 }
 
@@ -972,53 +990,59 @@ impl From<&Block> for pb::Block {
     }
 }
 
-pub fn block_from_protobuf<
-    F: FnOnce(&BlockPayload) -> CryptoHashOf<BlockPayload> + Send + 'static,
->(
-    hash_func: F,
-    block: pb::Block,
-) -> Result<Block, String> {
-    let dkg_payload = dkg::Payload::try_from(
-        block
-            .dkg_payload
-            .ok_or_else(|| String::from("Error: Block missing dkg_payload"))?,
-    )?;
-    let batch = BatchPayload::new(
-        block
-            .ingress_payload
-            .map(crate::batch::IngressPayload::try_from)
-            .transpose()?
-            .unwrap_or_default(),
-        block
-            .xnet_payload
-            .map(crate::batch::XNetPayload::try_from)
-            .transpose()?
-            .unwrap_or_default(),
-    );
-    let payload = if dkg_payload.is_summary() {
-        // TODO: Re-enable this assertion once the combined payload PR is deployed.
-        //       This is to avoid breaking the upgrade process.
-        /*
-        assert!(
-            batch.is_empty(),
-            "Error: Summary block has non-empty batch payload."
+impl TryFrom<pb::Block> for Block {
+    type Error = String;
+    fn try_from(block: pb::Block) -> Result<Self, Self::Error> {
+        let dkg_payload = dkg::Payload::try_from(
+            block
+                .dkg_payload
+                .ok_or_else(|| String::from("Error: Block missing dkg_payload"))?,
+        )?;
+        let batch = BatchPayload::new(
+            block
+                .ingress_payload
+                .map(crate::batch::IngressPayload::try_from)
+                .transpose()?
+                .unwrap_or_default(),
+            block
+                .xnet_payload
+                .map(crate::batch::XNetPayload::try_from)
+                .transpose()?
+                .unwrap_or_default(),
         );
-        */
-        BlockPayload::Summary(dkg_payload.into_summary())
-    } else {
-        (batch, dkg_payload.into_dealings()).into()
-    };
-    Ok(Block {
-        version: ReplicaVersion::try_from(block.version.as_str())
-            .map_err(|e| format!("Block replica version failed to parse {:?}", e))?,
-        parent: CryptoHashOf::from(CryptoHash(block.parent)),
-        height: Height::from(block.height),
-        rank: Rank(block.rank),
-        context: ValidationContext {
-            registry_version: RegistryVersion::from(block.registry_version),
-            certified_height: Height::from(block.certified_height),
-            time: Time::from_nanos_since_unix_epoch(block.time),
-        },
-        payload: Payload::new(hash_func, payload),
-    })
+        let payload = if dkg_payload.is_summary() {
+            // TODO: Re-enable this assertion once the combined payload PR is deployed.
+            //       This is to avoid breaking the upgrade process.
+            /*
+                assert!(
+                batch.is_empty(),
+                "Error: Summary block has non-empty batch payload."
+            );
+                 */
+            BlockPayload::Summary(dkg_payload.into_summary())
+        } else {
+            (batch, dkg_payload.into_dealings()).into()
+        };
+        Ok(Block {
+            version: ReplicaVersion::try_from(block.version.as_str())
+                .map_err(|e| format!("Block replica version failed to parse {:?}", e))?,
+            parent: CryptoHashOf::from(CryptoHash(block.parent)),
+            height: Height::from(block.height),
+            rank: Rank(block.rank),
+            context: ValidationContext {
+                registry_version: RegistryVersion::from(block.registry_version),
+                certified_height: Height::from(block.certified_height),
+                time: Time::from_nanos_since_unix_epoch(block.time),
+            },
+            // Ideally we would have an integrity check here, but we don't have
+            // access to the hash function in this module. This conversion is
+            // really only used for retrieving catch up packages and since those
+            // are signed, the entire content can be trusted and so this should
+            // not be too much of an issue.
+            payload: Payload::new_from_hash_and_value(
+                CryptoHashOf::from(CryptoHash(block.payload_hash)),
+                payload,
+            ),
+        })
+    }
 }

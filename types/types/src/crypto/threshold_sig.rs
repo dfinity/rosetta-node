@@ -6,8 +6,8 @@ use ic_crypto_internal_types::sign::threshold_sig::public_key::bls12_381::Malfor
 use ic_crypto_internal_types::sign::threshold_sig::public_key::CspThresholdSigPublicKey;
 use ic_protobuf::registry::crypto::v1::AlgorithmId as AlgorithmIdProto;
 use ic_protobuf::registry::crypto::v1::PublicKey as PublicKeyProto;
-use serde::export::TryFrom;
 use serde::{Deserialize, Serialize};
+use std::convert::TryFrom;
 
 pub mod errors;
 pub mod ni_dkg;

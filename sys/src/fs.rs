@@ -34,7 +34,11 @@ impl std::error::Error for FileCloneError {}
 /// * Returns low-level Err(IoError(e)) if one of files can't be open or the
 ///   corresponding syscall fails for some reason.
 pub fn clone_file(src: &Path, dst: &Path) -> Result<(), FileCloneError> {
-    clone_file_impl(src, dst)
+    if *crate::IS_WSL {
+        Err(FileCloneError::OperationNotSupported)
+    } else {
+        clone_file_impl(src, dst)
+    }
 }
 
 fn handle_last_os_error() -> FileCloneError {

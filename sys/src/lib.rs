@@ -12,4 +12,6 @@ lazy_static! {
             .expect("sysconf PAGE_SIZE succeeds")
             .expect("PAGE_SIZE is not none") as usize
     };
+
+    pub static ref IS_WSL: bool = wsl::is_wsl();
 }

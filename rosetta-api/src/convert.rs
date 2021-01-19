@@ -42,15 +42,19 @@ pub fn transaction(
     transaction: &Transfer,
     transaction_identifier: TransactionIdentifier,
 ) -> Result<models::Transaction, ApiError> {
-    let operations = operations(transaction)?;
+    let operations = operations(transaction, true)?;
     Ok(models::Transaction::new(transaction_identifier, operations))
 }
 
 // This currently only takes a transation
-pub fn operations(transaction: &Transfer) -> Result<Vec<Operation>, ApiError> {
+pub fn operations(transaction: &Transfer, completed: bool) -> Result<Vec<Operation>, ApiError> {
     // The spec just says if there aren't smart contracts all statuses should
     // be the same
-    let status = STATUS.to_string();
+    let status = if completed {
+        Some(STATUS.to_string())
+    } else {
+        None
+    };
 
     let ops = match transaction {
         Transfer::Send { from, to, amount } => {
@@ -121,18 +125,18 @@ pub fn from_operations(ops: Vec<Operation>) -> Result<Vec<Transfer>, ApiError> {
         // let id = op.operation_identifier.clone();
 
         // Check the operation looks like part of a transaction
-        let (amount, account) = match op {
+        let (amount, account_id) = match op {
             Operation {
                 operation_identifier: _,
                 related_operations: _,
                 _type,
-                status,
                 account: Some(account),
                 amount: Some(amount),
                 coin_change: None,
                 metadata: _,
-            } => match (&_type[..], &status[..]) {
-                (TRANSACTION, STATUS) => Ok((amount, account)),
+                ..
+            } => match &_type[..] {
+                TRANSACTION => Ok((amount, account)),
                 other => Err(format!(
                     "Fields _type and status Expected {:?}, but found {:?}",
                     (TRANSACTION, STATUS),
@@ -148,9 +152,9 @@ pub fn from_operations(ops: Vec<Operation>) -> Result<Vec<Transfer>, ApiError> {
             } => Err("Coin changes are not permitted".to_string()),
         }?;
 
-        let account = user_id(&account)?;
+        let principal = principal_id(&account_id)?;
         let amount = from_amount(amount)?;
-        Ok((amount, account))
+        Ok((amount, principal))
     }
 
     fn to_transaction(mut ops: Vec<Operation>) -> Result<Transfer, ApiError> {
@@ -263,10 +267,10 @@ pub fn account_identifier(uid: &PrincipalId) -> AccountIdentifier {
     AccountIdentifier::new(hex::encode(&uid.into_vec()))
 }
 
-pub fn user_id(aid: &AccountIdentifier) -> Result<PrincipalId, String> {
+pub fn principal_id(aid: &AccountIdentifier) -> Result<PrincipalId, String> {
     // TODO validate
     match hex::decode(aid.address.clone()) {
-        Ok(vec) => Ok(PrincipalId::try_from(vec).map_err(|e| e.to_string())?),
+        Ok(vec) => Ok(PrincipalId::try_from(&vec).map_err(|e| e.to_string())?),
         Err(e) => Err(format!(
             "Account Identifer {} is not hex encoded: {}",
             aid.address, e
