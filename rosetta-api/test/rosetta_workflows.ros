@@ -1,12 +1,13 @@
 request_funds(1){
   find_account{
-    currency = {"symbol":"ICPT", "decimals":8};
+    currency = {"symbol":"ICP", "decimals":8};
     random_account = find_balance({
       "minimum_balance":{
         "value": "0",
         "currency": {{currency}}
       },
-      "create_limit":1
+      "create_limit": 100,
+      "create_probability": 50
     });
   },
 
@@ -17,10 +18,10 @@ request_funds(1){
     loaded_account = find_balance({
       "account_identifier": {{random_account.account_identifier}},
       "minimum_balance":{
-        "value": "1000000",
+        "value": "0",
         "currency": {{currency}}
       },
-      "require_coin":true
+      "require_coin":false
     });
   }
 }
@@ -28,7 +29,7 @@ request_funds(1){
 create_account(1){
   create{
     network = {"network":"00000000000004d2", "blockchain":"Internet Computer"};
-    key = generate_key({"curve_type": "secp256k1"});
+    key = generate_key({"curve_type": "edwards25519"});
     account = derive({
       "network_identifier": {{network}},
       "public_key": {{key.public_key}}
@@ -41,4 +42,3 @@ create_account(1){
     });
   }
 }
-

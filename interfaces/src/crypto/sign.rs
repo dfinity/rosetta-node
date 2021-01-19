@@ -22,12 +22,10 @@
 //!
 //! Please refer to the trait documentation for details.
 
-use crate::crypto::{
-    hash::{
-        DOMAIN_CATCH_UP_CONTENT, DOMAIN_CERTIFICATION_CONTENT, DOMAIN_RANDOM_BEACON_CONTENT,
-        DOMAIN_RANDOM_TAPE_CONTENT,
-    },
-    CryptoHashable,
+use crate::crypto::hash::{
+    DOMAIN_BLOCK, DOMAIN_CATCH_UP_CONTENT, DOMAIN_CERTIFICATION_CONTENT, DOMAIN_DEALING_CONTENT,
+    DOMAIN_FINALIZATION_CONTENT, DOMAIN_NOTARIZATION_CONTENT, DOMAIN_RANDOM_BEACON_CONTENT,
+    DOMAIN_RANDOM_TAPE_CONTENT,
 };
 use ic_types::crypto::threshold_sig::ni_dkg::DkgId;
 use ic_types::crypto::{
@@ -37,8 +35,9 @@ use ic_types::crypto::{
 use ic_types::messages::{Delegation, MessageId, WebAuthnEnvelope};
 use ic_types::{
     consensus::{
-        certification::CertificationContent, CatchUpContent, CatchUpContentProtobufBytes,
-        RandomBeaconContent, RandomTapeContent,
+        certification::CertificationContent, dkg::DealingContent, Block, CatchUpContent,
+        CatchUpContentProtobufBytes, FinalizationContent, NotarizationContent, RandomBeaconContent,
+        RandomTapeContent,
     },
     NodeId, RegistryVersion, SubnetId,
 };
@@ -84,6 +83,10 @@ mod private {
 
     pub trait SignatureDomainSeal {}
 
+    impl SignatureDomainSeal for Block {}
+    impl SignatureDomainSeal for DealingContent {}
+    impl SignatureDomainSeal for NotarizationContent {}
+    impl SignatureDomainSeal for FinalizationContent {}
     impl SignatureDomainSeal for WebAuthnEnvelope {}
     impl SignatureDomainSeal for Delegation {}
     impl SignatureDomainSeal for MessageId {}
@@ -93,6 +96,30 @@ mod private {
     impl SignatureDomainSeal for RandomBeaconContent {}
     impl SignatureDomainSeal for RandomTapeContent {}
     impl SignatureDomainSeal for SignableMock {}
+}
+
+impl SignatureDomain for Block {
+    fn domain(&self) -> Vec<u8> {
+        domain_with_prepended_length(DOMAIN_BLOCK)
+    }
+}
+
+impl SignatureDomain for DealingContent {
+    fn domain(&self) -> Vec<u8> {
+        domain_with_prepended_length(DOMAIN_DEALING_CONTENT)
+    }
+}
+
+impl SignatureDomain for NotarizationContent {
+    fn domain(&self) -> Vec<u8> {
+        domain_with_prepended_length(DOMAIN_NOTARIZATION_CONTENT)
+    }
+}
+
+impl SignatureDomain for FinalizationContent {
+    fn domain(&self) -> Vec<u8> {
+        domain_with_prepended_length(DOMAIN_FINALIZATION_CONTENT)
+    }
 }
 
 impl SignatureDomain for WebAuthnEnvelope {
@@ -201,7 +228,7 @@ impl SignedBytesWithoutDomainSeparator for SignableMock {
     }
 }
 
-pub trait BasicSigner<T: CryptoHashable> {
+pub trait BasicSigner<T: Signable> {
     fn sign_basic(
         &self,
         message: &T,
@@ -210,7 +237,7 @@ pub trait BasicSigner<T: CryptoHashable> {
     ) -> CryptoResult<BasicSigOf<T>>;
 }
 
-pub trait BasicSigVerifier<T: CryptoHashable> {
+pub trait BasicSigVerifier<T: Signable> {
     fn verify_basic_sig(
         &self,
         signature: &BasicSigOf<T>,
@@ -243,7 +270,7 @@ impl<T> IngressSigVerifier for T where
 {
 }
 
-pub trait MultiSigner<T: CryptoHashable> {
+pub trait MultiSigner<T: Signable> {
     fn sign_multi(
         &self,
         message: &T,
@@ -252,7 +279,7 @@ pub trait MultiSigner<T: CryptoHashable> {
     ) -> CryptoResult<IndividualMultiSigOf<T>>;
 }
 
-pub trait MultiSigVerifier<T: CryptoHashable> {
+pub trait MultiSigVerifier<T: Signable> {
     fn verify_multi_sig_individual(
         &self,
         signature: &IndividualMultiSigOf<T>,

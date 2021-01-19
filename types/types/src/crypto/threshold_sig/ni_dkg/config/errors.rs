@@ -1,5 +1,4 @@
 use super::*;
-use serde::export::Formatter;
 use std::fmt;
 
 #[cfg(test)]
@@ -77,7 +76,7 @@ impl fmt::Display for NiDkgConfigValidationError {
 }
 
 impl fmt::Debug for NiDkgConfigValidationError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self)
     }
 }

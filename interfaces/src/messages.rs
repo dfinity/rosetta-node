@@ -1,6 +1,6 @@
 use ic_types::{
-    messages::{CallbackId, Ingress, Request, Response, StopCanisterContext},
-    CanisterId, Funds, PrincipalId,
+    messages::{Ingress, Request, Response, StopCanisterContext},
+    Funds, PrincipalId,
 };
 use std::convert::TryFrom;
 
@@ -9,34 +9,6 @@ pub enum CanisterInputMessage {
     Response(Response),
     Request(Request),
     Ingress(Ingress),
-}
-
-impl CanisterInputMessage {
-    pub fn receiver(&self) -> &CanisterId {
-        match self {
-            CanisterInputMessage::Request(msg) => &msg.receiver,
-            CanisterInputMessage::Ingress(msg) => &msg.receiver,
-            CanisterInputMessage::Response(msg) => &msg.respondent,
-        }
-    }
-
-    pub fn method_name(&self) -> Option<String> {
-        match self {
-            CanisterInputMessage::Request(Request { method_name, .. })
-            | CanisterInputMessage::Ingress(Ingress { method_name, .. }) => {
-                Some(method_name.clone())
-            }
-            CanisterInputMessage::Response(_) => None,
-        }
-    }
-
-    pub fn callback(&self) -> Option<CallbackId> {
-        match self {
-            CanisterInputMessage::Request(msg) => Some(msg.sender_reply_callback),
-            CanisterInputMessage::Response(msg) => Some(msg.originator_reply_callback),
-            CanisterInputMessage::Ingress(_) => None,
-        }
-    }
 }
 
 /// A wrapper around a canister request and an ingress message.
@@ -51,13 +23,6 @@ impl RequestOrIngress {
         match self {
             RequestOrIngress::Request(msg) => &msg.sender.as_ref(),
             RequestOrIngress::Ingress(msg) => &msg.source.as_ref(),
-        }
-    }
-
-    pub fn receiver(&self) -> &CanisterId {
-        match self {
-            RequestOrIngress::Request(msg) => &msg.receiver,
-            RequestOrIngress::Ingress(msg) => &msg.receiver,
         }
     }
 

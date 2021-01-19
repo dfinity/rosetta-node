@@ -4,4 +4,4 @@ RUN apt-get update && \
         ca-certificates \
         libssl1.1
 COPY target/release/ic-rosetta-api /usr/local/bin/ic-rosetta-api
-ENTRYPOINT ["/usr/local/bin/ic-rosetta-api"]
+ENTRYPOINT ["/usr/local/bin/ic-rosetta-api", "--store-location", "/data"]

@@ -11,6 +11,7 @@ ic-protobuf = { path = "../../protobuf" }
 phantom_newtype = { path = "../../phantom_newtype" }
 serde = { version = "1.0.99", features = [ "derive" ] }
 serde_cbor = "0.11.1"
+strum = "0.18.0"
 strum_macros = "0.18.0"
 
 [dev-dependencies]

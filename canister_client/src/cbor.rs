@@ -7,7 +7,7 @@ use ic_types::Time;
 use ic_types::{
     messages::{
         Blob, Certificate, HttpCanisterUpdate, HttpReadContent, HttpReadState,
-        HttpReadStateResponse, HttpRequestStatus, HttpSubmitContent, HttpUserQuery, MessageId,
+        HttpReadStateResponse, HttpSubmitContent, HttpUserQuery, MessageId,
     },
     CanisterId,
 };
@@ -195,25 +195,6 @@ impl Agent {
         let cbor: CBOR = serde_cbor::value::to_value(request).unwrap();
 
         Ok(serde_cbor::to_vec(&cbor).unwrap())
-    }
-
-    /// Prepares and serializes a CBOR result check request, i.e. request to
-    /// check on the status of a previous request.
-    /// NOTE: This is using the deprecated `request_status` API and will be
-    /// removed soon.
-    pub fn prepare_update_result_check(
-        &self,
-        request_id: MessageId,
-    ) -> Result<Vec<u8>, Box<dyn Error>> {
-        let content = HttpReadContent::RequestStatus {
-            request_status: HttpRequestStatus {
-                request_id: Blob(request_id.as_bytes().to_vec()),
-                nonce: None,
-                ingress_expiry: self.expiry_time().as_nanos_since_unix_epoch(),
-            },
-        };
-        let request = sign_read(content, &self.sender, self.time_source.get_relative_time())?;
-        Ok(serde_cbor::to_vec(&request)?)
     }
 
     /// Prepares and serializes a CBOR read_state request, with the given paths

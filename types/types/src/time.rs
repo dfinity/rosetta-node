@@ -76,6 +76,18 @@ impl fmt::Display for Time {
     }
 }
 
+/// Returns the current time
+///
+/// WARNING: this function should not be used any deterministic part of the IC
+/// as it is accessing system time which is non-deterministic between nodes.
+pub fn current_time() -> Time {
+    let start = std::time::SystemTime::now();
+    let since_epoch = start
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("Time wrapped around");
+    UNIX_EPOCH + since_epoch
+}
+
 /// A utility function to help set the expiry time when creating an
 /// SignedIngress message from scratch.  Returns the current time and expiry
 /// time.  The expiry time is set from the current system time + the maximum

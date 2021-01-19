@@ -1,9 +1,6 @@
 request_funds(1){
   find_account{
-    currency = {"symbol":"ICPT", "decimals":8};
-    print_message({
-              "hello": 123
-            });
+    currency = {"symbol":"ICP", "decimals":8};
     random_account = find_balance({
       "minimum_balance":{
         "value": "0",
@@ -11,9 +8,6 @@ request_funds(1){
       },
       "create_limit":1
     });
-    print_message({
-          "found accout":{{random_account}}
-        });
   },
 
   // Create a separate scenario to request funds so that
@@ -33,8 +27,8 @@ request_funds(1){
 
 create_account(1){
   create{
-    network = {"network":"00000000000004d2", "blockchain":"Internet Computer"};
-    key = generate_key({"curve_type": "secp256k1"});
+    network = {"network": "00000000001000000101", "blockchain":"Internet Computer"};
+    key = generate_key({"curve_type": "edwards25519"});
     account = derive({
       "network_identifier": {{network}},
       "public_key": {{key.public_key}}
@@ -49,37 +43,24 @@ create_account(1){
 }
 
 transfer(10){
-  transfer_dry_run{
-    transfer_dry_run.network = {"network":"00000000000004d2", "blockchain":"Internet Computer"};
-    currency = {"symbol":"ICPT", "decimals":8};
-
-    dust_amount = "600";
-
-    // We look for a coin of value >= the reserved_amount to create
-    // a transfer with change (reserved_amount is dust_amount x 2).
-    reserved_amount = "1200";
+  transfer{
+    transfer.network = {"network": "00000000001000000101" , "blockchain":"Internet Computer"};
+    currency = {"symbol":"ICP", "decimals":8};
     sender = find_balance({
       "minimum_balance":{
-        "value": {{reserved_amount}},
+        "value": "1000000000",
         "currency": {{currency}}
-      },
-      "require_coin": true
+      }
     });
 
-    // The amount we send to the recipient is a random value
-    // between the dust_amount and the value of the entire coin
-    receivable_amount = {{sender.balance.value}} - {{dust_amount}};
-    recipient_amount = random_number({
-      "minimum": {{dust_amount}},
-      "maximum": {{receivable_amount}}
-    });
-    print_message({
-      "recipient_amount":{{recipient_amount}}
-    });
+    // Set the recipient_amount as some value <= sender.balance-max_fee
+    max_fee = "8400";
+    available_amount = {{sender.balance.value}} - {{max_fee}};
+    recipient_amount = random_number({"minimum": "1", "maximum": "10000"});
+    print_message({"recipient_amount":{{recipient_amount}}});
 
-
-    // Find a recipient with a *types.AccountIdentifier that
-    // is not equal to the sender.
+    // Find recipient and construct operations
+    sender_amount = 0 - {{recipient_amount}};
     recipient = find_balance({
       "not_account_identifier":[{{sender.account_identifier}}],
       "minimum_balance":{
@@ -89,42 +70,27 @@ transfer(10){
       "create_limit": 100,
       "create_probability": 50
     });
-
-    sender_amount = 0 - {{recipient_amount}};
-    transfer_dry_run.confirmation_depth = "1";
-    transfer_dry_run.dry_run = true;
-    transfer_dry_run.operations = [
-      {
-        "operation_identifier":{"index":0},
-        "type":"TRANSACTION",
-        "account":{{sender.account_identifier}},
-        "amount":{"value":{{sender_amount}},"currency":{{currency}}},
-      },
-      {
-        "operation_identifier":{"index":1},
-        "type":"TRANSACTION",
-        "account":{{recipient.account_identifier}},
-        "amount":{"value":{{recipient_amount}},"currency":{{currency}}}
-      },
-    ];
-  },
-  transfer{
-    // We can access the variables of other scenarios
-    transfer.network = {{transfer_dry_run.network}};
-    transfer.confirmation_depth = {{transfer_dry_run.confirmation_depth}};
+    transfer.confirmation_depth = "1";
     transfer.operations = [
       {
         "operation_identifier":{"index":0},
         "type":"TRANSACTION",
         "account":{{sender.account_identifier}},
-        "amount":{"value":{{sender_amount}},"currency":{{currency}}},
+        "amount":{
+          "value":{{sender_amount}},
+          "currency":{{currency}}
+        }
       },
       {
         "operation_identifier":{"index":1},
         "type":"TRANSACTION",
         "account":{{recipient.account_identifier}},
-        "amount":{"value":{{recipient_amount}},"currency":{{currency}}}
-      },
+        "amount":{
+          "value":{{recipient_amount}},
+          "currency":{{currency}}
+        },
+        "related_operations": [ { "index": 0 } ]
+      }
     ];
   }
 }

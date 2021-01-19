@@ -5,6 +5,7 @@ version = "0.0.1"
 authors = []
 description = "Build Once. Integrate Your Blockchain Everywhere. "
 edition = "2018"
+build = "build.rs"
 
 [dependencies]
 actix-web = "3.0.2"
@@ -12,9 +13,10 @@ futures = "0.3.8"
 hex = "0.4.2"
 ic-types = { path = "../types/types" }
 ic-interfaces = { path = "../interfaces" }
+ic-crypto-sha256 = {path = "../crypto/sha256/"}
 im = { git = "https://github.com/dfinity-lab/im-rs", branch = "fix-remove-index-ordmap", features = [ "serde" ] }
 ic-canister-client = { path = "../canister_client" }
-itertools = "0.9.0"
+itertools = "0.10.0"
 reqwest = { version = "0.10.8", features = ["json"] }
 serde = "1.0"
 serde_derive = "1.0"
@@ -31,9 +33,13 @@ rand = "0.7"
 structopt = "0.3.20"
 async-trait = "0.1.41"
 tokio = {version = "0.3.6", features = ["sync"]}
+# shadow-rs = "0.5"
 
 #temporarily copied from dev-dependencies
 actix-rt = "*"
+
+# [build-dependencies]
+# shadow-rs = "0.5"
 
 [dev-dependencies]
 rand_distr = "0.3.0"

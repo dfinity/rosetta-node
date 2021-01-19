@@ -10,6 +10,7 @@ use im::OrdMap;
 use ledger_canister::{Block, BlockHeight, HashOf, ICPTs, Transfer};
 use reqwest::Url;
 use std::collections::HashMap;
+use std::path::Path;
 use tokio::sync::RwLock;
 
 #[async_trait]
@@ -52,13 +53,18 @@ impl LedgerClient {
     pub async fn create_on_disk(
         testnet_url: Url,
         canister_id: CanisterId,
+        store_location: &Path,
     ) -> Result<LedgerClient, ApiError> {
         let reqwest_client = reqwest::Client::new();
 
-        let canister =
-            LedgerCanister::new(reqwest_client.clone(), testnet_url.clone(), canister_id)
-                .await
-                .map_err(internal_error)?;
+        let canister = LedgerCanister::new(
+            reqwest_client.clone(),
+            testnet_url.clone(),
+            canister_id,
+            store_location,
+        )
+        .await
+        .map_err(internal_error)?;
 
         let on_disk = Blocks::new_on_disk(canister);
 
@@ -223,7 +229,7 @@ enum BlockStore {
 }
 
 impl BlockStore {
-    fn last(&mut self) -> Result<Option<HashedBlock>, ApiError> {
+    fn last(&self) -> Result<Option<HashedBlock>, ApiError> {
         match self {
             BlockStore::OnDisk(lc) => lc.last().map_err(internal_error),
             BlockStore::InMemory(hbs) => Ok(hbs.last().cloned()),
@@ -332,7 +338,7 @@ impl Blocks {
     /// Ensure that this data structure is updated to at least this height
     pub async fn sync(&mut self) -> Result<(), ApiError> {
         let height: BlockHeight = match self.block_store.last()? {
-            Some(hb) => hb.index,
+            Some(hb) => hb.index + 1,
             None => return Ok(()),
         };
         let synced_until = match self.last()? {

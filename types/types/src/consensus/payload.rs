@@ -139,7 +139,7 @@ impl Payload {
         hash_func: F,
         payload: BlockPayload,
     ) -> Self {
-        Payload {
+        Self {
             payload_type: payload.payload_type(),
             payload: Arc::new(Hashed::new(
                 move |thunk: &Thunk<BlockPayload>| hash_func(thunk.as_ref()),
@@ -157,12 +157,22 @@ impl Payload {
         payload_type: PayloadType,
         init: Box<dyn FnOnce() -> BlockPayload + Send>,
     ) -> Self {
-        Payload {
+        Self {
             payload_type,
             payload: Arc::new(Hashed {
                 hash,
                 value: Thunk::new(init),
             }),
+        }
+    }
+
+    pub(crate) fn new_from_hash_and_value(
+        hash: CryptoHashOf<BlockPayload>,
+        payload: BlockPayload,
+    ) -> Self {
+        Self {
+            payload_type: payload.payload_type(),
+            payload: Arc::new(Hashed::recompose(hash, Thunk::from(payload))),
         }
     }
 

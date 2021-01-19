@@ -1,4 +1,4 @@
-use serde::{export::Formatter, ser::SerializeSeq, Deserialize, Serialize, Serializer};
+use serde::{ser::SerializeSeq, Deserialize, Serialize, Serializer};
 use serde_bytes::Bytes;
 use std::collections::BTreeMap;
 use std::convert::{TryFrom, TryInto};
@@ -217,7 +217,7 @@ impl Digest {
 }
 
 impl fmt::Debug for Digest {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "0x")?;
         self.0.iter().try_for_each(|b| write!(f, "{:02X}", b))
     }
@@ -600,7 +600,7 @@ fn write_witness(witness: &Witness, level: u8, f: &mut fmt::Formatter<'_>) -> fm
 }
 
 impl fmt::Debug for Witness {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write_witness(self, 0, f)
     }
 }

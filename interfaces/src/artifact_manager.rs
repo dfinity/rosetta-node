@@ -161,6 +161,7 @@ pub trait ArtifactProcessor<Artifact: artifact::ArtifactKind>: Send {
     ) -> (Vec<artifact::Advert<Artifact>>, ProcessingResult);
 }
 
+// tag::artifact_manager[]
 pub trait ArtifactManager: Send + Sync {
     /// When a new artifact is received by Gossip, it is forwarded to
     /// ArtifactManager via the on_artifact call, which then forwards them
@@ -220,3 +221,4 @@ pub trait ArtifactManager: Send + Sync {
         artifact_id: &artifact::ArtifactId,
     ) -> Option<Box<dyn chunkable::Chunkable + Send + Sync>>;
 }
+// end::artifact_manager[]

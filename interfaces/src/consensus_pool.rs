@@ -2,12 +2,14 @@ use crate::{
     artifact_pool::{UnvalidatedArtifact, ValidatedArtifact},
     time_source::TimeSource,
 };
+use ic_protobuf::types::v1 as pb;
 use ic_types::{
     artifact::ConsensusMessageId,
     consensus::{
-        Block, BlockProposal, CatchUpPackage, CatchUpPackageShare, ConsensusMessage, ContentEq,
-        Finalization, FinalizationShare, HasHeight, HashedBlock, Notarization, NotarizationShare,
-        RandomBeacon, RandomBeaconShare, RandomTape, RandomTapeShare,
+        catchup::CUPWithOriginalProtobuf, Block, BlockProposal, CatchUpPackage,
+        CatchUpPackageShare, ConsensusMessage, ContentEq, Finalization, FinalizationShare,
+        HasHeight, HashedBlock, Notarization, NotarizationShare, RandomBeacon, RandomBeaconShare,
+        RandomTape, RandomTapeShare,
     },
     time::Time,
     Height,
@@ -163,6 +165,21 @@ pub trait PoolSection<T> {
     /// Return the HeightIndexedPool for CatchUpPackageShare.
     fn catch_up_package_share(&self) -> &dyn HeightIndexedPool<CatchUpPackageShare>;
 
+    /// Return the HeightIndexedPool for CatchUpPackage in protobuf form.
+    fn highest_catch_up_package_proto(&self) -> pb::CatchUpPackage {
+        // XXX: This default implementation is not the actual implementation
+        // that will be used for this code path. It simply avoids the need to implement
+        // this function on other things implementing PoolSection
+        pb::CatchUpPackage::from(
+            &self.catch_up_package().get_highest().unwrap_or_else(|err| {
+                panic!(
+                    "Error getting highest CatchUpPackage in the validated pool: {:?}",
+                    err
+                )
+            }),
+        )
+    }
+
     fn size(&self) -> u64;
 }
 
@@ -245,7 +262,13 @@ pub trait ConsensusPoolCache: Send + Sync {
     fn consensus_time(&self) -> Option<Time>;
 
     /// Return the latest/highest CatchUpPackage.
-    fn catch_up_package(&self) -> CatchUpPackage;
+    fn catch_up_package(&self) -> CatchUpPackage {
+        self.cup_with_protobuf().cup
+    }
+
+    /// Return the latest/highest CatchUpPackage together with its original
+    /// protobuf.
+    fn cup_with_protobuf(&self) -> CUPWithOriginalProtobuf;
 
     /// Return the latest/highest finalized block with DKG summary. In a
     /// situation where we have only finalized the catch-up block but not

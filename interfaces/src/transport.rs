@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use ic_protobuf::registry::node::v1::NodeRecord;
 use ic_types::transport::{
-    FlowId, FlowTag, TransportClientContext, TransportClientType, TransportErrorCode,
-    TransportPayload, TransportStateChange,
+    FlowId, FlowTag, TransportClientType, TransportErrorCode, TransportPayload,
+    TransportStateChange,
 };
 use ic_types::{NodeId, RegistryVersion};
 
@@ -19,7 +19,7 @@ pub trait Transport: Send + Sync {
         &self,
         client_type: TransportClientType,
         event_handler: Arc<dyn TransportEventHandler>,
-    ) -> Result<TransportClientContext, TransportErrorCode>;
+    ) -> Result<(), TransportErrorCode>;
 
     /// Mark the peer as valid neighbor, and set up the transport layer to
     /// exchange messages with the peer. This call would create the
@@ -31,7 +31,7 @@ pub trait Transport: Send + Sync {
     ///   connection requests from the peer.
     fn start_connections(
         &self,
-        client_context: &TransportClientContext,
+        client_type: TransportClientType,
         peer: &NodeId,
         node_record: &NodeRecord,
         registry_version: RegistryVersion,
@@ -42,7 +42,7 @@ pub trait Transport: Send + Sync {
     /// queues for the peer will be discarded.
     fn stop_connections(
         &self,
-        client_context: &TransportClientContext,
+        client_type: TransportClientType,
         peer_id: &NodeId,
         registry_version: RegistryVersion,
     ) -> Result<(), TransportErrorCode>;
@@ -51,7 +51,7 @@ pub trait Transport: Send + Sync {
     /// into the appropriate TxQ based on the TransportQueueConfig.
     fn send(
         &self,
-        client_context: &TransportClientContext,
+        client_type: TransportClientType,
         peer_id: &NodeId,
         flow_tag: FlowTag,
         message: TransportPayload,
@@ -61,7 +61,7 @@ pub trait Transport: Send + Sync {
     /// TODO: add a per-flow equivalent
     fn clear_send_queues(
         &self,
-        client_context: &TransportClientContext,
+        client_type: TransportClientType,
         peer_id: &NodeId,
     ) -> Result<(), TransportErrorCode>;
 }

@@ -33,6 +33,18 @@ pub struct ValidatedArtifact<T> {
     pub timestamp: Time,
 }
 
+impl<T> ValidatedArtifact<T> {
+    pub fn map<U, F>(self, f: F) -> ValidatedArtifact<U>
+    where
+        F: FnOnce(T) -> U,
+    {
+        ValidatedArtifact {
+            msg: f(self.msg),
+            timestamp: self.timestamp,
+        }
+    }
+}
+
 impl<T> AsRef<T> for ValidatedArtifact<T> {
     fn as_ref(&self) -> &T {
         &self.msg
