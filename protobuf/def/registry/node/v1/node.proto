@@ -1,15 +1,26 @@
 syntax = "proto3";
 package registry.node.v1;
 
-// A connection endpoint, corresponding to an ip/port pair.
-// Each machine might have different NICs so we might choose
-// to run different services in different ips/ports.
+// A connection endpoint.
 message ConnectionEndpoint {
-  // There is a canonical string representation for ipv4/6
-  // strings. We can later replace this with a
-  // oneof {ipv4, ipv6}.
+  enum Protocol {
+    PROTOCOL_UNSPECIFIED = 0;
+    PROTOCOL_HTTP1 = 1;
+    PROTOCOL_HTTP1_TLS_1_3 = 2;
+    PROTOCOL_P2P1_TLS_1_3 = 3;
+  }
+
+  // The IP address. Senders SHOULD use dotted-quad notation for IPv4 addresses
+  // and RFC5952 representation for IPv6 addresses.
+  //
+  // Clients MUST be prepared to accept IPv6 addresses in the forms shown in
+  // RFC4291.
   string ip_addr = 1;
   uint32 port = 2;
+
+  // Protocol that is used on this endpoint. If PROTOCOL_UNSPECIFIED then
+  // code should default to PROTOCOL_HTTP1 for backwards compatability.
+  Protocol protocol = 4;
 }
 
 message FlowEndpoint {
@@ -22,7 +33,9 @@ message FlowEndpoint {
 
 // A node: one machine running a replica instance.
 message NodeRecord {
-  // WHAT HAPPENED TO FIELD 1? WHY IS THAT NOT RESERVED?
+  // the node_id is redundant as it is already contained in the key for this value.
+  reserved 1;
+  reserved "node_id";
   reserved 2;
   reserved "gossip_advert";
   reserved 3;
@@ -43,6 +56,17 @@ message NodeRecord {
 
   // The P2P flow end points.
   repeated FlowEndpoint p2p_flow_endpoints = 8;
+
   // Endpoint where the node provides Prometheus format metrics over HTTP
   ConnectionEndpoint prometheus_metrics_http = 10;
+
+  // Endpoints on which the public API is served.
+  repeated ConnectionEndpoint public_api = 11;
+
+  // Endpoints on which private APIs are served.
+  repeated ConnectionEndpoint private_api = 12;
+
+  // Endpoints on which metrics compatible with the Prometheus export
+  // format are served.
+  repeated ConnectionEndpoint prometheus_metrics = 13;
 }

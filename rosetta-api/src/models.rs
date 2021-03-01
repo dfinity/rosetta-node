@@ -648,10 +648,13 @@ pub struct ConstructionMetadataResponse {
 }
 
 impl ConstructionMetadataResponse {
-    pub fn new(metadata: Object) -> ConstructionMetadataResponse {
+    pub fn new(
+        metadata: Object,
+        suggested_fee: Option<Vec<Amount>>,
+    ) -> ConstructionMetadataResponse {
         ConstructionMetadataResponse {
             metadata,
-            suggested_fee: None,
+            suggested_fee,
         }
     }
 }
@@ -1010,6 +1013,7 @@ impl Error {
         let (code, msg, retriable, details) = match err_type {
             ApiError::InternalError(r, d) => (700, "Internal server error", r, d),
             ApiError::InvalidRequest(r, d) => (701, "Invalid request", r, d),
+            ApiError::NotAvailableOffline(r, d) => (702, "Not available in offline mode", r, d),
             ApiError::InvalidNetworkId(r, d) => (710, "Invalid NetworkId", r, d),
             ApiError::InvalidAccountId(r, d) => (711, "Account not found", r, d),
             ApiError::InvalidBlockId(r, d) => (712, "Block not found", r, d),
@@ -1053,6 +1057,7 @@ pub enum ApiError {
     MempoolTransactionMissing(bool, Option<Object>),
     BlockchainEmpty(bool, Option<Object>),
     InvalidTransaction(bool, Option<Object>),
+    NotAvailableOffline(bool, Option<Object>),
 }
 
 impl serde::Serialize for ApiError {
@@ -1270,6 +1275,7 @@ impl NetworkStatusResponse {
         current_block_identifier: BlockIdentifier,
         current_block_timestamp: Timestamp,
         genesis_block_identifier: BlockIdentifier,
+        oldest_block_identifier: Option<BlockIdentifier>,
         sync_status: SyncStatus,
         peers: Vec<Peer>,
     ) -> NetworkStatusResponse {
@@ -1277,7 +1283,7 @@ impl NetworkStatusResponse {
             current_block_identifier,
             current_block_timestamp,
             genesis_block_identifier,
-            oldest_block_identifier: None,
+            oldest_block_identifier,
             sync_status: Some(sync_status),
             peers,
         }
@@ -1826,12 +1832,17 @@ pub struct Version {
 }
 
 impl Version {
-    pub fn new(rosetta_version: String, node_version: String) -> Version {
+    pub fn new(
+        rosetta_version: String,
+        node_version: String,
+        middleware_version: Option<String>,
+        metadata: Option<Object>,
+    ) -> Version {
         Version {
             rosetta_version,
             node_version,
-            middleware_version: None,
-            metadata: None,
+            middleware_version,
+            metadata,
         }
     }
 }

@@ -1,5 +1,6 @@
 syntax = "proto3";
 package types.v1;
+import "types/v1/types.proto";
 
 message HttpRequestArr {
 	repeated HttpRequestVal values = 1;
@@ -19,7 +20,17 @@ message HttpRequestKV {
 	HttpRequestVal value = 2;
 }
 
+message Nonce {
+	bytes raw_bytes = 1;
+}
+
 message SignedIngress {
 	bytes signature = 1;
 	repeated HttpRequestKV content = 2;
+	types.v1.UserId sender = 3;
+	types.v1.CanisterId canister_id = 4;
+	string method_name = 5;
+	bytes arg = 6;
+    	uint64 ingress_expiry = 7;
+	Nonce nonce = 8;
 }

@@ -253,7 +253,6 @@ mod tests {
     #[test]
     fn test_parse_read_state_response_replied() {
         let tree = MixedHashTree::Fork(Box::new((
-            MixedHashTree::Labeled("time".into(), Box::new(MixedHashTree::Leaf(vec![1]))),
             MixedHashTree::Labeled(
                 "request_status".into(),
                 Box::new(MixedHashTree::Labeled(
@@ -275,6 +274,7 @@ mod tests {
                     )))),
                 )),
             ),
+            MixedHashTree::Labeled("time".into(), Box::new(MixedHashTree::Leaf(vec![1]))),
         )));
 
         let certificate = Certificate {

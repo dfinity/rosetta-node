@@ -6,7 +6,8 @@ use crate::crypto::threshold_sig::ni_dkg::DkgId;
 use crate::registry::RegistryClientError;
 use crate::{CountBytes, NodeId, RegistryVersion, SubnetId};
 use core::fmt::Formatter;
-use ic_crypto_internal_types::sign::threshold_sig::public_key::bls12_381::MalformedThresholdSigPublicKeyError;
+use ic_crypto_internal_types::sign::threshold_sig::public_coefficients::CspPublicCoefficients;
+use ic_crypto_internal_types::sign::threshold_sig::public_key::bls12_381::ThresholdSigPublicKeyError;
 use ic_crypto_internal_types::sign::threshold_sig::public_key::CspThresholdSigPublicKey;
 use phantom_newtype::Id;
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -16,7 +17,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 use strum_macros::EnumIter;
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct KeyId(pub [u8; 32]);
 ic_crypto_internal_types::derive_serde!(KeyId, 32);
 
@@ -114,6 +115,14 @@ impl From<CspThresholdSigPublicKey> for AlgorithmId {
     fn from(public_key: CspThresholdSigPublicKey) -> Self {
         match public_key {
             CspThresholdSigPublicKey::ThresBls12_381(_) => AlgorithmId::ThresBls12_381,
+        }
+    }
+}
+
+impl From<&CspPublicCoefficients> for AlgorithmId {
+    fn from(public_coeffs: &CspPublicCoefficients) -> Self {
+        match public_coeffs {
+            CspPublicCoefficients::Bls12_381(_) => AlgorithmId::ThresBls12_381,
         }
     }
 }
@@ -242,11 +251,18 @@ pub enum CryptoError {
         key_purpose: KeyPurpose,
         registry_version: RegistryVersion,
     },
+    /// TLS cert for given node_id not found at given registry version.
+    TlsCertNotFound {
+        node_id: NodeId,
+        registry_version: RegistryVersion,
+    },
     /// Secret key not found in SecretKeyStore.
     SecretKeyNotFound {
         algorithm: AlgorithmId,
         key_id: KeyId,
     },
+    /// TLS secret key not found in SecretKeyStore.
+    TlsSecretKeyNotFound { certificate_der: Vec<u8> },
     /// Secret key could not be parsed or is otherwise invalid.
     MalformedSecretKey {
         algorithm: AlgorithmId,
@@ -307,12 +323,17 @@ pub enum CryptoError {
     },
 }
 
-impl From<MalformedThresholdSigPublicKeyError> for CryptoError {
-    fn from(error: MalformedThresholdSigPublicKeyError) -> Self {
-        CryptoError::MalformedPublicKey {
-            algorithm: AlgorithmId::ThresBls12_381,
-            key_bytes: error.key_bytes,
-            internal_error: error.internal_error,
+impl From<ThresholdSigPublicKeyError> for CryptoError {
+    fn from(error: ThresholdSigPublicKeyError) -> Self {
+        match error {
+            ThresholdSigPublicKeyError::Malformed {
+                key_bytes,
+                internal_error,
+            } => CryptoError::MalformedPublicKey {
+                algorithm: AlgorithmId::ThresBls12_381,
+                key_bytes,
+                internal_error,
+            },
         }
     }
 }
@@ -435,10 +456,22 @@ impl fmt::Debug for CryptoError {
                 node_id, key_purpose, registry_version
             ),
 
+            CryptoError::TlsCertNotFound { node_id, registry_version } => write!(
+                f,
+                "Cannot find TLS public key certificate record for node with ID {:?} at registry version {:?} ",
+                node_id, registry_version
+            ),
+
             CryptoError::SecretKeyNotFound { algorithm, key_id } => write!(
                 f,
                 "Cannot find {:?} secret key with ID {:?}",
                 algorithm, key_id
+            ),
+
+            CryptoError::TlsSecretKeyNotFound { certificate_der } => write!(
+                f,
+                "Cannot find TLS secret key for certificate (DER encoding) 0x{}",
+                hex::encode(&certificate_der)
             ),
 
             CryptoError::MalformedSecretKey { algorithm, .. } => {

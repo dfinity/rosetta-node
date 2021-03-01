@@ -1,7 +1,11 @@
 use crate::artifact::{ArtifactAttribute, ArtifactId};
 use crate::crypto::CryptoHash;
+use bincode::{deserialize, serialize};
+use ic_protobuf::p2p::v1 as pb;
+use ic_protobuf::proxy::ProxyDecodeError;
 use ic_protobuf::registry::subnet::v1::GossipConfig;
 use serde::{Deserialize, Serialize};
+use std::convert::TryFrom;
 
 /// This is sent to peers to indicate that a node has a certain artifact
 /// in its artifact pool. The adverts of different artifact types may differ
@@ -64,5 +68,29 @@ pub fn build_default_gossip_config() -> GossipConfig {
         pfn_evaluation_period_ms: PFN_EVALUATION_PERIOD_MS,
         registry_poll_period_ms: REGISTRY_POLL_PERIOD_MS,
         retransmission_request_ms: RETRANSMISSION_REQUEST_MS,
+    }
+}
+
+impl From<GossipAdvert> for pb::GossipAdvert {
+    fn from(advert: GossipAdvert) -> Self {
+        Self {
+            attribute: serialize(&advert.attribute).unwrap(),
+            size: advert.size as u64,
+            artifact_id: serialize(&advert.artifact_id).unwrap(),
+            integrity_hash: serialize(&advert.integrity_hash).unwrap(),
+        }
+    }
+}
+
+// TODO: protos all the way down.
+impl TryFrom<pb::GossipAdvert> for GossipAdvert {
+    type Error = ProxyDecodeError;
+    fn try_from(advert: pb::GossipAdvert) -> Result<Self, Self::Error> {
+        Ok(Self {
+            attribute: deserialize(&advert.attribute)?,
+            size: advert.size as usize,
+            artifact_id: deserialize(&advert.artifact_id)?,
+            integrity_hash: bincode::deserialize(&advert.integrity_hash)?,
+        })
     }
 }

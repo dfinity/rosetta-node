@@ -9,16 +9,17 @@ use core::fmt;
 use ic_crypto_internal_types::sign::threshold_sig::ni_dkg::{CspNiDkgDealing, CspNiDkgTranscript};
 use ic_protobuf::types::v1 as pb;
 use ic_protobuf::types::v1::NiDkgId as NiDkgIdProto;
-use phantom_newtype::Id;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::convert::TryFrom;
 use strum_macros::EnumIter;
 
 pub mod config;
+pub mod current_and_next_transcripts;
 pub mod errors;
 pub mod id;
 
+use ic_crypto_internal_types::sign::threshold_sig::public_coefficients::CspPublicCoefficients;
 pub use id::NiDkgId;
 
 #[cfg(test)]
@@ -53,15 +54,27 @@ pub enum NiDkgTargetSubnet {
     Remote(NiDkgTargetId),
 }
 
-pub const NI_DKG_TARGET_ID_SIZE: usize = 32;
-pub struct NiDkgTargetIdTag;
-pub type NiDkgTargetId = Id<NiDkgTargetIdTag, [u8; NI_DKG_TARGET_ID_SIZE]>;
+#[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+pub struct NiDkgTargetId([u8; NiDkgTargetId::SIZE]);
+ic_crypto_internal_types::derive_serde!(NiDkgTargetId, NiDkgTargetId::SIZE);
+
+impl NiDkgTargetId {
+    pub const SIZE: usize = 32;
+
+    pub const fn new(id: [u8; NiDkgTargetId::SIZE]) -> Self {
+        NiDkgTargetId(id)
+    }
+
+    pub fn to_vec(&self) -> Vec<u8> {
+        self.0.to_vec()
+    }
+}
 
 impl fmt::Debug for NiDkgTargetSubnet {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Local => write!(f, "Local"),
-            Self::Remote(target_id) => write!(f, "Remote(0x{})", hex::encode(target_id.get())),
+            Self::Remote(target_id) => write!(f, "Remote(0x{})", hex::encode(target_id.0)),
         }
     }
 }
@@ -138,6 +151,13 @@ pub struct NiDkgTranscript {
     pub committee: NiDkgReceivers,
     pub registry_version: RegistryVersion,
     pub internal_csp_transcript: CspNiDkgTranscript,
+}
+
+impl From<&NiDkgTranscript> for CspPublicCoefficients {
+    fn from(transcript: &NiDkgTranscript) -> Self {
+        let csp_transcript = CspNiDkgTranscript::from(transcript);
+        CspPublicCoefficients::from(&csp_transcript)
+    }
 }
 
 impl From<&NiDkgTranscript> for pb::NiDkgTranscript {

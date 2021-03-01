@@ -275,6 +275,12 @@ pub enum TransportErrorCode {
 
     /// Failed to get socket address
     InvalidSockAddr,
+
+    /// Duplicate flow tags in NodeRecord
+    NodeRecordDuplicateFlowTag,
+
+    /// Missing connection endpoint in NodeRecord
+    NodeRecordMissingConnectionEndpoint,
 }
 
 impl FlowId {

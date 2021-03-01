@@ -2,17 +2,17 @@ pub mod convert;
 pub mod ledger_client;
 pub mod models;
 pub mod rosetta_server;
-pub mod sync;
+pub mod store;
 
 use crate::convert::account_from_public_key;
 use crate::convert::operations;
 use crate::convert::{
-    account_identifier, from_arg, from_hex, from_public_key, internal_error, into_error,
+    account_identifier, from_arg, from_hex, from_public_key, internal_error, into_error, to_hex,
     transaction_id,
 };
 use crate::ledger_client::LedgerAccess;
 
-use crate::sync::HashedBlock;
+use crate::store::HashedBlock;
 
 use convert::{from_metadata, into_metadata, to_arg};
 use ic_interfaces::crypto::DOMAIN_IC_REQUEST;
@@ -21,15 +21,19 @@ use ic_types::messages::{
 };
 use ic_types::time::current_time_and_expiry_time;
 use ic_types::{CanisterId, PrincipalId};
-use ledger_canister::{BlockHeight, Memo, Transfer};
+
 use models::*;
 use rand::Rng;
+
+use ledger_canister::{BlockHeight, Memo, SendArgs, Serializable, Transfer, TRANSACTION_FEE};
 use serde_json::{json, map::Map};
 use std::convert::TryFrom;
 
 use std::sync::Arc;
 
-pub const API_VERSION: &str = "1.4.9";
+pub const API_VERSION: &str = "1.4.10";
+pub const NODE_VERSION: &str = "1.0.2";
+pub const MIDDLEWARE_VERSION: &str = "0.2.7";
 
 fn to_index(height: BlockHeight) -> Result<i128, ApiError> {
     i128::try_from(height).map_err(|_| ApiError::InternalError(true, None))
@@ -148,7 +152,9 @@ impl RosettaRequestHandler {
         let blocks = self.ledger.read_blocks().await;
         let block = get_block(&blocks, msg.block_identifier)?;
 
-        let icp = blocks.get_balances(block.hash)?.get(canister_id.get());
+        let icp = blocks
+            .get_balances(block.hash)?
+            .account_balance(&canister_id.get());
         let amount = convert::amount_(icp)?;
         let b = convert::block_id(&block)?;
         Ok(AccountBalanceResponse::new(b, vec![amount]))
@@ -163,12 +169,13 @@ impl RosettaRequestHandler {
         let b_id = convert::block_id(&b)?;
         let parent_id = create_parent_block_id(&blocks, &b)?;
 
-        let t_id = convert::transaction_identifier(&b.block.transaction.hash());
-        let transactions = vec![convert::transaction(&b.block.transaction.transfer, t_id)?];
+        let txn = b.block.transaction();
+        let t_id = convert::transaction_identifier(&txn.hash());
+        let transactions = vec![convert::transaction(&txn.transfer, t_id)?];
         let block = Some(models::Block::new(
             b_id,
             parent_id,
-            convert::timestamp(b.block.timestamp)?,
+            convert::timestamp(b.block.timestamp().into())?,
             transactions,
         ));
 
@@ -191,8 +198,9 @@ impl RosettaRequestHandler {
         });
         let b = get_block(&blocks, b_id)?;
 
-        let t_id = convert::transaction_identifier(&b.block.transaction.hash());
-        let transaction = convert::transaction(&b.block.transaction.transfer, t_id)?;
+        let txn = b.block.transaction();
+        let t_id = convert::transaction_identifier(&txn.hash());
+        let transaction = convert::transaction(&txn.transfer, t_id)?;
 
         Ok(BlockTransactionResponse::new(transaction))
     }
@@ -233,8 +241,11 @@ impl RosettaRequestHandler {
 
         let content = HttpSubmitContent::Call { update };
 
-        let sender_sig = Some(Blob(from_hex(signature.hex_bytes)?));
-        let sender_pubkey = Some(Blob(from_public_key(signature.public_key)?));
+        let sender_sig = Some(Blob(from_hex(&signature.hex_bytes)?));
+        assert_eq!(signature.signature_type, SignatureType::ED25519);
+        let sender_pubkey = Some(Blob(ic_canister_client::ed25519_public_key_to_der(
+            from_public_key(&signature.public_key)?,
+        )));
 
         let envelope = HttpRequestEnvelope::<HttpSubmitContent> {
             content,
@@ -261,8 +272,15 @@ impl RosettaRequestHandler {
         verify_network_id(self.ledger.ledger_canister_id(), &msg.network_identifier)?;
 
         let pk = msg.public_key;
+
+        let pk_der = PublicKey::new(
+            to_hex(&ic_canister_client::ed25519_public_key_to_der(
+                from_public_key(&pk)?,
+            )),
+            pk.curve_type,
+        );
         // Do we need the curve?
-        let account_identifier = Some(account_from_public_key(pk)?);
+        let account_identifier = Some(account_from_public_key(pk_der)?);
         Ok(ConstructionDeriveResponse {
             account_identifier,
             address: None,
@@ -296,7 +314,9 @@ impl RosettaRequestHandler {
             None => 0,
         };
         let meta = into_metadata(last_index);
-        Ok(ConstructionMetadataResponse::new(meta))
+        let fee = TRANSACTION_FEE;
+        let suggested_fee = Some(vec![convert::amount_(fee)?]);
+        Ok(ConstructionMetadataResponse::new(meta, suggested_fee))
     }
 
     /// Parse a Transfer
@@ -331,9 +351,19 @@ impl RosettaRequestHandler {
         };
 
         // This is always a transaction
-        let (_, amount, to, _) = from_arg(update.arg.0)?;
+        let SendArgs {
+            amount, fee, to, ..
+        } = from_arg(update.arg.0)?;
 
-        let operations = operations(&Transfer::Send { from, to, amount }, false)?;
+        let operations = operations(
+            &Transfer::Send {
+                from,
+                to,
+                amount,
+                fee,
+            },
+            false,
+        )?;
 
         Ok(ConstructionParseResponse {
             operations,
@@ -362,7 +392,12 @@ impl RosettaRequestHandler {
         let mut payloads: Vec<_> = transactions
             .into_iter()
             .map(|t| match t {
-                Transfer::Send { from, to, amount } => {
+                Transfer::Send {
+                    from,
+                    to,
+                    amount,
+                    fee,
+                } => {
                     let mut rng = rand::thread_rng();
                     let memo: Memo = Memo(rng.gen());
                     let metadata = msg
@@ -372,7 +407,15 @@ impl RosettaRequestHandler {
                     let height = from_metadata(metadata)?;
 
                     // What we send to the canister
-                    let argument = to_arg((memo, amount, to, Some(height)));
+                    let argument = to_arg(SendArgs {
+                        memo,
+                        amount,
+                        fee,
+                        from_subaccount: None,
+                        to,
+                        to_subaccount: None,
+                        block_height: Some(height),
+                    });
 
                     let (current_time, expiry) = current_time_and_expiry_time();
 
@@ -503,8 +546,8 @@ impl RosettaRequestHandler {
         let resp = json!({
             "version": {
                "rosetta_version": API_VERSION,
-               "node_version": "1.0.2",
-               "middleware_version": "0.2.7",
+               "node_version": NODE_VERSION,
+               "middleware_version": MIDDLEWARE_VERSION,
                "metadata": {}
             },
             "allow": {
@@ -542,16 +585,23 @@ impl RosettaRequestHandler {
     ) -> Result<NetworkStatusResponse, ApiError> {
         verify_network_id(self.ledger.ledger_canister_id(), &msg.network_identifier)?;
         let blocks = self.ledger.read_blocks().await;
+        let first = blocks
+            .first()?
+            .ok_or(ApiError::BlockchainEmpty(true, None))?;
         let tip = blocks
             .last()?
             .ok_or(ApiError::BlockchainEmpty(true, None))?;
         let tip_id = convert::block_id(&tip)?;
-        let tip_timestamp = convert::timestamp(tip.block.timestamp)?;
+        let tip_timestamp = convert::timestamp(tip.block.timestamp().into())?;
         // Block at index 0 has to be there if tip was present
         let genesis_block = blocks.get_at(0)?;
         let genesis_block_id = convert::block_id(&genesis_block)?;
         let peers = vec![];
-
+        let oldest_block_id = if first.index != tip.index {
+            Some(convert::block_id(&first)?)
+        } else {
+            None
+        };
         let sync_status = SyncStatus::new(tip.index as i64, None);
         //let sync_status = SyncStatus::new(tip.index as i64, Some(true));
         //sync_status.target_index = Some(sync_status.current_index);
@@ -560,6 +610,7 @@ impl RosettaRequestHandler {
             tip_id,
             tip_timestamp,
             genesis_block_id,
+            oldest_block_id,
             sync_status,
             peers,
         ))

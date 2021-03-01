@@ -4,7 +4,7 @@ use crate::NumberOfNodes;
 use ic_crypto_internal_types::curves::bls12_381::{Fr, G1, G2};
 use ic_crypto_internal_types::sign::threshold_sig::ni_dkg::ni_dkg_groth20_bls12_381;
 use ic_crypto_internal_types::sign::threshold_sig::ni_dkg::ni_dkg_groth20_bls12_381::{
-    Dealing, EncryptedShares, PublicCoefficients, ZKProofDec, ZKProofShare, NUM_CHUNKS,
+    Dealing, EncryptedShares, PublicCoefficientsBytes, ZKProofDec, ZKProofShare, NUM_CHUNKS,
     NUM_ZK_REPETITIONS,
 };
 
@@ -51,7 +51,7 @@ fn should_correctly_format_dealing_display_message() {
     let display_text = format!("{}", dealing);
 
     let expected_text =
-        "NiDkgDealing { internal_dealing: Groth20_Bls12_381(Dealing { public_coefficients: PublicCoefficients { coefficients: [] }, \
+        "NiDkgDealing { internal_dealing: Groth20_Bls12_381(Dealing { public_coefficients: PublicCoefficientsBytes { coefficients: [] }, \
         ciphertexts: FsEncryptionCiphertext { rand_r: [G1(0x000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000), \
         G1(0x000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000), \
         G1(0x000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000), \
@@ -273,7 +273,7 @@ fn transcript_with_internal_csp_transcript(
 
 fn csp_dealing() -> CspNiDkgDealing {
     CspNiDkgDealing::Groth20_Bls12_381(Dealing {
-        public_coefficients: PublicCoefficients {
+        public_coefficients: PublicCoefficientsBytes {
             coefficients: vec![],
         },
         ciphertexts: EncryptedShares {
@@ -319,7 +319,7 @@ pub fn zk_proof_share() -> ZKProofShare {
 
 fn empty_ni_csp_dkg_transcript() -> CspNiDkgTranscript {
     CspNiDkgTranscript::Groth20_Bls12_381(ni_dkg_groth20_bls12_381::Transcript {
-        public_coefficients: PublicCoefficients {
+        public_coefficients: PublicCoefficientsBytes {
             coefficients: vec![],
         },
         receiver_data: Default::default(),

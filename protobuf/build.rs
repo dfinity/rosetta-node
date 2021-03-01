@@ -88,7 +88,8 @@ fn build_log_proto() {
         dkg_dealer,
         dkg_transcript,
         allowed_tls_clients,
-        tls_server
+        tls_server,
+        dkg_epoch
     );
 
     add_log_proto_derives!(
@@ -162,6 +163,13 @@ fn build_log_proto() {
         canister_id
     );
 
+    add_log_proto_derives!(
+        config,
+        MaliciousBehaviourLogEntry,
+        "log.malicious_behaviour_log_entry.v1",
+        malicious_behaviour
+    );
+
     compile_protos(config, &["def/log/log_entry/v1/log_entry.proto"]);
 }
 
@@ -174,8 +182,10 @@ fn build_registry_proto() {
 
     let registry_files = [
         "def/registry/canister/v1/canister.proto",
+        "def/registry/conversion_rate/v1/conversion_rate.proto",
         "def/registry/crypto/v1/crypto.proto",
         "def/registry/dc/v1/dc.proto",
+        "def/registry/node_operator/v1/node_operator.proto",
         "def/registry/nns/v1/nns.proto",
         "def/registry/node/v1/node.proto",
         "def/registry/routing_table/v1/routing_table.proto",
@@ -215,6 +225,7 @@ fn build_state_proto() {
         "def/state/canister_state_bits/v1/canister_state_bits.proto",
         "def/state/queues/v1/queues.proto",
         "def/state/sync/v1/manifest.proto",
+        "def/state/v1/metadata.proto",
     ];
 
     compile_protos(config, &state_files);

@@ -26,6 +26,8 @@ use crate::{
     CryptoHashOfState, Height, Time,
 };
 use derive_more::{AsMut, AsRef, From, TryInto};
+use ic_protobuf::p2p::v1 as pb;
+use ic_protobuf::proxy::{try_from_option_field, ProxyDecodeError};
 use serde::{Deserialize, Serialize};
 use std::convert::{TryFrom, TryInto};
 use strum_macros::EnumIter;
@@ -70,7 +72,7 @@ pub enum ArtifactId {
 /// Artifact tags is used to select an artifact subtype when we do not have
 /// Artifact/ArtifactId/ArtifactAttribute. For example, when lookup quota
 /// or filters.
-#[derive(EnumIter, TryInto, Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(EnumIter, TryInto, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ArtifactTag {
     ConsensusArtifact,
     IngressArtifact,
@@ -129,7 +131,7 @@ impl From<&Artifact> for ArtifactTag {
 /// of artifact pools. At the moment it only has consensus filter.
 /// Note that it is a struct instead of an enum, because we most likely
 /// are interested in all filters.
-#[derive(AsMut, AsRef, Default, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(AsMut, AsRef, Default, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct ArtifactFilter {
     pub consensus_filter: ConsensusMessageFilter,
     pub ingress_filter: IngressMessageFilter,
@@ -139,7 +141,7 @@ pub struct ArtifactFilter {
 }
 
 /// Priority of artifact.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, EnumIter)]
 pub enum Priority {
     /// Drop the advert, the IC doesn't need the corresponding artifact for
     /// making progress.
@@ -320,10 +322,7 @@ impl std::fmt::Debug for IngressMessageId {
 
 impl From<&SignedIngress> for IngressMessageId {
     fn from(signed_ingress: &SignedIngress) -> Self {
-        IngressMessageId::new(
-            signed_ingress.expiry_time(),
-            MessageId::from(signed_ingress.content()),
-        )
+        IngressMessageId::new(signed_ingress.expiry_time(), signed_ingress.id())
     }
 }
 
@@ -483,7 +482,7 @@ pub struct StateSyncAttribute {
 }
 
 /// State sync filter is by height.
-#[derive(Default, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Default, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct StateSyncFilter {
     pub height: Height,
 }
@@ -500,3 +499,102 @@ impl ArtifactKind for StateSyncArtifact {
 // FileTreeSync artifacts (to be filled in)
 
 pub type FileTreeSyncAttribute = String;
+
+// ------------------------------------------------------------------------------
+// Conversions
+
+impl From<ArtifactFilter> for pb::ArtifactFilter {
+    fn from(filter: ArtifactFilter) -> Self {
+        Self {
+            consensus_filter: Some(filter.consensus_filter.into()),
+            ingress_filter: Some(pb::IngressMessageFilter {
+                time: filter
+                    .ingress_filter
+                    .unwrap_or_else(|| Time::from_nanos_since_unix_epoch(0))
+                    .as_nanos_since_unix_epoch(),
+            }),
+            certification_message_filter: Some(filter.certification_filter.into()),
+            state_sync_filter: Some(filter.state_sync_filter.into()),
+        }
+    }
+}
+
+impl TryFrom<pb::ArtifactFilter> for ArtifactFilter {
+    type Error = ProxyDecodeError;
+    fn try_from(filter: pb::ArtifactFilter) -> Result<Self, Self::Error> {
+        Ok(Self {
+            consensus_filter: try_from_option_field(
+                filter.consensus_filter,
+                "ArtifactFilter.consensus_filter",
+            )?,
+            ingress_filter: Some(Time::from_nanos_since_unix_epoch(
+                filter
+                    .ingress_filter
+                    .ok_or(ProxyDecodeError::MissingField(
+                        "ArtifactFilter.ingress_filter",
+                    ))?
+                    .time,
+            )),
+            certification_filter: try_from_option_field(
+                filter.certification_message_filter,
+                "ArtifactFilter.ingress_filter",
+            )?,
+            state_sync_filter: try_from_option_field(
+                filter.state_sync_filter,
+                "ArtifactFilter.state_sync_filter",
+            )?,
+            no_filter: (),
+        })
+    }
+}
+
+impl From<ConsensusMessageFilter> for pb::ConsensusMessageFilter {
+    fn from(filter: ConsensusMessageFilter) -> Self {
+        Self {
+            height: filter.height.get(),
+        }
+    }
+}
+
+impl TryFrom<pb::ConsensusMessageFilter> for ConsensusMessageFilter {
+    type Error = ProxyDecodeError;
+    fn try_from(filter: pb::ConsensusMessageFilter) -> Result<Self, Self::Error> {
+        Ok(Self {
+            height: Height::from(filter.height),
+        })
+    }
+}
+
+impl From<CertificationMessageFilter> for pb::CertificationMessageFilter {
+    fn from(filter: CertificationMessageFilter) -> Self {
+        Self {
+            height: filter.height.get(),
+        }
+    }
+}
+
+impl TryFrom<pb::CertificationMessageFilter> for CertificationMessageFilter {
+    type Error = ProxyDecodeError;
+    fn try_from(filter: pb::CertificationMessageFilter) -> Result<Self, Self::Error> {
+        Ok(Self {
+            height: Height::from(filter.height),
+        })
+    }
+}
+
+impl From<StateSyncFilter> for pb::StateSyncFilter {
+    fn from(filter: StateSyncFilter) -> Self {
+        Self {
+            height: filter.height.get(),
+        }
+    }
+}
+
+impl TryFrom<pb::StateSyncFilter> for StateSyncFilter {
+    type Error = ProxyDecodeError;
+    fn try_from(filter: pb::StateSyncFilter) -> Result<Self, Self::Error> {
+        Ok(Self {
+            height: Height::from(filter.height),
+        })
+    }
+}

@@ -136,6 +136,11 @@ pub const CANISTER_FREEZE_BALANCE_RESERVE: Cycles = Cycles::new(1 << 33);
 /// do for regular data.
 pub const CYCLES_PER_WASM_EXPORTED_GLOBAL: Cycles = Cycles::new(100);
 
+/// Creating canisters incurs a "large" fee in order to prevent someone from
+/// creating a lot of canisters and thus attempt to DDoS the system. Arbitrarily
+/// set to 10^12 cycles which ought to be large enough.
+pub const CANISTER_CREATION_FEE: Cycles = Cycles::new(1_000_000_000_000);
+
 //////////////////////////////////////////////////////////////
 // Conversions
 //////////////////////////////////////////////////////////////

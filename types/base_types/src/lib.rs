@@ -9,6 +9,7 @@ use phantom_newtype::{AmountOf, DisplayerOf, Id};
 pub use principal_id::{PrincipalId, PrincipalIdBlobParseError, PrincipalIdParseError};
 use serde::{Deserialize, Serialize};
 use std::{convert::TryFrom, fmt, slice::Iter};
+use strum_macros::EnumString;
 
 pub struct RegistryVersionTag {}
 pub type RegistryVersion = AmountOf<RegistryVersionTag, u64>;
@@ -68,16 +69,21 @@ impl fmt::Display for CanisterStatusType {
 }
 
 /// The mode with which a canister is installed.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, Eq, Hash, CandidType, Copy)]
+#[derive(
+    Clone, Debug, Deserialize, PartialEq, Serialize, Eq, EnumString, Hash, CandidType, Copy,
+)]
 pub enum CanisterInstallMode {
     /// A fresh install of a new canister.
     #[serde(rename = "install")]
+    #[strum(serialize = "install")]
     Install,
     /// Reinstalling a canister that was already installed.
     #[serde(rename = "reinstall")]
+    #[strum(serialize = "reinstall")]
     Reinstall,
     /// Upgrade an existing canister.
     #[serde(rename = "upgrade")]
+    #[strum(serialize = "upgrade")]
     Upgrade,
 }
 

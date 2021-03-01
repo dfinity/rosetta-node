@@ -31,6 +31,21 @@ pub struct Request {
 }
 
 impl Request {
+    /// Returns the sender of this `Request`.
+    pub fn sender(&self) -> CanisterId {
+        self.sender
+    }
+
+    /// Takes the payment out of this `Request`.
+    pub fn take_funds(&mut self) -> Funds {
+        self.payment.take()
+    }
+
+    /// Returns this `Request`s payload.
+    pub fn method_payload(&self) -> &[u8] {
+        &self.method_payload
+    }
+
     /// Returns the size of the user-controlled part of this `Request`,
     /// in bytes.
     pub fn payload_size_bytes(&self) -> NumBytes {

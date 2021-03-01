@@ -6,10 +6,9 @@ mod mixed_hash_tree_tests;
 #[cfg(test)]
 mod tests;
 
-use crate::{Digest, Label, LabeledTree, MixedHashTree, Witness};
+use crate::{Digest, FlatMap, Label, LabeledTree, MixedHashTree, Witness};
 use ic_protobuf::messaging::xnet::v1 as pb;
 use ic_protobuf::proxy::{try_from_option_field, ProxyDecodeError, ProxyDecodeError::*};
-use std::collections::BTreeMap;
 use std::convert::{TryFrom, TryInto};
 
 type LabeledTreeOfBytes = LabeledTree<Vec<u8>>;
@@ -18,7 +17,7 @@ use pb::{labeled_tree, labeled_tree::NodeEnum};
 
 /// Converts the contents of a `LabeledTree::SubTree`into the contents of a
 /// `pb::labeled_tree::NodeEnum::SubTree`.
-fn sub_tree_proto_from(map: BTreeMap<Label, LabeledTreeOfBytes>) -> labeled_tree::SubTree {
+fn sub_tree_proto_from(map: FlatMap<Label, LabeledTreeOfBytes>) -> labeled_tree::SubTree {
     labeled_tree::SubTree {
         children: map
             .into_iter()
@@ -44,8 +43,8 @@ impl From<LabeledTreeOfBytes> for pb::LabeledTree {
 /// contents of a `LabeledTree::SubTree` (or a `ProxyDecodeError` on failure).
 fn sub_tree_map_from(
     subtree: labeled_tree::SubTree,
-) -> Result<BTreeMap<Label, LabeledTreeOfBytes>, ProxyDecodeError> {
-    Ok(subtree
+) -> Result<FlatMap<Label, LabeledTreeOfBytes>, ProxyDecodeError> {
+    let kv: Vec<_> = subtree
         .children
         .into_iter()
         .map(|child| {
@@ -54,7 +53,8 @@ fn sub_tree_map_from(
                 try_from_option_field(child.node, "LabeledTree::Subtree::value")?,
             ))
         })
-        .collect::<Result<_, ProxyDecodeError>>()?)
+        .collect::<Result<_, ProxyDecodeError>>()?;
+    Ok(FlatMap::from_key_values(kv))
 }
 impl TryFrom<pb::LabeledTree> for LabeledTreeOfBytes {
     type Error = ProxyDecodeError;

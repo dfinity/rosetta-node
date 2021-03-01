@@ -261,7 +261,7 @@ fn should_correctly_format_config_display_message() {
                         threshold: NiDkgThreshold { threshold: 2 }, \
                         committee: NiDkgReceivers { receivers: {3jo2y-lqbaa-aaaaa-aaaap-2ai, gfvbo-licaa-aaaaa-aaaap-2ai, 32uhy-eydaa-aaaaa-aaaap-2ai}, count: 3 }, \
                         registry_version: 2, \
-                        internal_csp_transcript: Groth20_Bls12_381(Transcript { public_coefficients: PublicCoefficients { coefficients: [0x000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000] }, receiver_data: {} }) }) \
+                        internal_csp_transcript: Groth20_Bls12_381(Transcript { public_coefficients: PublicCoefficientsBytes { coefficients: [0x000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000] }, receiver_data: {} }) }) \
                         }"
     );
 }

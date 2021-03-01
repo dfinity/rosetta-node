@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 /// every possible permutation of compile flags on CI.
 #[derive(Clone, Deserialize, Debug, PartialEq, Eq, Serialize)]
 pub struct MaliciousBehaviour {
-    allow_malicious_behaviour: bool,
+    pub allow_malicious_behaviour: bool,
     // No structs apart from 'allow_malicious_behaviour' should be directly accessible
     // All subsequent fields should start with 'maliciously_' just to really send home that these
     // aren't options you want to enable
@@ -81,30 +81,44 @@ impl MaliciousBehaviour {
         })
     }
 
-    pub fn set_maliciously_equivocation_blockmaker(self) -> Self {
+    pub fn set_maliciously_propose_equivocating_blocks(self) -> Self {
         self.set_malicious_behaviour(|mut s| {
-            s.malicious_flags.maliciously_equivocation_blockmaker = true;
+            s.malicious_flags.maliciously_propose_equivocating_blocks = true;
             s
         })
     }
 
-    pub fn set_maliciously_notary(self) -> Self {
+    pub fn set_maliciously_propose_empty_blocks(self) -> Self {
         self.set_malicious_behaviour(|mut s| {
-            s.malicious_flags.maliciously_notary = true;
+            s.malicious_flags.maliciously_propose_empty_blocks = true;
             s
         })
     }
 
-    pub fn set_maliciously_dkg(self) -> Self {
+    pub fn set_maliciously_notarize_all(self) -> Self {
         self.set_malicious_behaviour(|mut s| {
-            s.malicious_flags.maliciously_dkg = true;
+            s.malicious_flags.maliciously_notarize_all = true;
             s
         })
     }
 
-    pub fn set_maliciously_certification(self) -> Self {
+    pub fn set_maliciously_finalize_all(self) -> Self {
         self.set_malicious_behaviour(|mut s| {
-            s.malicious_flags.maliciously_certification = true;
+            s.malicious_flags.maliciously_finalize_all = true;
+            s
+        })
+    }
+
+    pub fn set_maliciously_tweak_dkg(self) -> Self {
+        self.set_malicious_behaviour(|mut s| {
+            s.malicious_flags.maliciously_tweak_dkg = true;
+            s
+        })
+    }
+
+    pub fn set_maliciously_certify_invalid_hash(self) -> Self {
+        self.set_malicious_behaviour(|mut s| {
+            s.malicious_flags.maliciously_certify_invalid_hash = true;
             s
         })
     }

@@ -1,7 +1,11 @@
 use super::*;
 
+use log::debug;
+
 #[actix_rt::test]
 async fn rosetta_cli_data_test() {
+    init_test_logger();
+
     let addr = "127.0.0.1:8091".to_string();
 
     let mut scribe = Scribe::new();
@@ -27,9 +31,9 @@ async fn rosetta_cli_data_test() {
     let serv_run = serv.clone();
     let mut arbiter = actix_rt::Arbiter::new();
     arbiter.send(Box::pin(async move {
-        println!("Spawning server");
-        serv_run.run(false).await.unwrap();
-        println!("Server thread done");
+        debug!("Spawning server");
+        serv_run.run(false, false).await.unwrap();
+        debug!("Server thread done");
     }));
 
     let output = Command::new("rosetta-cli")
@@ -60,17 +64,19 @@ async fn rosetta_cli_data_test() {
 
 #[actix_rt::test]
 async fn rosetta_cli_construction_create_account_test() {
+    init_test_logger();
+
     let addr = "127.0.0.1:8092".to_string();
 
     let mut scribe = Scribe::new();
     let num_transactions = 10;
 
     scribe.add_account(
-        "46ed0873face9d8d0cc332bf834034f885a5e983372db0a0f0bd608f02",
+        "536b6209f79889378cafe5f0342cac176f261cca3d182da95c3bfd6302",
         1_000_000_001,
     );
     scribe.add_account(
-        "7c7ec16552f5fcb2e9e61aeb2141cde19f0800bee00a6ee8672d448202",
+        "fe82b6784eb4a61a1261941f3010066f3df813154cc3e6ced3d3b63202",
         1_000_000_001,
     );
     for _i in 0..num_transactions {
@@ -91,9 +97,9 @@ async fn rosetta_cli_construction_create_account_test() {
     let serv_run = serv.clone();
     let mut arbiter = actix_rt::Arbiter::new();
     arbiter.send(Box::pin(async move {
-        println!("Spawning server");
-        serv_run.run(false).await.unwrap();
-        println!("Server thread done");
+        debug!("Spawning server");
+        serv_run.run(false, false).await.unwrap();
+        debug!("Server thread done");
     }));
 
     let output = Command::new("rosetta-cli")
@@ -122,9 +128,10 @@ async fn rosetta_cli_construction_create_account_test() {
     arbiter.join().unwrap();
 }
 
-#[ignore] //WIP
 #[actix_rt::test]
 async fn rosetta_cli_construction_test() {
+    init_test_logger();
+
     let addr = "127.0.0.1:8093".to_string();
 
     let mut scribe = Scribe::new();
@@ -133,12 +140,32 @@ async fn rosetta_cli_construction_test() {
     scribe.gen_accounts(num_accounts, 1_000 * 100_000_000);
 
     scribe.add_account(
-        "7c7ec16552f5fcb2e9e61aeb2141cde19f0800bee00a6ee8672d448202",
+        "fe82b6784eb4a61a1261941f3010066f3df813154cc3e6ced3d3b63202",
         100_000_000_001,
     );
     scribe.add_account(
-        "46ed0873face9d8d0cc332bf834034f885a5e983372db0a0f0bd608f02",
-        100_000_000_001,
+        "536b6209f79889378cafe5f0342cac176f261cca3d182da95c3bfd6302",
+        100_000_000_002,
+    );
+    scribe.add_account(
+        "df86247a1456860419c51c432faffc05fc6d0e405c21cb31b36a772d02",
+        100_000_000_003,
+    );
+    scribe.add_account(
+        "5360a4ac7ecf4495b764cfe9ca9ef050d3686d43fd5ae0ec7517de8c02",
+        100_000_000_004,
+    );
+    scribe.add_account(
+        "edcfc2ed66a7cfbd688f064afe6d3d9dfb1155b66e8de062ab13ef0202",
+        100_000_000_005,
+    );
+    scribe.add_account(
+        "1a513246f54ea1e2374187222ffb84624896961f513353811d468c7802",
+        100_000_000_006,
+    );
+    scribe.add_account(
+        "47dc99f3bc06aeaa3f175f3dd0941c09d9ff018b40822a0c8e10bb8f02",
+        100_000_000_007,
     );
 
     let ledger = Arc::new(TestLedger::new());
@@ -155,9 +182,9 @@ async fn rosetta_cli_construction_test() {
     let serv_run = serv.clone();
     let mut arbiter = actix_rt::Arbiter::new();
     arbiter.send(Box::pin(async move {
-        println!("Spawning server");
-        serv_run.run(false).await.unwrap();
-        println!("Server thread done");
+        debug!("Spawning server");
+        serv_run.run(false, false).await.unwrap();
+        debug!("Server thread done");
     }));
 
     let output = Command::new("rosetta-cli")
@@ -166,8 +193,8 @@ async fn rosetta_cli_construction_test() {
             "--configuration-file",
             "test/rosetta-cli_construction_test.json",
         ])
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
+        //.stdout(std::process::Stdio::inherit())
+        //.stderr(std::process::Stdio::inherit())
         .output()
         .expect("failed to execute rosetta-cli");
 

@@ -352,6 +352,7 @@ pub fn precondition(key: impl AsRef<[u8]>, version: u64) -> Precondition {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pb::v1::RegistryAtomicMutateRequest;
 
     #[test]
     fn test_serde_get_value_request() {
@@ -413,5 +414,29 @@ mod tests {
                 preconditions
             })
         );
+    }
+
+    #[test]
+    fn test_display_atomic_mutate_request() {
+        let req = RegistryAtomicMutateRequest {
+            mutations: vec![
+                insert("italy", "europe"),
+                upsert("bolivia", "south america"),
+                update("guatemala", "north america"),
+                delete("someone is going to get offended if i put a real country here"),
+            ],
+            preconditions: vec![precondition("africa", 23), precondition("asia", 51)],
+        };
+        // Not everything is displayed: in particular, the values are dropped.
+        assert_eq!(
+            req.to_string(),
+            "RegistryAtomicMutateRequest{ \
+            mutations: [\
+            insert(italy), \
+            upsert(bolivia), \
+            update(guatemala), \
+            delete(someone is going to get offended if i put a real country here)], \
+            preconditions on keys: [africa, asia] }"
+        )
     }
 }

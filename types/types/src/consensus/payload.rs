@@ -221,10 +221,11 @@ impl From<(BatchPayload, dkg::Dealings)> for BlockPayload {
 
 impl From<dkg::Payload> for BlockPayload {
     fn from(payload: dkg::Payload) -> BlockPayload {
-        if payload.is_summary() {
-            payload.into_summary().into()
-        } else {
-            BlockPayload::BatchAndDealings(BatchPayload::default(), payload.into_dealings())
+        match payload {
+            dkg::Payload::Summary(summary) => summary.into(),
+            dkg::Payload::Dealings(dealings) => {
+                BlockPayload::BatchAndDealings(BatchPayload::default(), dealings)
+            }
         }
     }
 }

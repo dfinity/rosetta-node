@@ -6,7 +6,6 @@ use serde::{
     de::{DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor},
     forward_to_deserialize_any,
 };
-use std::collections::btree_map::{Iter as BTreeMapIter, Values as BTreeMapValues};
 use std::convert::TryInto;
 use std::fmt;
 use std::marker::PhantomData;
@@ -104,7 +103,8 @@ impl<'a> LabeledTreeDeserializer<'a> {
 /// An adapter to deserialize maps.
 struct TreeMapAccess<'a> {
     value: Option<&'a LabeledTree<Vec<u8>>>,
-    iter: BTreeMapIter<'a, Label, LabeledTree<Vec<u8>>>,
+    key_iter: std::slice::Iter<'a, Label>,
+    val_iter: std::slice::Iter<'a, LabeledTree<Vec<u8>>>,
 }
 
 impl<'de> MapAccess<'de> for TreeMapAccess<'de> {
@@ -114,8 +114,9 @@ impl<'de> MapAccess<'de> for TreeMapAccess<'de> {
     where
         K: DeserializeSeed<'de>,
     {
-        match self.iter.next() {
-            Some((label, tree)) => {
+        match self.key_iter.next() {
+            Some(label) => {
+                let tree = self.val_iter.next().unwrap();
                 self.value = Some(tree);
                 let d = LabelDeserializer(label.as_bytes());
                 seed.deserialize(d).map(Some)
@@ -137,7 +138,7 @@ impl<'de> MapAccess<'de> for TreeMapAccess<'de> {
 }
 
 /// An adapter to deserialize trees as sequences.
-struct TreeSeqAccess<'de>(BTreeMapValues<'de, Label, LabeledTree<Vec<u8>>>);
+struct TreeSeqAccess<'de>(std::slice::Iter<'de, LabeledTree<Vec<u8>>>);
 
 impl<'de> SeqAccess<'de> for TreeSeqAccess<'de> {
     type Error = Error;
@@ -192,7 +193,8 @@ impl<'de> Deserializer<'de> for LabeledTreeDeserializer<'de> {
         match self.root {
             Leaf(b) => visitor.visit_borrowed_bytes(&b[..]),
             SubTree(children) => visitor.visit_map(TreeMapAccess {
-                iter: children.iter(),
+                key_iter: children.keys().iter(),
+                val_iter: children.values().iter(),
                 value: None,
             }),
         }
@@ -327,7 +329,7 @@ impl<'de> Deserializer<'de> for LabeledTreeDeserializer<'de> {
     {
         match self.root {
             Leaf(b) => visitor.visit_seq(ByteSeqAccess(b[..].iter())),
-            SubTree(children) => visitor.visit_seq(TreeSeqAccess(children.values())),
+            SubTree(children) => visitor.visit_seq(TreeSeqAccess(children.values().iter())),
         }
     }
 
@@ -378,7 +380,8 @@ impl<'de> Deserializer<'de> for LabeledTreeDeserializer<'de> {
                 "cannot decode a map from a leaf".to_string(),
             )),
             SubTree(children) => visitor.visit_map(TreeMapAccess {
-                iter: children.iter(),
+                key_iter: children.keys().iter(),
+                val_iter: children.values().iter(),
                 value: None,
             }),
         }

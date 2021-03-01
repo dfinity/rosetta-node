@@ -5,8 +5,8 @@ use std::fmt;
 
 pub mod create_dealing_error;
 pub mod create_transcript_error;
-pub mod delete_decryption_key_error;
-pub mod delete_threshold_signing_key_error;
+pub mod current_and_next_transcripts_validation_error;
+pub mod key_removal_error;
 pub mod load_transcript_error;
 pub mod verify_dealing_error;
 

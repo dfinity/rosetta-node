@@ -73,7 +73,7 @@ impl fmt::Debug for PrincipalId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum PrincipalIdBlobParseError {
     TooLong(usize),
 }
@@ -137,7 +137,7 @@ impl AsRef<[u8]> for PrincipalId {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum PrincipalIdParseError {
     TooLong,
     TooShort,

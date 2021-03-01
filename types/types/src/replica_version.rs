@@ -1,8 +1,5 @@
-//! ReplicaVersion can be converted to/from string representation, following
-//! a regular expression parsing rule.
-
+//! ReplicaVersion can be converted to/from string representation.
 use once_cell::sync::OnceCell;
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
 use std::error::Error;
@@ -68,15 +65,22 @@ impl AsRef<str> for ReplicaVersion {
     }
 }
 
-/// Regular expression parsing rule for ReplicaVersion.
-const REPLICA_VERSION_REGEX: &str = r"^[a-zA-Z0-9.\-_]+$";
+/// Checks if a valid replica version is allowed to contain specified char.
+fn is_valid_version_symbol(c: char) -> bool {
+    match c {
+        'a'..='z' => true,
+        'A'..='Z' => true,
+        '0'..='9' => true,
+        '.' | '_' | '-' => true,
+        _ => false,
+    }
+}
 
 impl TryFrom<&str> for ReplicaVersion {
     type Error = ReplicaVersionParseError;
 
     fn try_from(version_str: &str) -> Result<Self, Self::Error> {
-        let re = Regex::new(REPLICA_VERSION_REGEX).unwrap();
-        if !re.is_match(version_str) {
+        if !version_str.chars().all(is_valid_version_symbol) {
             Err(ReplicaVersionParseError(version_str.to_string()))
         } else {
             Ok(ReplicaVersion {
@@ -101,8 +105,8 @@ impl fmt::Display for ReplicaVersionParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "version must match {:?}, got {}",
-            REPLICA_VERSION_REGEX, self.0
+            "version must contain only alpha-numeric characters, dots(.), dashes(-) and underscores(_), got {}",
+            self.0
         )
     }
 }

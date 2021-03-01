@@ -4,11 +4,9 @@ use ic_rosetta_api::rosetta_server::RosettaApiServer;
 use ic_rosetta_api::{ledger_client, RosettaRequestHandler};
 use ic_types::{CanisterId, PrincipalId};
 
-use std::path::PathBuf;
-use std::str::FromStr;
-use std::sync::Arc;
+use std::{path::PathBuf, str::FromStr, sync::Arc};
 
-// shadow_rs::shadow!(build);
+shadow_rs::shadow!(build);
 
 #[derive(Debug, StructOpt)]
 struct Opt {
@@ -26,20 +24,24 @@ struct Opt {
     ic_url: String,
     #[structopt(long = "store-location", default_value = "./data")]
     store_location: PathBuf,
+    #[structopt(long = "store-max-blocks")]
+    store_max_blocks: Option<u64>,
     #[structopt(long = "exit-on-sync")]
     exit_on_sync: bool,
+    #[structopt(long = "offline")]
+    offline: bool,
 }
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    log4rs::init_file("log_config.yml", Default::default()).unwrap();
     let opt = Opt::from_args();
-    // println!(
-    //     "Starting {}, pkg_version: {}, commit_id: {}",
-    //     build::PROJECT_NAME,
-    //     build::PKG_VERSION,
-    //     build::COMMIT_HASH
-    // );
-    println!("Listening on {}:{}", opt.listen_address, opt.listen_port);
+    log::info!(
+        "Starting {}, pkg_version: {}",
+        build::PROJECT_NAME,
+        build::PKG_VERSION,
+    );
+    log::info!("Listening on {}:{}", opt.listen_address, opt.listen_port);
     let addr = format!("{}:{}", opt.listen_address, opt.listen_port);
 
     let canister_id =
@@ -47,9 +49,15 @@ async fn main() -> std::io::Result<()> {
 
     let url = reqwest::Url::parse(&opt.ic_url[..]).unwrap();
 
-    let client = ledger_client::LedgerClient::create_on_disk(url, canister_id, &opt.store_location)
-        .await
-        .expect("Failed to initialize ledger client");
+    let client = ledger_client::LedgerClient::create_on_disk(
+        url,
+        canister_id,
+        &opt.store_location,
+        opt.store_max_blocks,
+        opt.offline,
+    )
+    .await
+    .expect("Failed to initialize ledger client");
 
     let ledger = Arc::new(client);
     let req_handler = RosettaRequestHandler::new(ledger.clone());
@@ -59,8 +67,8 @@ async fn main() -> std::io::Result<()> {
 
     // actix server catches kill signals. After that we still need to stop our
     // server properly
-    serv.run(opt.exit_on_sync).await.unwrap();
+    serv.run(opt.exit_on_sync, opt.offline).await.unwrap();
     serv.stop().await;
-    println!("Th-th-th-that's all folks!");
+    log::info!("Th-th-th-that's all folks!");
     Ok(())
 }

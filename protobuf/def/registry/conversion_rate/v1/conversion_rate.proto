@@ -1,0 +1,8 @@
+syntax = "proto3";
+package registry.conversion_rate.v1;
+
+message SdrPerIcp {
+  // The SDR/ICP rate in the form of an integer with four decimal digits, i.e., the value corresponds to
+  // 10^4 times the value of 1 ICP in SDR.
+  uint64 sdr_per_icp = 1;
+}

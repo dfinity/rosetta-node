@@ -67,7 +67,6 @@ pub mod malicious_behaviour;
 pub mod malicious_flags;
 pub mod messages;
 pub mod methods;
-pub mod node_manager;
 pub mod p2p;
 pub mod registry;
 pub mod replica_config;

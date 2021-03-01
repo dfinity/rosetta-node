@@ -1,11 +1,14 @@
 use crate::{
-    consensus::ValidationResult,
     execution_environment::IngressHistoryError,
     ingress_pool::{ChangeSet, IngressPool, IngressPoolSelect},
+    state_manager::StateManagerError,
+    validation::{ValidationError, ValidationResult},
 };
 use ic_types::{
     artifact::IngressMessageId,
     batch::{IngressPayload, IngressPayloadError, ValidationContext},
+    crypto::CryptoError,
+    messages::MessageId,
     time::{Time, UNIX_EPOCH},
 };
 use std::collections::HashSet;
@@ -37,9 +40,50 @@ impl IngressSetQuery for HashSet<IngressMessageId> {
 
 /// All possible errors returned by the Ingress Selector.
 #[derive(Debug)]
-pub enum IngressSelectorError {
+pub enum IngressPermanentError {
+    CryptoError(CryptoError),
+    StateManagerError(StateManagerError),
+    IngressValidationError(MessageId, String),
+    IngressBucketError(MessageId),
     IngressHistoryError(IngressHistoryError),
     IngressPayloadError(IngressPayloadError),
+    IngressExpiryOutOfRange(MessageId, Time, std::ops::RangeInclusive<Time>),
+    IngressMessageTooBig(usize, usize),
+    IngressPayloadTooBig(usize, usize),
+    DuplicatedIngressMessage(MessageId),
+}
+
+#[derive(Debug)]
+pub enum IngressTransientError {
+    CryptoError(CryptoError),
+    StateManagerError(StateManagerError),
+}
+
+pub type IngressPayloadValidationError =
+    ValidationError<IngressPermanentError, IngressTransientError>;
+
+impl From<CryptoError> for IngressTransientError {
+    fn from(err: CryptoError) -> IngressTransientError {
+        IngressTransientError::CryptoError(err)
+    }
+}
+
+impl From<CryptoError> for IngressPermanentError {
+    fn from(err: CryptoError) -> IngressPermanentError {
+        IngressPermanentError::CryptoError(err)
+    }
+}
+
+impl<T> From<IngressPermanentError> for ValidationError<IngressPermanentError, T> {
+    fn from(err: IngressPermanentError) -> ValidationError<IngressPermanentError, T> {
+        ValidationError::Permanent(err)
+    }
+}
+
+impl<P> From<IngressTransientError> for ValidationError<P, IngressTransientError> {
+    fn from(err: IngressTransientError) -> ValidationError<P, IngressTransientError> {
+        ValidationError::Transient(err)
+    }
 }
 
 /// IngressManager component provides two interfaces.
@@ -113,7 +157,7 @@ pub trait IngressSelector: Send + Sync {
         payload: &IngressPayload,
         past_ingress: &dyn IngressSetQuery,
         context: &ValidationContext,
-    ) -> ValidationResult<IngressSelectorError>;
+    ) -> ValidationResult<IngressPayloadValidationError>;
 
     /// Request purge of the given ingress messages from the pool when
     /// they have already been included in finalized blocks.

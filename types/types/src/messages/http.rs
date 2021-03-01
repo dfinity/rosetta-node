@@ -4,9 +4,11 @@
 //! prepared to handle.
 
 use super::{Blob, HttpHandlerError};
+use crate::messages::{MessageId, UserSignature};
 use crate::{
     crypto::SignedBytesWithoutDomainSeparator, ingress::MAX_INGRESS_TTL,
-    messages::message_id::hash_of_map, CountBytes, Time, UserId,
+    messages::message_id::hash_of_map, messages::ReadState, messages::UserQuery, CountBytes, Time,
+    UserId,
 };
 use ic_base_types::{CanisterId, PrincipalId};
 use ic_crypto_tree_hash::{MixedHashTree, Path};
@@ -22,7 +24,7 @@ use std::{
 
 /// Check if ingress_expiry has not expired with respect to the given time,
 /// i.e., it is greater than or equal to current_time.
-fn validate_ingress_expiry(
+pub fn validate_ingress_expiry(
     ingress_expiry: u64,
     current_time: Time,
 ) -> Result<(), HttpHandlerError> {
@@ -80,6 +82,29 @@ pub struct HttpCanisterUpdate {
     pub nonce: Option<Blob>,
 }
 
+impl HttpCanisterUpdate {
+    /// Returns the representation-independent hash.
+    pub fn representation_independent_hash(&self) -> [u8; 32] {
+        hash_of_map(&self.representation_independent_map())
+    }
+
+    fn representation_independent_map(&self) -> BTreeMap<String, RawHttpRequestVal> {
+        use RawHttpRequestVal::*;
+        let mut map = btreemap! {
+            "request_type".to_string() => String("call".to_string()),
+            "canister_id".to_string() => Bytes(self.canister_id.0.clone()),
+            "method_name".to_string() => String(self.method_name.clone()),
+            "arg".to_string() => Bytes(self.arg.0.clone()),
+            "ingress_expiry".to_string() => U64(self.ingress_expiry),
+            "sender".to_string() => Bytes(self.sender.0.clone()),
+        };
+        if let Some(nonce) = &self.nonce {
+            map.insert("nonce".to_string(), Bytes(nonce.0.clone()));
+        }
+        map
+    }
+}
+
 impl CountBytes for HttpCanisterUpdate {
     fn count_bytes(&self) -> usize {
         let mut count = std::mem::size_of::<Self>()
@@ -104,6 +129,15 @@ pub enum HttpSubmitContent {
         #[serde(flatten)]
         update: HttpCanisterUpdate,
     },
+}
+
+impl HttpSubmitContent {
+    /// Returns the representation-independent hash.
+    pub fn representation_independent_hash(&self) -> [u8; 32] {
+        match self {
+            Self::Call { update } => update.representation_independent_hash(),
+        }
+    }
 }
 
 /// Describes the fields of a canister query call (a query from a user to a
@@ -147,6 +181,70 @@ pub enum HttpReadContent {
     },
 }
 
+impl HttpReadContent {
+    /// Returns the representation-independent hash.
+    pub fn representation_independent_hash(&self) -> [u8; 32] {
+        match self {
+            Self::Query { query } => query.representation_independent_hash(),
+            Self::ReadState { read_state } => read_state.representation_independent_hash(),
+        }
+    }
+}
+
+impl HttpUserQuery {
+    /// Returns the representation-independent hash.
+    pub fn representation_independent_hash(&self) -> [u8; 32] {
+        hash_of_map(&self.representation_independent_map())
+    }
+
+    fn representation_independent_map(&self) -> BTreeMap<String, RawHttpRequestVal> {
+        use RawHttpRequestVal::*;
+        let mut map = btreemap! {
+            "request_type".to_string() => String("query".to_string()),
+            "canister_id".to_string() => Bytes(self.canister_id.0.clone()),
+            "method_name".to_string() => String(self.method_name.clone()),
+            "arg".to_string() => Bytes(self.arg.0.clone()),
+            "ingress_expiry".to_string() => U64(self.ingress_expiry),
+            "sender".to_string() => Bytes(self.sender.0.clone()),
+        };
+        if let Some(nonce) = &self.nonce {
+            map.insert("nonce".to_string(), Bytes(nonce.0.clone()));
+        }
+        map
+    }
+}
+
+impl HttpReadState {
+    /// Returns the representation-independent hash.
+    pub fn representation_independent_hash(&self) -> [u8; 32] {
+        hash_of_map(&self.representation_independent_map())
+    }
+
+    fn representation_independent_map(&self) -> BTreeMap<String, RawHttpRequestVal> {
+        use RawHttpRequestVal::*;
+        let mut map = btreemap! {
+            "request_type".to_string() => String("read_state".to_string()),
+            "ingress_expiry".to_string() => U64(self.ingress_expiry),
+            "paths".to_string() => Array(self
+                    .paths
+                    .iter()
+                    .map(|p| {
+                        RawHttpRequestVal::Array(
+                            p.iter()
+                                .map(|b| RawHttpRequestVal::Bytes(b.clone().to_vec()))
+                                .collect(),
+                        )
+                    })
+                    .collect()),
+            "sender".to_string() => Bytes(self.sender.0.clone()),
+        };
+        if let Some(nonce) = &self.nonce {
+            map.insert("nonce".to_string(), Bytes(nonce.0.clone()));
+        }
+        map
+    }
+}
+
 /// Describes the request envelope as defined in
 /// https://docs.dfinity.systems/public#authentication.  The content should
 /// either be `HttpSubmitContent` or `HttpReadContent`.
@@ -157,6 +255,132 @@ pub struct HttpRequestEnvelope<C> {
     pub sender_pubkey: Option<Blob>,
     pub sender_sig: Option<Blob>,
     pub sender_delegation: Option<Vec<SignedDelegation>>,
+}
+
+/// A strongly-typed version of HttpRequestEnvelope.
+#[derive(Debug, PartialEq, Clone)]
+pub struct HttpRequest<C> {
+    id: MessageId,
+    content: C,
+    auth: Authentication,
+}
+
+/// The authentication associated with an HTTP request.
+#[derive(Debug, PartialEq, Clone)]
+pub enum Authentication {
+    Authenticated(UserSignature),
+    Anonymous,
+}
+
+/// Common attributes that all HTTP request contents should have.
+pub trait HttpRequestContent {
+    fn sender(&self) -> UserId;
+
+    fn ingress_expiry(&self) -> u64;
+
+    fn nonce(&self) -> Option<Vec<u8>>;
+}
+
+impl<C: HttpRequestContent> HttpRequest<C> {
+    pub fn sender(&self) -> UserId {
+        self.content.sender()
+    }
+
+    pub fn ingress_expiry(&self) -> u64 {
+        self.content.ingress_expiry()
+    }
+
+    pub fn nonce(&self) -> Option<Vec<u8>> {
+        self.content.nonce()
+    }
+}
+
+impl<C> HttpRequest<C> {
+    pub fn content(&self) -> &C {
+        &self.content
+    }
+
+    pub fn id(&self) -> MessageId {
+        self.id.clone()
+    }
+
+    pub fn authentication(&self) -> &Authentication {
+        &self.auth
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum ReadContent {
+    Query(UserQuery),
+    ReadState(ReadState),
+}
+
+impl HttpRequestContent for ReadContent {
+    fn sender(&self) -> UserId {
+        match self {
+            Self::ReadState(read_state) => read_state.source,
+            Self::Query(query) => query.source,
+        }
+    }
+
+    fn ingress_expiry(&self) -> u64 {
+        match self {
+            Self::ReadState(read_state) => read_state.ingress_expiry,
+            Self::Query(query) => query.ingress_expiry,
+        }
+    }
+
+    fn nonce(&self) -> Option<Vec<u8>> {
+        match self {
+            Self::ReadState(read_state) => read_state.nonce.clone(),
+            Self::Query(query) => query.nonce.clone(),
+        }
+    }
+}
+
+impl TryFrom<HttpRequestEnvelope<HttpReadContent>> for HttpRequest<ReadContent> {
+    type Error = HttpHandlerError;
+
+    fn try_from(envelope: HttpRequestEnvelope<HttpReadContent>) -> Result<Self, Self::Error> {
+        let auth = match (
+            envelope.sender_pubkey,
+            envelope.sender_sig,
+            envelope.sender_delegation,
+        ) {
+            (Some(pubkey), Some(signature), delegation) => {
+                Ok(Authentication::Authenticated(UserSignature {
+                    signature: signature.0,
+                    signer_pubkey: pubkey.0,
+                    sender_delegation: delegation,
+                }))
+            }
+            (None, None, None) => Ok(Authentication::Anonymous),
+            rest => Err(Self::Error::MissingPubkeyOrSignature(format!(
+                "Got {:?}",
+                rest
+            ))),
+        }?;
+
+        match envelope.content {
+            HttpReadContent::Query { query } => {
+                let id = MessageId::from(query.representation_independent_hash());
+                Ok(HttpRequest {
+                    content: ReadContent::Query(UserQuery::try_from(query)?),
+                    auth,
+                    id,
+                })
+            }
+
+            HttpReadContent::ReadState { read_state } => {
+                let id = MessageId::from(read_state.representation_independent_hash());
+                Ok(HttpRequest {
+                    content: ReadContent::ReadState(ReadState::try_from(read_state)?),
+                    auth,
+                    id,
+                })
+            }
+        }
+    }
 }
 
 /// Describes a delegation map as defined in
@@ -368,24 +592,12 @@ impl TryFrom<(HttpCanisterUpdate, Time)> for RawHttpRequest {
     type Error = HttpHandlerError;
 
     fn try_from(input: (HttpCanisterUpdate, Time)) -> Result<Self, Self::Error> {
-        use RawHttpRequestVal::*;
         let (update, current_time) = input;
         let canister_id_field = "canister_id".to_string();
         validate_principal_id(&canister_id_field, &update.canister_id.0)?;
         validate_ingress_expiry_range(update.ingress_expiry, current_time)?;
 
-        let mut map = btreemap! {
-            "request_type".to_string() => String("call".to_string()),
-            canister_id_field => Bytes(update.canister_id.0),
-            "method_name".to_string() => String(update.method_name),
-            "arg".to_string() => Bytes(update.arg.0),
-            "ingress_expiry".to_string() => U64(update.ingress_expiry),
-            "sender".to_string() => Bytes(update.sender.0),
-        };
-        if let Some(nonce) = update.nonce {
-            map.insert("nonce".to_string(), Bytes(nonce.0));
-        }
-        Ok(Self(map))
+        Ok(Self(update.representation_independent_map()))
     }
 }
 
@@ -395,24 +607,12 @@ impl TryFrom<(HttpUserQuery, Time)> for RawHttpRequest {
     type Error = HttpHandlerError;
 
     fn try_from(input: (HttpUserQuery, Time)) -> Result<Self, Self::Error> {
-        use RawHttpRequestVal::*;
         let (query, current_time) = input;
         let canister_id_field = "canister_id".to_string();
         validate_principal_id(&canister_id_field, &query.canister_id.0)?;
         validate_ingress_expiry(query.ingress_expiry, current_time)?;
 
-        let mut map = btreemap! {
-            "request_type".to_string() => String("query".to_string()),
-            "canister_id".to_string() => Bytes(query.canister_id.0),
-            "method_name".to_string() => String(query.method_name),
-            "arg".to_string() => Bytes(query.arg.0),
-            "ingress_expiry".to_string() => U64(query.ingress_expiry),
-            "sender".to_string() => Bytes(query.sender.0),
-        };
-        if let Some(nonce) = query.nonce {
-            map.insert("nonce".to_string(), Bytes(nonce.0));
-        }
-        Ok(Self(map))
+        Ok(Self(query.representation_independent_map()))
     }
 }
 
@@ -423,30 +623,9 @@ impl TryFrom<(HttpReadState, Time)> for RawHttpRequest {
     type Error = HttpHandlerError;
 
     fn try_from(input: (HttpReadState, Time)) -> Result<Self, Self::Error> {
-        use RawHttpRequestVal::*;
         let (read_state, current_time) = input;
         validate_ingress_expiry(read_state.ingress_expiry, current_time)?;
-
-        let mut map = btreemap! {
-            "request_type".to_string() => String("read_state".to_string()),
-            "ingress_expiry".to_string() => U64(read_state.ingress_expiry),
-            "paths".to_string() => Array(read_state
-                    .paths
-                    .iter()
-                    .map(|p| {
-                        RawHttpRequestVal::Array(
-                            p.iter()
-                                .map(|b| RawHttpRequestVal::Bytes(b.clone().to_vec()))
-                                .collect(),
-                        )
-                    })
-                    .collect()),
-            "sender".to_string() => Bytes(read_state.sender.0),
-        };
-        if let Some(nonce) = read_state.nonce {
-            map.insert("nonce".to_string(), Bytes(nonce.0));
-        }
-        Ok(Self(map))
+        Ok(Self(read_state.representation_independent_map()))
     }
 }
 

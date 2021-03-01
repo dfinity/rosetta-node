@@ -1,17 +1,35 @@
 mod errors;
 
 use crate::{messages::CanisterInputMessage, state_manager::StateManagerError};
+pub use errors::{CanisterHeartbeatError, MessageAcceptanceError};
 pub use errors::{HypervisorError, TrapCode};
 use ic_registry_provisional_whitelist::ProvisionalWhitelist;
 use ic_registry_routing_table::RoutingTable;
+use ic_registry_subnet_type::SubnetType;
 use ic_types::{
     ingress::{IngressStatus, WasmResult},
-    messages::{MessageId, UserQuery},
+    messages::{MessageId, SignedIngress, UserQuery},
     user_error::UserError,
     Height, NumInstructions, Time,
 };
 use rand::RngCore;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+
+/// Instance execution statistics. The stats are cumulative and
+/// contain measurements from the point in time when the instance was
+/// created up until the moment they are requested.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct InstanceStats {
+    /// Total number of (host) pages accessed (read or written) by the instance
+    /// and loaded into the linear memory.
+    pub accessed_pages: usize,
+
+    /// Total number of (host) pages modified by the instance.
+    /// By definition a page that has been dirtied has also been accessed,
+    /// hence this dirtied_pages <= accessed_pages
+    pub dirty_pages: usize,
+}
 
 // Note [Unit]
 // ~~~~~~~~~~
@@ -45,6 +63,7 @@ pub trait ExecutionEnvironment: Sync + Send {
     // mocking generic methods are that all generic parameters must be 'static,
     // and generic lifetime parameters are not allowed." Hence, the type of the
     // parameter is "&mut (dyn RngCore + 'static)".
+    #[allow(clippy::too_many_arguments)]
     fn execute_subnet_message(
         &self,
         msg: CanisterInputMessage,
@@ -52,6 +71,7 @@ pub trait ExecutionEnvironment: Sync + Send {
         instructions_limit: NumInstructions,
         rng: &mut (dyn RngCore + 'static),
         provisional_whitelist: &ProvisionalWhitelist,
+        subnet_type: SubnetType,
     ) -> Self::State;
 
     /// Executes a message sent to a canister.
@@ -62,7 +82,30 @@ pub trait ExecutionEnvironment: Sync + Send {
         msg: CanisterInputMessage,
         time: Time,
         routing_table: Arc<RoutingTable>,
+        subnet_type: SubnetType,
     ) -> ExecResult<ExecuteMessageResult<Self::CanisterState>>;
+
+    /// Asks the canister if it is willing to accept the provided ingress
+    /// message.
+    fn should_accept_ingress_message(
+        &self,
+        state: Arc<Self::State>,
+        signed_ingress: &SignedIngress,
+    ) -> Result<(), MessageAcceptanceError>;
+
+    /// Executes a heartbeat of a given canister.
+    fn execute_canister_heartbeat(
+        &self,
+        canister_state: Self::CanisterState,
+        instructions_limit: NumInstructions,
+        routing_table: Arc<RoutingTable>,
+        subnet_type: SubnetType,
+        time: Time,
+    ) -> ExecResult<(
+        Self::CanisterState,
+        NumInstructions,
+        Result<(), CanisterHeartbeatError>,
+    )>;
 }
 
 /// The data structure returned by
@@ -359,6 +402,25 @@ pub trait SystemApi {
         heap: &mut [u8],
     ) -> HypervisorResult<()>;
 
+    /// Used to look up the size of the method_name that the message wants to
+    /// call. Can only be called in the context of inspecting messages.
+    fn ic0_msg_method_name_size(&self) -> HypervisorResult<u32>;
+
+    /// Used to copy the method_name that the message wants to call to heap. Can
+    /// only be called in the context of inspecting messages.
+    fn ic0_msg_method_name_copy(
+        &self,
+        dst: u32,
+        offset: u32,
+        size: u32,
+        heap: &mut [u8],
+    ) -> HypervisorResult<()>;
+
+    // If the canister calls this method, then the message will be accepted
+    // otherwise rejected. Can only be called in the context of accepting
+    // messages.
+    fn ic0_accept_message(&mut self) -> HypervisorResult<()>;
+
     /// Copies the data referred to by src/size out of the canister and appends
     /// it to the (initially empty) data reply.
     fn ic0_msg_reply_data_append(
@@ -642,9 +704,11 @@ pub trait SystemApi {
     /// It moves no more cycles than available according to
     /// `ic0.msg_cycles_available`, and
     ///
-    /// The canister balance afterwards does not exceeed
+    /// The canister balance afterwards does not exceed
     /// `CYCLES_LIMIT_PER_CANISTER` (public spec refers to this constant
     /// as MAX_CANISTER_BALANCE) minus any possible outstanding balances.
+    /// However, this does not apply to NNS canisters. Their balance can
+    /// exceed `CYCLES_LIMIT_PER_CANISTER`.
     ///
     /// EXE-117: the last point is not properly handled yet.  In particular, a
     /// refund can come back to the canister after this call finishes which
@@ -680,4 +744,17 @@ pub trait SystemApi {
     /// Returns the current status of the canister.  `1` indicates
     /// running, `2` indicates stopping, and `3` indicates stopped.
     fn ic0_canister_status(&self) -> HypervisorResult<u32>;
+
+    /// Mints the `amount` cycles
+    /// Adds cycles to the canister's balance.
+    ///
+    /// Adds no more cycles than `amount`.
+    ///
+    /// The canister balance afterwards does not exceed
+    /// `CYCLES_LIMIT_PER_CANISTER`.
+    /// However, this does not apply to NNS canisters. Their balance can
+    /// exceed `CYCLES_LIMIT_PER_CANISTER`.
+    ///
+    /// Returns the amount of cycles added to the canister's balance.
+    fn ic0_mint_cycles(&mut self, amount: u64) -> HypervisorResult<u64>;
 }

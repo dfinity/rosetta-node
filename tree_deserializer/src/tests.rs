@@ -2,7 +2,7 @@
 #![allow(clippy::unit_arg)]
 
 use crate::{tree_deserializer::*, types::Leb128EncodedU64};
-use ic_crypto_tree_hash::{Label, LabeledTree};
+use ic_crypto_tree_hash::{FlatMap, Label, LabeledTree};
 use maplit::btreemap;
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
@@ -32,12 +32,12 @@ fn leaf<T: AsRef<[u8]>>(x: T) -> LabeledTree<Vec<u8>> {
 }
 
 fn fork<L: AsRef<[u8]>>(children: Vec<(L, LabeledTree<Vec<u8>>)>) -> LabeledTree<Vec<u8>> {
-    LabeledTree::SubTree(
+    LabeledTree::SubTree(FlatMap::from_key_values(
         children
             .into_iter()
             .map(|(k, v)| (Label::from(k.as_ref()), v))
             .collect(),
-    )
+    ))
 }
 
 fn encode_as_tree(s: &S) -> LabeledTree<Vec<u8>> {
@@ -47,12 +47,12 @@ fn encode_as_tree(s: &S) -> LabeledTree<Vec<u8>> {
         ("string", leaf(s.string.as_bytes())),
         (
             "map",
-            LabeledTree::SubTree(
+            LabeledTree::SubTree(FlatMap::from_key_values(
                 s.map
                     .iter()
                     .map(|(k, v)| (Label::from(k.0.as_bytes()), leaf(v.0.to_be_bytes())))
                     .collect(),
-            ),
+            )),
         ),
     ])
 }

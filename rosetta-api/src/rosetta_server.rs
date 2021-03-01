@@ -7,6 +7,7 @@ use crate::{ledger_client::LedgerAccess, RosettaRequestHandler};
 use futures::channel::oneshot;
 
 use actix_web::dev::Server;
+use log::{debug, error, info};
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Relaxed, SeqCst};
 use std::sync::{Arc, Mutex};
@@ -223,8 +224,13 @@ impl RosettaApiServer {
         })
     }
 
-    pub async fn run(&self, exit_on_sync: bool) -> std::io::Result<()> {
-        println!("Starting Rosetta API server");
+    pub async fn run(&self, exit_on_sync: bool, offline: bool) -> std::io::Result<()> {
+        info!("Starting Rosetta API server");
+        if offline {
+            info!("Running in offline mode");
+            return self.server.clone().await;
+        }
+
         let ledger = self.ledger.clone();
         let stopped = self.stopped.clone();
         let (tx, rx) = oneshot::channel::<()>();
@@ -236,36 +242,33 @@ impl RosettaApiServer {
             while !stopped.load(Relaxed) {
                 interval.tick().await;
 
-                if let Err(err) = ledger.sync_blocks().await {
-                    eprintln!("Error in syncing blocks: {:?}", err);
+                if let Err(err) = ledger.sync_blocks(stopped.clone()).await {
+                    error!("Error in syncing blocks: {:?}", err);
                 }
 
                 if exit_on_sync {
-                    println!("Blockchain synced, exiting");
+                    info!("Blockchain synced, exiting");
                     server.stop(true).await;
-                    println!("Stopping blockchain sync thread");
+                    info!("Stopping blockchain sync thread");
                     break;
                 }
             }
             tx.send(())
                 .expect("Blockchain sync thread: failed to send finish notification");
-            println!("Blockchain sync thread finished");
+            info!("Blockchain sync thread finished");
         });
         self.server.clone().await
     }
 
     pub async fn stop(&self) {
-        println!("Stopping server");
+        info!("Stopping server");
         self.stopped.store(true, SeqCst);
         self.server.stop(true).await;
         // wait for the sync_thread to finish
-        self.sync_thread_join_handle
-            .lock()
-            .unwrap()
-            .take()
-            .unwrap()
-            .await
-            .expect("Error on waiting for blockchain thread to finish");
-        println!("Joined with blockchain sync thread");
+        if let Some(rx) = self.sync_thread_join_handle.lock().unwrap().take() {
+            rx.await
+                .expect("Error on waiting for sync thread to finish");
+        }
+        debug!("Joined with blockchain sync thread");
     }
 }

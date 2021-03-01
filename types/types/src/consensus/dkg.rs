@@ -6,6 +6,7 @@ use crate::{
     ReplicaVersion,
 };
 use ic_protobuf::types::v1 as pb;
+use serde_with::serde_as;
 use std::collections::BTreeMap;
 
 /// Contains a Node's contribution to a DKG dealing.
@@ -54,21 +55,26 @@ impl HasVersion for DealingContent {
 
 /// The DKG summary will be present as the DKG payload at every block,
 /// corresponding to the start of a new DKG interval.
+#[serde_as]
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Summary {
     /// The registry version used to create this summary.
     pub registry_version: RegistryVersion,
     /// The crypto configs of the currently computed DKGs, indexed by DKG Ids.
+    #[serde_as(as = "Vec<(_, _)>")]
     pub configs: BTreeMap<NiDkgId, NiDkgConfig>,
     /// Current transcripts indexed by their tags. The values are guaranteed
     /// to be present, if a DKG is being computed for a given tag.
+    #[serde_as(as = "Vec<(_, _)>")]
     current_transcripts: BTreeMap<NiDkgTag, NiDkgTranscript>,
     /// Transcripts for the next DKG interval. The values are not guaranteed to
     /// be present for any given tag (e.g., when the DKG computation
     /// failed); in this case we fall back the current transcript
     /// corresponding to this tag.
+    #[serde_as(as = "Vec<(_, _)>")]
     next_transcripts: BTreeMap<NiDkgTag, NiDkgTranscript>,
     /// Transcripts that are computed for new subnets being created.
+    #[serde_as(as = "Vec<(_, _)>")]
     transcripts_for_new_subnets: BTreeMap<NiDkgId, Result<NiDkgTranscript, String>>,
     /// The length of the current interval in rounds (following the start
     /// block).
@@ -77,11 +83,6 @@ pub struct Summary {
     pub next_interval_length: Height,
     /// The height of the block conatining that summary.
     pub height: Height,
-}
-
-pub struct DkgTranscripts {
-    pub current: Vec<NiDkgTranscript>,
-    pub next: Vec<NiDkgTranscript>,
 }
 
 impl Summary {
@@ -130,10 +131,20 @@ impl Summary {
             .unwrap_or_else(|| panic!("No current transcript available for tag {:?}", tag))
     }
 
+    /// Returns a reference to the current transcripts.
+    pub fn current_transcripts(&self) -> &BTreeMap<NiDkgTag, NiDkgTranscript> {
+        &self.current_transcripts
+    }
+
     /// Returns a reference to the next transcript for the given tag if
     /// available.
     pub fn next_transcript(&self, tag: &NiDkgTag) -> Option<&NiDkgTranscript> {
         self.next_transcripts.get(tag)
+    }
+
+    /// Returns a reference to the next transcripts.
+    pub fn next_transcripts(&self) -> &BTreeMap<NiDkgTag, NiDkgTranscript> {
+        &self.next_transcripts
     }
 
     /// Return the set of next transcripts for all tags. If for some tag
@@ -145,18 +156,6 @@ impl Summary {
             .into_iter()
             .map(|(tag, current)| (tag, next_transcripts.remove(&tag).unwrap_or(current)))
             .collect()
-    }
-
-    /// Return the set of all transcripts for all tags.
-    pub fn into_transcripts(self) -> DkgTranscripts {
-        DkgTranscripts {
-            current: self
-                .current_transcripts
-                .into_iter()
-                .map(|(_, v)| v)
-                .collect(),
-            next: self.next_transcripts.into_iter().map(|(_, v)| v).collect(),
-        }
     }
 
     /// Returns `true` if the provided height is included in the DKG interval
@@ -362,55 +361,6 @@ impl Dealings {
         Self {
             start_height,
             messages,
-        }
-    }
-}
-
-impl Payload {
-    /// Indicates if the given DKG payload is a summary block.
-    pub fn is_summary(&self) -> bool {
-        match self {
-            Payload::Summary(_) => true,
-            _ => false,
-        }
-    }
-
-    /// Returns a reference to DKG summary. Panics if called on a dealings
-    /// payload.
-    pub fn summary(&self) -> &Summary {
-        match self {
-            Payload::Summary(summary) => summary,
-            _ => panic!("No DKG summary available on a block with dealings."),
-        }
-    }
-
-    /// Returns the DKG summary. Panics if called on a dealings payload.
-    pub fn into_summary(self) -> Summary {
-        match self {
-            Payload::Summary(summary) => summary,
-            _ => panic!("No DKG summary available on a block with dealings."),
-        }
-    }
-
-    /// Returns DKG dealings. Panics if called on a dealings payload.
-    pub fn into_dealings(self) -> Dealings {
-        match self {
-            Payload::Dealings(dealings) => dealings,
-            _ => panic!("No DKG summary available on a block with dealings."),
-        }
-    }
-
-    pub fn payload_type(&self) -> &'static str {
-        match self {
-            Payload::Summary(_) => "summary",
-            Payload::Dealings(_) => "dealings",
-        }
-    }
-
-    pub fn start_height(&self) -> Height {
-        match self {
-            Payload::Summary(summary) => summary.height,
-            Payload::Dealings(dealings) => dealings.start_height,
         }
     }
 }

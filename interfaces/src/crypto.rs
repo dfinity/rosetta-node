@@ -33,8 +33,8 @@ pub use sign::{Signable, SignableMock};
 use ic_types::consensus::certification::CertificationContent;
 use ic_types::consensus::dkg as consensus_dkg;
 use ic_types::consensus::{
-    Block, CatchUpContent, FinalizationContent, NotarizationContent, RandomBeaconContent,
-    RandomTapeContent,
+    Block, CatchUpContent, CatchUpContentProtobufBytes, FinalizationContent, NotarizationContent,
+    RandomBeaconContent, RandomTapeContent,
 };
 use ic_types::messages::{MessageId, WebAuthnEnvelope};
 
@@ -69,6 +69,7 @@ pub trait Crypto:
     + ThresholdSigner<CatchUpContent>
     + ThresholdSigVerifier<CatchUpContent>
     + ThresholdSigVerifierByPublicKey<CatchUpContent>
+    + ThresholdSigVerifierByPublicKey<CatchUpContentProtobufBytes>
     // RandomBeacon
     + ThresholdSigner<RandomBeaconContent>
     + ThresholdSigVerifier<RandomBeaconContent>
@@ -114,28 +115,10 @@ impl<T> Crypto for T where
         + ThresholdSigner<CatchUpContent>
         + ThresholdSigVerifier<CatchUpContent>
         + ThresholdSigVerifierByPublicKey<CatchUpContent>
+        + ThresholdSigVerifierByPublicKey<CatchUpContentProtobufBytes>
         + ThresholdSigner<RandomBeaconContent>
         + ThresholdSigVerifier<RandomBeaconContent>
         + ThresholdSigner<RandomTapeContent>
         + ThresholdSigVerifier<RandomTapeContent>
-{
-}
-
-/// A limited functionality offered by the crypto component especially
-/// for node manager, as an intermediate solution before crypto runs in
-/// a separate process.
-pub trait CryptoForNodeManager:
-    KeyManager
-    // CatchUpPackage
-    + ThresholdSigVerifierByPublicKey<CatchUpContent>
-
-    // TODO(CRP-606): add API for authenticating registry queries.
-{
-}
-
-// Blanket implementation of CryptoForNodeManager for all types that
-// fulfill requirements
-impl<T> CryptoForNodeManager for T where
-    T: KeyManager + ThresholdSigVerifierByPublicKey<CatchUpContent>
 {
 }

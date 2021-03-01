@@ -1,15 +1,13 @@
 use crate::{
     consensus_pool::{ChangeSet, ConsensusPool},
-    crypto::ErrorReplication,
-    ingress_manager::IngressSelectorError,
+    ingress_manager::{
+        IngressPayloadValidationError, IngressPermanentError, IngressTransientError,
+    },
     ingress_pool::IngressPoolSelect,
+    messaging::{InvalidXNetPayload, XNetPayloadValidationError, XNetTransientValidationError},
+    validation::ValidationError,
 };
-use ic_types::{
-    artifact::{ConsensusArtifact, ConsensusMessageFilter, PriorityFn},
-    crypto::{CryptoError, CryptoResult},
-    registry::RegistryClientError,
-    Height, NodeId,
-};
+use ic_types::artifact::{ConsensusArtifact, ConsensusMessageFilter, PriorityFn};
 
 /// Consensus artifact processing interface.
 pub trait Consensus: Send {
@@ -46,101 +44,35 @@ pub trait ConsensusGossip: Send + Sync {
     fn get_filter(&self) -> ConsensusMessageFilter;
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum MembershipError {
-    RandomBeaconNotFound,
-    NodeNotFound(NodeId),
-    RegistryClientError(RegistryClientError),
-    UnableToRetrieveDkgSummary(Height),
+#[derive(Debug)]
+pub enum PayloadPermanentError {
+    XNetPayloadValidationError(InvalidXNetPayload),
+    IngressPayloadValidationError(IngressPermanentError),
 }
 
 #[derive(Debug)]
-pub enum PayloadValidationError {
-    Permanent(String),
-    Temporary(String),
-    IngressSelectorError(IngressSelectorError),
+pub enum PayloadTransientError {
+    XNetPayloadValidationError(XNetTransientValidationError),
+    IngressPayloadValidationError(IngressTransientError),
 }
 
-/// Contains all possible errors, which can occur during a validation of a Dkg
-/// message.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum DkgMessageValidatorError {
-    /// Crypto related errors.
-    CryptoError(CryptoError),
-    /// This error will be returned, if we validate a message for some phase,
-    /// while the previous phase was not finaized yet. For example, if we
-    /// validate a response while the dealing phase is still not finalized,
-    /// we reject the response with this error.
-    PriorPhaseIncomplete,
-}
+/// Payload validation error
+pub type PayloadValidationError = ValidationError<PayloadPermanentError, PayloadTransientError>;
 
-/// Possible validator errors. All of them must be transient.
-#[derive(Debug)]
-pub enum ValidatorError {
-    CryptoError(CryptoError),
-    RegistryClientError(RegistryClientError),
-    MembershipError(MembershipError),
-    PayloadValidationError(PayloadValidationError),
-    DkgMessageValidatorError(DkgMessageValidatorError),
-    DkgSummaryNotFound(Height),
-    DkgPayloadValidationError(String),
-    OtherTransientError(String),
-}
-
-/// Note that Valid and Invalid variants are deterministic and final validation
-/// results, while if an error was returned, this _might_ indicate a retryable
-/// error and needs to be inspected by the receiver if more details are
-/// required.
-#[derive(Debug)]
-pub enum ValidationResult<T> {
-    /// The validation was successful.
-    Valid,
-    /// The validation was not successful.
-    Invalid(String),
-    /// An error happened during the validation.
-    Error(T),
-}
-
-impl<T> ValidationResult<T> {
-    /// Maps a `ValidationResult<T>` to `ValidationResult<U>` by appplying the
-    /// given function to a contained `Error` value, leaving `Valid` and
-    /// `Invalid` untouched.
-    pub fn map_err<U, F>(self, f: F) -> ValidationResult<U>
-    where
-        F: FnOnce(T) -> U,
-    {
-        match self {
-            ValidationResult::Valid => ValidationResult::Valid,
-            ValidationResult::Invalid(s) => ValidationResult::Invalid(s),
-            ValidationResult::Error(err) => ValidationResult::Error(f(err)),
-        }
-    }
-
-    /// Return true if it is valid.
-    pub fn is_valid(&self) -> bool {
-        match self {
-            ValidationResult::Valid => true,
-            _ => false,
-        }
+impl From<IngressPayloadValidationError> for PayloadValidationError {
+    fn from(err: IngressPayloadValidationError) -> Self {
+        err.map(
+            PayloadPermanentError::IngressPayloadValidationError,
+            PayloadTransientError::IngressPayloadValidationError,
+        )
     }
 }
 
-impl<T> From<CryptoResult<T>> for ValidationResult<CryptoError> {
-    fn from(result: CryptoResult<T>) -> ValidationResult<CryptoError> {
-        match result {
-            // We consider the validation as successful.
-            Ok(_) => ValidationResult::Valid,
-            // If an error was returned, which is not a transient one, we consider the validation
-            // as failed. There is no reason to retry such a validation.
-            Err(err) if err.is_replicated() => ValidationResult::Invalid(std::format!("{:?}", err)),
-            // A transient re-triable error.
-            Err(err) => ValidationResult::Error(err),
-        }
-    }
-}
-
-impl From<ValidationResult<CryptoError>> for ValidationResult<ValidatorError> {
-    fn from(result: ValidationResult<CryptoError>) -> ValidationResult<ValidatorError> {
-        result.map_err(ValidatorError::CryptoError)
+impl From<XNetPayloadValidationError> for PayloadValidationError {
+    fn from(err: XNetPayloadValidationError) -> Self {
+        err.map(
+            PayloadPermanentError::XNetPayloadValidationError,
+            PayloadTransientError::XNetPayloadValidationError,
+        )
     }
 }

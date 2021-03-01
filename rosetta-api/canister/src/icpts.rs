@@ -16,10 +16,12 @@ pub const DECIMAL_PLACES: u32 = 8;
 /// How many times can ICPs be divided
 pub const ICP_SUBDIVIDABLE_BY: u64 = 100_000_000;
 
+pub const TRANSACTION_FEE: ICPTs = ICPTs { doms: 137 };
+
 impl ICPTs {
     /// The maximum value of this construct is 2^64-1 Doms or Roughly 184
     /// Billion ICPTs
-    pub const MAX: ICPTs = ICPTs { doms: u64::MAX };
+    pub const MAX: Self = ICPTs { doms: u64::MAX };
 
     /// Construct a new instance of ICPTs.
     /// This function will not allow you use more than 1 ICPTs worth of Doms.
@@ -42,9 +44,7 @@ impl ICPTs {
         Ok(Self { doms })
     }
 
-    pub fn zero() -> Self {
-        ICPTs::new(0, 0).unwrap()
-    }
+    pub const ZERO: Self = ICPTs { doms: 0 };
 
     /// ```
     /// # use ledger_canister::ICPTs;
@@ -114,10 +114,12 @@ impl Add for ICPTs {
     /// because of the cap in the total number of ICP, but when dealing with
     /// money it's better to be safe than sorry
     fn add(self, other: Self) -> Self::Output {
-        let doms = self
-            .doms
-            .checked_add(other.doms)
-            .ok_or_else(|| "Add ICP failed because the underlying u64 overflowed".to_string())?;
+        let doms = self.doms.checked_add(other.doms).ok_or_else(|| {
+            format!(
+                "Add ICP {} + {} failed because the underlying u64 overflowed",
+                self.doms, other.doms
+            )
+        })?;
         Ok(Self { doms })
     }
 }
@@ -133,7 +135,10 @@ impl Sub for ICPTs {
 
     fn sub(self, other: Self) -> Self::Output {
         let doms = self.doms.checked_sub(other.doms).ok_or_else(|| {
-            "Subtracting ICP failed because the underlying u64 underflowed".to_string()
+            format!(
+                "Subtracting ICP {} - {} failed because the underlying u64 underflowed",
+                self.doms, other.doms
+            )
         })?;
         Ok(Self { doms })
     }

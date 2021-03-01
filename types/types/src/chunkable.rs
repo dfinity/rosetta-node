@@ -23,42 +23,36 @@ use crate::{
     crypto::CryptoHash,
     messages::SignedIngress,
 };
+use bincode::{deserialize, serialize};
+use ic_protobuf::p2p::v1 as pb;
+use ic_protobuf::proxy::ProxyDecodeError;
 use phantom_newtype::Id;
-use serde::{Deserialize, Serialize};
+use std::convert::TryFrom;
 
 /// Error Codes Returned By Chunkabe interface
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ArtifactErrorCode {
     ChunksMoreNeeded,
     ChunkVerificationFailed,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct ChunkData {
-    #[serde(with = "serde_bytes")]
-    pub payload: Vec<u8>,
 }
 
 /// The chunk type
 pub type ChunkId = Id<ArtifactChunk, u32>;
 const CHUNKID_UNIT_CHUNK: u32 = 0;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[allow(clippy::large_enum_variant)]
 pub enum ArtifactChunkData {
     UnitChunkData(Artifact), // Unit chunk data has 1:1 mapping with real artifacts
-    SemiStructuredChunkData(ChunkData), // Lets not convert this to enum unless needed
+    SemiStructuredChunkData(Vec<u8>), // Let's not convert this to an enum unless needed
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ArtifactChunk {
     // Chunk number/id for this chunk
     pub chunk_id: ChunkId,
-    // sibling hashes to be used for Merkle proof verification of this
-    // chunk
+    // Sibling hashes to be used for Merkle proof verification of this chunk
     pub witness: Vec<CryptoHash>,
-    // Size of the chunk
-    pub size: usize,
     // Payload for the chunk
     pub artifact_chunk_data: ArtifactChunkData,
 }
@@ -104,7 +98,6 @@ impl ChunkableArtifact for ConsensusMessage {
             Some(ArtifactChunk {
                 chunk_id,
                 witness: Vec::with_capacity(0),
-                size: std::mem::size_of::<ConsensusMessage>(),
                 artifact_chunk_data: ArtifactChunkData::UnitChunkData(Artifact::ConsensusMessage(
                     *self,
                 )),
@@ -122,7 +115,6 @@ impl ChunkableArtifact for SignedIngress {
             Some(ArtifactChunk {
                 chunk_id,
                 witness: Vec::with_capacity(0),
-                size: std::mem::size_of::<SignedIngress>(),
                 artifact_chunk_data: ArtifactChunkData::UnitChunkData(Artifact::IngressMessage(
                     *self,
                 )),
@@ -140,7 +132,6 @@ impl ChunkableArtifact for CertificationMessage {
             Some(ArtifactChunk {
                 chunk_id,
                 witness: Vec::with_capacity(0),
-                size: std::mem::size_of::<CertificationMessage>(),
                 artifact_chunk_data: ArtifactChunkData::UnitChunkData(
                     Artifact::CertificationMessage(*self),
                 ),
@@ -158,7 +149,6 @@ impl ChunkableArtifact for DkgMessage {
             Some(ArtifactChunk {
                 chunk_id,
                 witness: Vec::with_capacity(0),
-                size: std::mem::size_of::<DkgMessage>(),
                 artifact_chunk_data: ArtifactChunkData::UnitChunkData(Artifact::DkgMessage(*self)),
             })
         }
@@ -171,10 +161,7 @@ impl ChunkableArtifact for StateSyncMessage {
             ArtifactChunk {
                 chunk_id,
                 witness: vec![],
-                size: payload.len(),
-                artifact_chunk_data: ArtifactChunkData::SemiStructuredChunkData(ChunkData {
-                    payload,
-                }),
+                artifact_chunk_data: ArtifactChunkData::SemiStructuredChunkData(payload),
             }
         }
 
@@ -228,16 +215,9 @@ impl Chunkable for SingleChunked {
     }
 
     fn add_chunk(&mut self, artifact_chunk: ArtifactChunk) -> Result<Artifact, ArtifactErrorCode> {
-        if artifact_chunk.chunk_id != ChunkId::from(CHUNKID_UNIT_CHUNK) {
-            return Err(ArtifactErrorCode::ChunkVerificationFailed);
-        }
-
         match artifact_chunk.artifact_chunk_data {
             ArtifactChunkData::UnitChunkData(artifact) => Ok(artifact),
-            _ => {
-                // DOCUMENTATION: unreachable!();
-                panic!("Type Error: Trait bound Single chunked not satisfied for for artifact");
-            }
+            _ => Err(ArtifactErrorCode::ChunkVerificationFailed),
         }
     }
 
@@ -247,6 +227,62 @@ impl Chunkable for SingleChunked {
 
     fn get_chunk_size(&self, _chunk_id: ChunkId) -> usize {
         unimplemented!("")
+    }
+}
+
+impl From<ArtifactChunk> for pb::ArtifactChunk {
+    fn from(chunk: ArtifactChunk) -> Self {
+        let data: pb::artifact_chunk::Data = match chunk.artifact_chunk_data {
+            ArtifactChunkData::UnitChunkData(artifact) => {
+                pb::artifact_chunk::Data::Artifact(serialize(&artifact).unwrap())
+            }
+            ArtifactChunkData::SemiStructuredChunkData(chunk_data) => {
+                pb::artifact_chunk::Data::Chunk(chunk_data)
+            }
+        };
+        Self {
+            witnesses: chunk
+                .witness
+                .iter()
+                .map(|w| serialize(&w).unwrap())
+                .collect(),
+            data: Some(data),
+        }
+    }
+}
+
+impl TryFrom<pb::ArtifactChunk> for ArtifactChunk {
+    type Error = ProxyDecodeError;
+
+    fn try_from(chunk: pb::ArtifactChunk) -> Result<Self, Self::Error> {
+        let witness = chunk.witnesses.iter().map(|w| deserialize(&w)).collect();
+        let witness = match witness {
+            Ok(witness) => witness,
+            Err(_) => {
+                return Err(ProxyDecodeError::Other(
+                    "unable to deserialize CryptoHash".to_string(),
+                ))
+            }
+        };
+        let artifact_chunk_data = match chunk.data {
+            None => {
+                return Err(ProxyDecodeError::Other(
+                    "unable to deserialize ArtifactChunk.data".to_string(),
+                ))
+            }
+            Some(d) => match d {
+                pb::artifact_chunk::Data::Artifact(a) => {
+                    ArtifactChunkData::UnitChunkData(deserialize(&a)?)
+                }
+                pb::artifact_chunk::Data::Chunk(d) => ArtifactChunkData::SemiStructuredChunkData(d),
+            },
+        };
+        Ok(Self {
+            // On the wire chunk_id is passed in GossipChunk.
+            chunk_id: ChunkId::from(CHUNKID_UNIT_CHUNK),
+            witness,
+            artifact_chunk_data,
+        })
     }
 }
 

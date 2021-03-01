@@ -1,4 +1,8 @@
-use ic_types::{methods::WasmMethod, user_error::UserError, CanisterId, Cycles};
+use ic_base_types::{CanisterIdError, PrincipalIdBlobParseError};
+use ic_registry_subnet_type::SubnetType;
+use ic_types::{
+    methods::WasmMethod, user_error::UserError, CanisterId, CanisterStatusType, Cycles,
+};
 use ic_wasm_types::{WasmInstrumentationError, WasmValidationError};
 use serde::{Deserialize, Serialize};
 
@@ -25,6 +29,45 @@ impl std::fmt::Display for TrapCode {
             Self::Other => write!(f, "unknown"),
         }
     }
+}
+
+/// Errors when executing `canister_heartbeat`.
+#[derive(Debug, Eq, PartialEq)]
+pub enum CanisterHeartbeatError {
+    /// The canister isn't running.
+    CanisterNotRunning {
+        status: CanisterStatusType,
+    },
+
+    /// The subnet type isn't a system subnet.
+    NotSystemSubnet {
+        subnet_type_given: SubnetType,
+    },
+
+    OutOfCycles,
+
+    /// Execution failed while executing the `canister_heartbeat`.
+    CanisterExecutionFailed(HypervisorError),
+}
+
+/// Different types of errors that can be returned from the function(s) that
+/// check if messages should be accepted or not.
+pub enum MessageAcceptanceError {
+    /// The canister that the message is destined for was not found. So no
+    /// checks could be performed.
+    CanisterNotFound,
+
+    /// The canister that the message is destined for does not have a wasm
+    /// module. So it will not be able to handle the message even if the message
+    /// was accepted.
+    CanisterHasNoWasmModule,
+
+    /// The canister explicitly rejected the message.
+    CanisterRejected,
+
+    /// The canister experienced a failure while executing the `inspect_message`
+    /// method
+    CanisterExecutionFailed(HypervisorError),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -76,7 +119,11 @@ pub enum HypervisorError {
     /// context.
     InsufficientICP { available: u64, requested: u64 },
     /// The principal ID specified by the canister is invalid.
-    InvalidPrincipalId(Vec<u8>),
+    InvalidPrincipalId(PrincipalIdBlobParseError),
+    /// The canister ID specified by the canister is invalid.
+    InvalidCanisterId(CanisterIdError),
+    /// The canister rejected the message.
+    MessageRejected,
 }
 
 impl From<WasmInstrumentationError> for HypervisorError {
@@ -102,6 +149,10 @@ impl HypervisorError {
         use ic_types::user_error::ErrorCode as E;
 
         match self {
+            Self::MessageRejected => UserError::new(
+                E::CanisterRejectedMessage,
+                format!("Canister {} rejected the message", canister_id),
+            ),
             Self::FunctionNotFound(table_idx, func_idx) => UserError::new(
                 E::CanisterFunctionNotFound,
                 format!(
@@ -203,7 +254,11 @@ impl HypervisorError {
             ),
             Self::InvalidPrincipalId(_) => UserError::new(
                 E::CanisterTrapped,
-                format!("Canister {} provided invalid principal id", canister_id,),
+                format!("Canister {} provided invalid principal id", canister_id),
+            ),
+            Self::InvalidCanisterId(_) => UserError::new(
+                E::CanisterTrapped,
+                format!("Canister {} provided invalid canister id", canister_id),
             ),
         }
     }

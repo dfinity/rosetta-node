@@ -35,4 +35,7 @@ pub struct LogEntry {
     #[prost(message, optional, tag="23")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub crypto: ::std::option::Option<super::super::crypto_log_entry::v1::CryptoLogEntry>,
+    #[prost(message, optional, tag="25")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub malicious_behaviour: ::std::option::Option<super::super::malicious_behaviour_log_entry::v1::MaliciousBehaviourLogEntry>,
 }

@@ -21,10 +21,26 @@ pub struct MaliciousFlagsStruct {
     pub maliciously_gossip_send_many_artifacts: bool,
     pub maliciously_gossip_send_invalid_artifacts: bool,
     pub maliciously_gossip_send_late_artifacts: bool,
-    pub maliciously_equivocation_blockmaker: bool,
-    pub maliciously_notary: bool,
-    pub maliciously_dkg: bool,
-    pub maliciously_certification: bool,
+    pub maliciously_propose_equivocating_blocks: bool,
+    pub maliciously_propose_empty_blocks: bool,
+    pub maliciously_finalize_all: bool,
+    pub maliciously_notarize_all: bool,
+    pub maliciously_tweak_dkg: bool,
+    pub maliciously_certify_invalid_hash: bool,
     pub maliciously_malfunctioning_xnet_endpoint: bool,
     pub maliciously_disable_execution: bool,
+    /// If this flag is set, the result of validate_message() is ignored in the
+    /// http handler.
+    pub maliciously_disable_http_handler_ingress_validation: bool,
+}
+
+impl MaliciousFlagsStruct {
+    /// This function is to distinguish maliciousness gated by consensus's
+    /// orchestrator.
+    pub fn is_orchestrator_malicious(&self) -> bool {
+        self.maliciously_propose_equivocating_blocks
+            || self.maliciously_propose_empty_blocks
+            || self.maliciously_finalize_all
+            || self.maliciously_notarize_all
+    }
 }

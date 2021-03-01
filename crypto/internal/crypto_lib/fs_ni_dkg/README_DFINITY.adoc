@@ -1,0 +1,6 @@
+= IMPORTANT = 
+
+This directory contains a copy of https://github.com/dfinity-lab/blynn-dkg.
+**Do not** change/edit the files directly, but only via PRs to 
+https://github.com/dfinity-lab/blynn-dkg, which is the source of truth, and will
+be regularly copied to this directory, overwriting any changes.

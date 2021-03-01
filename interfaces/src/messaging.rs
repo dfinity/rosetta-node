@@ -1,4 +1,4 @@
-use crate::consensus::{PayloadValidationError, ValidationResult};
+use crate::validation::{ValidationError, ValidationResult};
 use ic_types::{
     batch::{Batch, ValidationContext, XNetPayload},
     Height, NumBytes,
@@ -16,6 +16,20 @@ pub enum MessageRoutingError {
         actual_height: Height,
     },
 }
+
+#[derive(Debug)]
+pub enum InvalidXNetPayload {
+    InvalidSlice(String),
+    StateRemoved(Height),
+}
+
+#[derive(Debug)]
+pub enum XNetTransientValidationError {
+    StateNotCommittedYet(Height),
+}
+
+pub type XNetPayloadValidationError =
+    ValidationError<InvalidXNetPayload, XNetTransientValidationError>;
 
 /// The public interface for the MessageRouting layer.
 pub trait MessageRouting: Send + Sync {
@@ -69,7 +83,7 @@ pub trait XNetPayloadBuilder: Send + Sync {
         validation_context: &ValidationContext,
         past_payloads: &[&XNetPayload],
         byte_limit: NumBytes,
-    ) -> ValidationResult<PayloadValidationError>;
+    ) -> ValidationResult<XNetPayloadValidationError>;
 }
 
 /// Possible errors in making XNetPayload.

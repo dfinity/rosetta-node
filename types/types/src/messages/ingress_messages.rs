@@ -18,17 +18,89 @@ use std::{
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub struct SignedIngressContent(RawHttpRequest);
+pub struct SignedIngressContent {
+    // TODO(ielashi): Remove raw_http_request from this struct.
+    raw_http_request: RawHttpRequest,
+    sender: UserId,
+    canister_id: CanisterId,
+    method_name: String,
+    arg: Vec<u8>,
+    ingress_expiry: u64,
+    nonce: Option<Vec<u8>>,
+}
 
 impl SignedIngressContent {
+    /// NOTE: it is assumed that the caller of this function performed all the
+    /// necessary validation checks when constructing the `RawHttpRequest`.
     pub(crate) fn new(raw_http_request: RawHttpRequest) -> Self {
-        Self(raw_http_request)
+        let sender = match raw_http_request.0.get("sender") {
+            Some(bytes) => match bytes {
+                RawHttpRequestVal::Bytes(raw) => {
+                    UserId::from(PrincipalId::try_from(&raw[..]).expect("failed to decode user id"))
+                }
+                val => unreachable!("Expected `sender` to be a blob, got {:?}", val),
+            },
+            None => UserId::from(PrincipalId::new_anonymous()),
+        };
+
+        let canister_id = match raw_http_request.0.get("canister_id") {
+            Some(bytes) => match bytes {
+                RawHttpRequestVal::Bytes(raw) => CanisterId::new(
+                    PrincipalId::try_from(&raw[..]).expect("failed to decode canister id"),
+                )
+                .unwrap(),
+                val => unreachable!("Expected `canister_id` to be a blob, got {:?}", val),
+            },
+            None => unreachable!("Expected `canister_id` field to be present."),
+        };
+
+        let method_name = match raw_http_request.0.get("method_name") {
+            Some(bytes) => match bytes {
+                RawHttpRequestVal::String(name) => name.to_owned(),
+                val => unreachable!("Expected `method_name` to be of type String, got {:?}", val),
+            },
+            None => unreachable!("Expected `method_name` field to be present."),
+        };
+
+        let arg = match raw_http_request.0.get("arg") {
+            Some(bytes) => match bytes {
+                RawHttpRequestVal::Bytes(raw) => raw.to_owned(),
+                val => unreachable!("Expected `arg` to be of type blob, got {:?}", val),
+            },
+            None => unreachable!("Expected `arg` field to be present."),
+        };
+
+        let ingress_expiry = match raw_http_request.0.get("ingress_expiry") {
+            Some(bytes) => match bytes {
+                RawHttpRequestVal::U64(raw) => *raw,
+                val => unreachable!("Expected `ingress_expiry` to be of type u64, got {:?}", val),
+            },
+            None => unreachable!("Expected `ingress_expiry field to be present"),
+        };
+
+        let nonce = match raw_http_request.0.get("nonce") {
+            Some(bytes) => match bytes {
+                RawHttpRequestVal::Bytes(nonce) => Some(nonce.to_owned()),
+                val => unreachable!("Expected `nonce` to be a blob, got {:?}", val),
+            },
+            None => None,
+        };
+
+        Self {
+            raw_http_request,
+            sender,
+            canister_id,
+            method_name,
+            arg,
+            ingress_expiry,
+            nonce,
+        }
     }
 }
 
 impl CountBytes for SignedIngressContent {
     fn count_bytes(&self) -> usize {
-        self.0.count_bytes()
+        self.raw_http_request.count_bytes()
     }
 }
 
@@ -41,7 +113,7 @@ pub type SignedIngress = Signed<SignedIngressContent, Option<UserSignature>>;
 
 impl From<&SignedIngress> for pb_types::SignedIngress {
     fn from(signed_ingress: &SignedIngress) -> Self {
-        let raw_http_request = &signed_ingress.content.0;
+        let raw_http_request = &signed_ingress.content.raw_http_request;
         Self {
             signature: bincode::serialize(&signed_ingress.signature).unwrap(),
             content: raw_http_request
@@ -52,6 +124,16 @@ impl From<&SignedIngress> for pb_types::SignedIngress {
                     value: Some(pb_types::HttpRequestVal::from(v)),
                 })
                 .collect(),
+            sender: Some(crate::user_id_into_protobuf(signed_ingress.sender())),
+            canister_id: Some(pb_types::CanisterId::from(signed_ingress.canister_id())),
+            method_name: signed_ingress.method_name(),
+            arg: signed_ingress.method_arg().to_vec(),
+            ingress_expiry: signed_ingress.content.ingress_expiry,
+            nonce: signed_ingress
+                .content
+                .nonce
+                .clone()
+                .map(|bytes| pb_types::Nonce { raw_bytes: bytes }),
         }
     }
 }
@@ -81,7 +163,7 @@ impl From<&SignedIngress> for IngressMessageLogEntry {
             }
         }
 
-        let raw_http_request = &ingress.content.0;
+        let raw_http_request = &ingress.content.raw_http_request;
         Self {
             canister_id: get_id("canister_id", raw_http_request),
             compute_allocation: get_u64("compute_allocation", raw_http_request),
@@ -102,57 +184,24 @@ impl From<&SignedIngress> for IngressMessageLogEntry {
 }
 
 impl SignedIngress {
-    pub fn content(&self) -> &RawHttpRequest {
-        &self.content.0
+    pub fn id(&self) -> MessageId {
+        MessageId::from(&self.content.raw_http_request)
     }
 
     pub fn sender(&self) -> UserId {
-        let raw_http_request = &self.content.0;
-        match raw_http_request.0.get("sender") {
-            Some(bytes) => match bytes {
-                RawHttpRequestVal::Bytes(raw) => {
-                    UserId::from(PrincipalId::try_from(&raw[..]).expect("failed to decode user id"))
-                }
-                val => unreachable!("Expected `sender` to be a blob, got {:?}", val),
-            },
-            None => UserId::from(PrincipalId::new_anonymous()),
-        }
+        self.content.sender
     }
 
     pub fn canister_id(&self) -> CanisterId {
-        let raw_http_request = &self.content.0;
-        match raw_http_request.0.get("canister_id") {
-            Some(bytes) => match bytes {
-                RawHttpRequestVal::Bytes(raw) => CanisterId::new(
-                    PrincipalId::try_from(&raw[..]).expect("failed to decode canister id"),
-                )
-                .unwrap(),
-                val => unreachable!("Expected `canister_id` to be a blob, got {:?}", val),
-            },
-            None => unreachable!("No canister id defined: invalid request value."),
-        }
+        self.content.canister_id
     }
 
-    pub fn method_name(&self) -> Result<String, ()> {
-        let raw_http_request = &self.content.0;
-        match raw_http_request.0.get("method_name") {
-            Some(bytes) => match bytes {
-                RawHttpRequestVal::String(name) => Ok(name.to_owned()),
-                _ => Err(()),
-            },
-            None => Err(()),
-        }
+    pub fn method_name(&self) -> String {
+        self.content.method_name.clone()
     }
 
-    pub fn method_arg(&self) -> Result<Vec<u8>, ()> {
-        let raw_http_request = &self.content.0;
-        match raw_http_request.0.get("arg") {
-            Some(bytes) => match bytes {
-                RawHttpRequestVal::Bytes(raw) => Ok(raw.to_vec()),
-                _ => Err(()),
-            },
-            None => Err(()),
-        }
+    pub fn method_arg(&self) -> &[u8] {
+        &self.content.arg
     }
 
     pub fn log_entry(&self) -> IngressMessageLogEntry {
@@ -160,15 +209,7 @@ impl SignedIngress {
     }
 
     pub fn expiry_time(&self) -> Time {
-        let raw_http_request = &self.content.0;
-        let value = raw_http_request
-            .0
-            .get("ingress_expiry")
-            .expect("Expected SignedIngress to carry a `ingress_expiry` field");
-        match value {
-            RawHttpRequestVal::U64(raw) => crate::time::UNIX_EPOCH + Duration::from_nanos(*raw),
-            val => unreachable!("Expected `ingress_expiry` to be a u64, got {:?}", val),
-        }
+        crate::time::UNIX_EPOCH + Duration::from_nanos(self.content.ingress_expiry)
     }
 }
 
@@ -229,7 +270,7 @@ pub struct Ingress {
 impl From<(SignedIngress, MessageId)> for Ingress {
     fn from(input: (SignedIngress, MessageId)) -> Self {
         let (signed_ingress, message_id) = input;
-        let mut raw_http_request = signed_ingress.content.0;
+        let mut raw_http_request = signed_ingress.content.raw_http_request;
         let request_type = raw_http_request.take_string("request_type");
 
         match request_type.as_str() {

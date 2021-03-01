@@ -22,4 +22,5 @@ message CryptoLogEntry {
   google.protobuf.StringValue signed_bytes = 15;
   google.protobuf.StringValue allowed_tls_clients = 16;
   google.protobuf.StringValue tls_server = 17;
+  google.protobuf.UInt32Value dkg_epoch = 18;
 }

@@ -51,16 +51,23 @@ message GossipRetransmissionRequest {
 }
 
 message GossipChunk {
-  oneof body {
-    bytes artifact_id = 1;
-    bytes chunk_id = 2;
-    ArtifactChunk artifact_chunk = 3;
+  bytes artifact_id = 1;
+  uint32 chunk_id = 2;
+  oneof response {
+    ArtifactChunk chunk = 3;
+    P2PError error = 4;
   }
 }
 
 message ArtifactChunk {
-  uint32 chunk_id = 1;
-  uint64 size = 2;
-  repeated bytes witnesses = 3;
-  bytes data = 4;
+  repeated bytes witnesses = 1;
+  oneof data {
+    bytes artifact = 2;  // TODO: convert bincoded Artifact to protobuf
+    bytes chunk = 3;
+  }
 }
+
+enum P2PError {
+  P2P_ERROR_UNSPECIFIED = 0;
+  P2P_ERROR_NOT_FOUND = 1;
+};

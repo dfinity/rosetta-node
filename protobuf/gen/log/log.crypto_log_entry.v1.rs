@@ -51,4 +51,7 @@ pub struct CryptoLogEntry {
     #[prost(message, optional, tag="17")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tls_server: ::std::option::Option<::std::string::String>,
+    #[prost(message, optional, tag="18")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dkg_epoch: ::std::option::Option<u32>,
 }

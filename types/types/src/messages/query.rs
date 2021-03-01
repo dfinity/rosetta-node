@@ -1,28 +1,8 @@
-use super::{RawHttpRequest, UserSignature};
-use crate::{crypto::Signed, CanisterId, PrincipalId, UserId};
+use crate::{
+    messages::{HttpHandlerError, HttpUserQuery},
+    CanisterId, PrincipalId, UserId,
+};
 use std::convert::TryFrom;
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct SignedUserQueryContent(RawHttpRequest);
-
-impl SignedUserQueryContent {
-    pub(crate) fn new(raw_http_request: RawHttpRequest) -> Self {
-        Self(raw_http_request)
-    }
-}
-
-/// Describes the signed query that was received from the end user.  The only
-/// way to construct this is `TryFrom<HttpRequestEnvelope<HttpReadContent>> for
-/// SignedUserQueryOrRequestStatus` which should guarantee that all the
-/// necessary fields are accounted for and all the necessary checks have been
-/// performed.
-pub type SignedUserQuery = Signed<SignedUserQueryContent, Option<UserSignature>>;
-
-impl SignedUserQuery {
-    pub fn content(&self) -> &RawHttpRequest {
-        &self.content.0
-    }
-}
 
 /// Represents a Query that is sent by an end user to a canister.
 #[derive(Clone, PartialEq, Debug)]
@@ -31,23 +11,32 @@ pub struct UserQuery {
     pub receiver: CanisterId,
     pub method_name: String,
     pub method_payload: Vec<u8>,
+    pub ingress_expiry: u64,
+    pub nonce: Option<Vec<u8>>,
 }
 
-// This conversion should be error free as long as we performed all the
-// validation checks when we computed the SignedUserQuery.
-impl From<SignedUserQueryContent> for UserQuery {
-    fn from(content: SignedUserQueryContent) -> Self {
-        let mut raw_http_request = content.0;
-        Self {
-            source: raw_http_request.take_sender(),
-            receiver: CanisterId::try_from(
-                PrincipalId::try_from(&raw_http_request.take_bytes("canister_id")[..])
-                    .expect("failed to parse canister id"),
-            )
-            .unwrap(),
-            method_name: raw_http_request.take_string("method_name"),
-            method_payload: raw_http_request.take_bytes("arg"),
-        }
+impl TryFrom<HttpUserQuery> for UserQuery {
+    type Error = HttpHandlerError;
+
+    fn try_from(query: HttpUserQuery) -> Result<Self, Self::Error> {
+        Ok(Self {
+            source: UserId::from(PrincipalId::try_from(query.sender.0).map_err(|err| {
+                HttpHandlerError::InvalidPrincipalId(format!(
+                    "Converting sender to PrincipalId failed with {}",
+                    err
+                ))
+            })?),
+            receiver: CanisterId::try_from(query.canister_id.0).map_err(|err| {
+                HttpHandlerError::InvalidPrincipalId(format!(
+                    "Converting canister_id to PrincipalId failed with {:?}",
+                    err
+                ))
+            })?,
+            method_name: query.method_name,
+            method_payload: query.arg.0,
+            ingress_expiry: query.ingress_expiry,
+            nonce: query.nonce.map(|n| n.0),
+        })
     }
 }
 
