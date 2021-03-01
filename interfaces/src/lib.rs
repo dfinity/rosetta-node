@@ -18,6 +18,7 @@ pub mod replica_config;
 pub mod state_manager;
 pub mod time_source;
 pub mod transport;
+pub mod validation;
 
 // Note [Associated Types in Interfaces]
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

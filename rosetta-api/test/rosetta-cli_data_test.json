@@ -1,7 +1,7 @@
 {
  "network": {
   "blockchain": "Internet Computer",
-  "network": "00000000000004d2"
+  "network": "00000000001000000101"
  },
  "online_url": "http://localhost:8091",
  "data_directory": "",

@@ -16,8 +16,9 @@ message DCRecord {
   //
   // This must be unique across DCRecords.
   bytes dcop_principal_id = 1;
-  // The maximum number of nodes that can be added under this DCRecord.
-  uint64 node_cap = 2;
+  // The remaining number of nodes that could be added to this DC.
+  // This number should never go below 0.
+  uint64 node_allowance = 2;
   // List of IPv6 prefixes associated with this DC, separated by a comma
   // These prefixes are added to firewalls to allow traffic from this DC
   string ipv6_prefixes = 3;

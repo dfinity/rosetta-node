@@ -3,13 +3,14 @@ use crate::models::{
     AccountIdentifier, Amount, ApiError, BlockIdentifier, Currency, Operation, Timestamp,
     TransactionIdentifier,
 };
-use crate::sync::HashedBlock;
+use crate::store::HashedBlock;
 use core::fmt::Display;
-use dfn_candid::Candid;
+use dfn_candid::CandidOne;
 use ic_types::messages::{HttpRequestEnvelope, HttpSubmitContent};
 use ic_types::PrincipalId;
 use ledger_canister::{
-    BlockHeight, HashOf, ICPTs, SubmitArgs, Transaction, Transfer, DECIMAL_PLACES,
+    BlockHeight, HashOf, ICPTs, SendArgs, Serializable, Transaction, Transfer, DECIMAL_PLACES,
+    TRANSACTION_FEE,
 };
 use on_wire::{FromWire, IntoWire};
 use serde_json::map::Map;
@@ -57,7 +58,12 @@ pub fn operations(transaction: &Transfer, completed: bool) -> Result<Vec<Operati
     };
 
     let ops = match transaction {
-        Transfer::Send { from, to, amount } => {
+        Transfer::Send {
+            from,
+            to,
+            amount,
+            fee,
+        } => {
             let from_account = Some(account_identifier(from));
             let to_account = Some(account_identifier(to));
             let amount = i128::try_from(amount.get_doms())
@@ -67,7 +73,7 @@ pub fn operations(transaction: &Transfer, completed: bool) -> Result<Vec<Operati
                 TRANSACTION.to_string(),
                 status.clone(),
                 from_account,
-                Some(signed_amount(-amount)),
+                Some(signed_amount(-amount - (fee.get_doms() as i128))),
             );
             let mut cr = Operation::new(
                 1,
@@ -180,8 +186,9 @@ pub fn from_operations(ops: Vec<Operation>) -> Result<Vec<Transfer>, ApiError> {
                     Err(err)
                 };
 
-                if db_amount != -cr_amount {
-                    return error("Credit account + Debit amount must net to zero");
+                let fee = TRANSACTION_FEE.get_doms() as i128;
+                if db_amount + fee != -cr_amount {
+                    return error("Credit + Debit + fee must net to zero");
                 }
 
                 let amount = if cr_amount > 0 {
@@ -194,7 +201,12 @@ pub fn from_operations(ops: Vec<Operation>) -> Result<Vec<Transfer>, ApiError> {
                     return error("Transactions can't start and finish in the same place");
                 }
 
-                Ok(Transfer::Send { from, to, amount })
+                Ok(Transfer::Send {
+                    from,
+                    to,
+                    amount,
+                    fee: TRANSACTION_FEE,
+                })
             }
             // TODO support Burn here
             wrong => Err(ApiError::InvalidTransaction(
@@ -268,7 +280,6 @@ pub fn account_identifier(uid: &PrincipalId) -> AccountIdentifier {
 }
 
 pub fn principal_id(aid: &AccountIdentifier) -> Result<PrincipalId, String> {
-    // TODO validate
     match hex::decode(aid.address.clone()) {
         Ok(vec) => Ok(PrincipalId::try_from(&vec).map_err(|e| e.to_string())?),
         Err(e) => Err(format!(
@@ -303,11 +314,11 @@ pub fn into_error(error_msg: String) -> Option<models::Object> {
     Some(m)
 }
 
-pub fn from_public_key(pk: models::PublicKey) -> Result<Vec<u8>, ApiError> {
-    from_hex(pk.hex_bytes)
+pub fn from_public_key(pk: &models::PublicKey) -> Result<Vec<u8>, ApiError> {
+    from_hex(&pk.hex_bytes)
 }
 
-pub fn from_hex(hex: String) -> Result<Vec<u8>, ApiError> {
+pub fn from_hex(hex: &str) -> Result<Vec<u8>, ApiError> {
     hex::decode(hex).map_err(|e| {
         ApiError::InvalidRequest(false, into_error(format!("Hex could not be decoded {}", e)))
     })
@@ -324,12 +335,24 @@ pub fn transaction_id(
         HttpSubmitContent::Call { update } => update,
     };
     let from = PrincipalId::try_from(update.sender.0).map_err(|e| internal_error(e.to_string()))?;
-    let (memo, amount, to, bh) = from_arg(update.arg.0)?;
-    let created_at = bh.ok_or_else(|| internal_error(
+    let SendArgs {
+        memo,
+        amount,
+        fee,
+        from_subaccount,
+        to,
+        to_subaccount,
+        block_height,
+    } = from_arg(update.arg.0)?;
+    let created_at = block_height.ok_or_else(|| internal_error(
         "A transaction ID cannot be generated from a constructed transaction without an explicit block height"
     ))?;
 
-    let hash = Transaction::new(from, to, amount, memo, created_at).hash();
+    let from =
+        ledger_canister::account_identifier(from, from_subaccount).map_err(internal_error)?;
+    let to = ledger_canister::account_identifier(to, to_subaccount).map_err(internal_error)?;
+
+    let hash = Transaction::new(from, to, amount, fee, memo, created_at).hash();
 
     Ok(transaction_identifier(&hash))
 }
@@ -343,19 +366,19 @@ pub fn invalid_block_id<D: Display>(msg: D) -> ApiError {
 }
 
 pub fn account_from_public_key(pk: models::PublicKey) -> Result<AccountIdentifier, ApiError> {
-    let pid = PrincipalId::new_self_authenticating(&from_hex(pk.hex_bytes)?);
+    let pid = PrincipalId::new_self_authenticating(&from_hex(&pk.hex_bytes)?);
     Ok(account_identifier(&pid))
 }
 
 // This is so I can keep track of where this conversion is done
-pub fn from_arg(encoded: Vec<u8>) -> Result<SubmitArgs, ApiError> {
-    Candid::from_bytes(encoded)
+pub fn from_arg(encoded: Vec<u8>) -> Result<SendArgs, ApiError> {
+    CandidOne::from_bytes(encoded)
         .map_err(internal_error)
-        .map(|Candid(c)| c)
+        .map(|CandidOne(c)| c)
 }
 
-pub fn to_arg(args: SubmitArgs) -> Vec<u8> {
-    Candid(args).into_bytes().expect("Serialization failed")
+pub fn to_arg(args: SendArgs) -> Vec<u8> {
+    CandidOne(args).into_bytes().expect("Serialization failed")
 }
 
 pub fn from_hash<T>(hash: &HashOf<T>) -> String {

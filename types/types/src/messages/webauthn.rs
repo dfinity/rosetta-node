@@ -15,17 +15,29 @@ struct ClientData {
 pub struct WebAuthnSignature {
     authenticator_data: Blob,
     client_data_json: Blob,
-    pub signature: Blob,
+    signature: Blob,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-pub struct WebAuthnEnvelope {
-    authenticator_data: Vec<u8>,
-    client_data_json: Vec<u8>,
-    client_data: ClientData,
-    signed_bytes: Vec<u8>,
-    // The decoded challenge, this will be either a message id or hash(delegation)
-    pub challenge: Vec<u8>,
+impl WebAuthnSignature {
+    pub fn new(authenticator_data: Blob, client_data_json: Blob, signature: Blob) -> Self {
+        Self {
+            authenticator_data,
+            client_data_json,
+            signature,
+        }
+    }
+
+    pub fn authenticator_data(&self) -> Blob {
+        self.authenticator_data.clone()
+    }
+
+    pub fn client_data_json(&self) -> Blob {
+        self.client_data_json.clone()
+    }
+
+    pub fn signature(&self) -> Blob {
+        self.signature.clone()
+    }
 }
 
 // TODO: Add optional fields if present
@@ -42,6 +54,22 @@ impl TryFrom<&[u8]> for WebAuthnSignature {
         let signature: WebAuthnSignature = serde_cbor::from_slice(blob)
             .map_err(|err| format!("Signature CBOR parsing failed with: {}", err))?;
         Ok(signature)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct WebAuthnEnvelope {
+    authenticator_data: Vec<u8>,
+    client_data_json: Vec<u8>,
+    client_data: ClientData,
+    signed_bytes: Vec<u8>,
+    // The decoded challenge, this will be either a message id or hash(delegation)
+    challenge: Vec<u8>,
+}
+
+impl WebAuthnEnvelope {
+    pub fn challenge(&self) -> Vec<u8> {
+        self.challenge.clone()
     }
 }
 

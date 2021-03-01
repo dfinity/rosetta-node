@@ -1,4 +1,4 @@
-use super::{PrincipalId, PrincipalIdBlobParseError, SubnetId};
+use super::{PrincipalId, PrincipalIdBlobParseError, PrincipalIdParseError, SubnetId};
 use candid::CandidType;
 use ic_protobuf::types::v1 as pb;
 use serde::de::Error;
@@ -8,15 +8,17 @@ use std::{convert::TryFrom, fmt};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, CandidType, Serialize)]
 pub struct CanisterId(PrincipalId);
 
-#[derive(Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum CanisterIdError {
     InvalidPrincipalId(String),
+    PrincipalIdParseError(PrincipalIdParseError),
 }
 
 impl fmt::Display for CanisterIdError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidPrincipalId(string) => write!(f, "Got an invalid principal id {}", string),
+            Self::PrincipalIdParseError(err) => write!(f, "Could not parse principal: {}", err),
         }
     }
 }
@@ -76,6 +78,12 @@ impl CanisterId {
 impl AsRef<PrincipalId> for CanisterId {
     fn as_ref(&self) -> &PrincipalId {
         &self.0
+    }
+}
+
+impl AsRef<[u8]> for CanisterId {
+    fn as_ref(&self) -> &[u8] {
+        &self.0.as_slice()
     }
 }
 
@@ -180,5 +188,15 @@ impl<'de> Deserialize<'de> for CanisterId {
         let res = CanisterId::try_from(PrincipalId::deserialize(deserializer)?);
         let id = res.map_err(D::Error::custom)?;
         Ok(id)
+    }
+}
+
+impl std::str::FromStr for CanisterId {
+    type Err = CanisterIdError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        let principal_id =
+            PrincipalId::from_str(input).map_err(CanisterIdError::PrincipalIdParseError)?;
+        CanisterId::new(principal_id)
     }
 }

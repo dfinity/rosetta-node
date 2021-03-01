@@ -1010,18 +1010,15 @@ impl TryFrom<pb::Block> for Block {
                 .transpose()?
                 .unwrap_or_default(),
         );
-        let payload = if dkg_payload.is_summary() {
-            // TODO: Re-enable this assertion once the combined payload PR is deployed.
-            //       This is to avoid breaking the upgrade process.
-            /*
+        let payload = match dkg_payload {
+            dkg::Payload::Summary(summary) => {
                 assert!(
-                batch.is_empty(),
-                "Error: Summary block has non-empty batch payload."
-            );
-                 */
-            BlockPayload::Summary(dkg_payload.into_summary())
-        } else {
-            (batch, dkg_payload.into_dealings()).into()
+                    batch.is_empty(),
+                    "Error: Summary block has non-empty batch payload."
+                );
+                BlockPayload::Summary(summary)
+            }
+            dkg::Payload::Dealings(dealings) => (batch, dealings).into(),
         };
         Ok(Block {
             version: ReplicaVersion::try_from(block.version.as_str())

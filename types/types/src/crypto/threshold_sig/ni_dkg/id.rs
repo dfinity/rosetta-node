@@ -45,7 +45,7 @@ impl From<NiDkgId> for NiDkgIdProto {
             dealer_subnet: ni_dkg_id.dealer_subnet.get().into_vec(),
             dkg_tag: ni_dkg_id.dkg_tag as i32,
             remote_target_id: match ni_dkg_id.target_subnet {
-                NiDkgTargetSubnet::Remote(target_id) => Some(target_id.get().to_vec()),
+                NiDkgTargetSubnet::Remote(target_id) => Some(target_id.0.to_vec()),
                 NiDkgTargetSubnet::Local => None,
             },
         }
@@ -67,27 +67,33 @@ impl TryFrom<NiDkgIdProto> for NiDkgId {
             target_subnet: match ni_dkg_id_proto.remote_target_id {
                 None => NiDkgTargetSubnet::Local,
                 // Note that empty bytes (which are different from None) will lead to an error.
-                Some(bytes) => NiDkgTargetSubnet::Remote(ni_dkg_target_id(bytes.as_slice())?),
+                Some(bytes) => NiDkgTargetSubnet::Remote(
+                    ni_dkg_target_id(bytes.as_slice())
+                        .map_err(NiDkgIdFromProtoError::InvalidRemoteTargetIdSize)?,
+                ),
             },
         })
     }
 }
 
-fn ni_dkg_target_id(data: &[u8]) -> Result<NiDkgTargetId, NiDkgIdFromProtoError> {
-    if data.len() != NI_DKG_TARGET_ID_SIZE {
-        return Err(NiDkgIdFromProtoError::InvalidRemoteTargetIdSize);
+#[derive(Debug, PartialEq, Eq)]
+pub struct InvalidNiDkgTargetIdSize;
+
+pub fn ni_dkg_target_id(data: &[u8]) -> Result<NiDkgTargetId, InvalidNiDkgTargetIdSize> {
+    if data.len() != NiDkgTargetId::SIZE {
+        return Err(InvalidNiDkgTargetIdSize);
     }
 
-    let mut result = [0; NI_DKG_TARGET_ID_SIZE];
+    let mut result = [0; NiDkgTargetId::SIZE];
     result.copy_from_slice(data);
-    Ok(NiDkgTargetId::from(result))
+    Ok(NiDkgTargetId::new(result))
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum NiDkgIdFromProtoError {
     InvalidPrincipalId(PrincipalIdBlobParseError),
     InvalidDkgTag,
-    InvalidRemoteTargetIdSize,
+    InvalidRemoteTargetIdSize(InvalidNiDkgTargetIdSize),
 }
 
 impl From<NiDkgIdFromProtoError> for ic_protobuf::proxy::ProxyDecodeError {
@@ -97,7 +103,7 @@ impl From<NiDkgIdFromProtoError> for ic_protobuf::proxy::ProxyDecodeError {
         match error {
             InvalidPrincipalId(err) => Self::InvalidPrincipalId(Box::new(err)),
             InvalidDkgTag => Self::DecodeError(DecodeError::new("Invalid DKG tag.")),
-            InvalidRemoteTargetIdSize => {
+            InvalidRemoteTargetIdSize(_) => {
                 Self::DecodeError(DecodeError::new("Invalid remote target Id size."))
             }
         }

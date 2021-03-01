@@ -1,6 +1,5 @@
 use serde::{ser::SerializeSeq, Deserialize, Serialize, Serializer};
 use serde_bytes::Bytes;
-use std::collections::BTreeMap;
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::iter::FromIterator;
@@ -11,6 +10,7 @@ use std::ops::DerefMut;
 pub(crate) mod arbitrary;
 #[cfg(test)]
 mod conversion_tests;
+pub mod flat_map;
 pub(crate) mod hasher;
 pub mod proto;
 pub(crate) mod tree_hash;
@@ -18,6 +18,7 @@ pub(crate) mod tree_hash;
 #[cfg(test)]
 mod encoding_tests;
 
+pub use flat_map::FlatMap;
 pub use tree_hash::*;
 
 /// Represents a path (a collection of `Label`) in a hash tree.
@@ -202,6 +203,7 @@ where
     }
 }
 
+/// The computed hash of the data in a `Leaf`; or of a [`LabeledTree`].
 #[derive(PartialEq, Eq, Clone)]
 pub struct Digest(pub [u8; 32]);
 ic_crypto_internal_types::derive_serde!(Digest, 32);
@@ -250,22 +252,34 @@ impl AsRef<[u8]> for Digest {
     }
 }
 
+/// A sorted, labeled rose tree whose leaves contain values of type `T`.
 #[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
 pub enum LabeledTree<T> {
+    /// A leaf node. Only `Leaf` nodes contain values.
     Leaf(T),
-    SubTree(BTreeMap<Label, LabeledTree<T>>),
+    /// Internal node with an arbitrary number of sorted, labeled children.
+    SubTree(FlatMap<Label, LabeledTree<T>>),
 }
 
+/// A binary tree representation of a `LabeledTree`, with `Digest` leaves.
+///
+/// A `LabeledTree::SubTree` is converted into a binary tree of zero or more
+/// `HashTree::Forks` terminating in labeled `HashTree::Nodes`, with the left
+/// child always a complete binary tree (e.g. a `SubTree` with 5 children maps
+/// to a `Fork` with a complete left subtree of 4 `Node` leaves and a right
+/// subtree consisting of a single `Node`).
 #[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
 pub enum HashTree {
-    Leaf {
-        digest: Digest,
-    },
+    /// An unlabeled leaf that is either the root or the child of a `Node`.
+    Leaf { digest: Digest },
+    /// The equivalent of a `LabeledTree` branch.
     Node {
         digest: Digest,
         label: Label,
         hash_tree: Box<HashTree>,
     },
+    /// Unlabeled binary fork, used to represent a `LabeledTree::SubTree` with
+    /// more than one child as a binary tree.
     Fork {
         digest: Digest,
         left_tree: Box<HashTree>,
@@ -322,7 +336,7 @@ impl HashTree {
 }
 
 /// A hash tree that contains the data requested by the call to
-/// `read_certified_state` and pruned parts of the hash tree.
+/// `read_certified_state` and digests for pruned parts of the hash tree.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum MixedHashTree {
     Empty,
@@ -360,6 +374,15 @@ pub enum InvalidHashTreeError {
     ///           ` leaf Y
     /// ```
     UnlabeledLeaf,
+
+    /// Labels in the hash tree are not sorted.
+    ///
+    /// ```text
+    /// * - fork -- labeled "b" -- leaf X
+    ///          \
+    ///           ` labeled "a" -- leaf Y
+    /// ```
+    LabelsNotSorted(Label),
 }
 
 /// Extracts the data part from a mixed hash tree by removing all forks and
@@ -370,12 +393,14 @@ impl TryFrom<MixedHashTree> for LabeledTree<Vec<u8>> {
     fn try_from(root: MixedHashTree) -> Result<Self, InvalidHashTreeError> {
         fn collect_children(
             t: MixedHashTree,
-            children: &mut BTreeMap<Label, LabeledTree<Vec<u8>>>,
+            children: &mut FlatMap<Label, LabeledTree<Vec<u8>>>,
         ) -> Result<(), InvalidHashTreeError> {
             match t {
                 MixedHashTree::Leaf(_) => Err(InvalidHashTreeError::UnlabeledLeaf),
                 MixedHashTree::Labeled(label, subtree) => {
-                    children.insert(label, (*subtree).try_into()?);
+                    children
+                        .try_append(label, (*subtree).try_into()?)
+                        .map_err(|(label, _)| InvalidHashTreeError::LabelsNotSorted(label))?;
                     Ok(())
                 }
                 MixedHashTree::Fork(lr) => {
@@ -389,7 +414,7 @@ impl TryFrom<MixedHashTree> for LabeledTree<Vec<u8>> {
         Ok(match root {
             MixedHashTree::Leaf(data) => LabeledTree::Leaf(data),
             MixedHashTree::Labeled(_, _) | MixedHashTree::Fork(_) => {
-                let mut children = BTreeMap::new();
+                let mut children = FlatMap::new();
                 collect_children(root, &mut children)?;
 
                 LabeledTree::SubTree(children)
@@ -552,11 +577,13 @@ pub enum TreeHashError {
     InvalidArgument { info: String },
 }
 
-/// `Witness` contains a subset of information from a `HashTree`,
-/// that is sufficient to efficiently verify whether some given data
-/// is consistent with the original data (for which the `HashTree` was
-/// computed). A witness can be also used to update a HashTree when a
-/// part of the original data gets updated.
+/// A subset of a `HashTree` that is sufficient to verify whether some specific
+/// partial data is consistent with the original data (for which the `HashTree`
+/// was computed). In particular a `Witness` includes no digests for the partial
+/// data it verifies; nor for the `HashTree` root.
+///
+/// A witness can also be used to update a HashTree when part of the original
+/// data is updated.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub enum Witness {
     // Represents a HashTree::Fork
@@ -684,7 +711,6 @@ pub trait WitnessGenerator {
 /// builder.finish_subtree(); // end subtree (C, D)
 /// builder.finish_subtree(); // end root
 /// ```
-
 pub trait HashTreeBuilder {
     type WitnessGenerator;
 

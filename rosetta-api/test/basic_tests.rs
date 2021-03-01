@@ -2,14 +2,17 @@ use super::*;
 
 use ic_rosetta_api::models::*;
 
-use ic_rosetta_api::convert::{from_hash, to_hash};
+use ic_rosetta_api::convert::{amount_, block_id, from_hash, timestamp, to_hash};
 use ic_rosetta_api::ledger_client::LedgerAccess;
-use ic_rosetta_api::RosettaRequestHandler;
+use ic_rosetta_api::{RosettaRequestHandler, API_VERSION, MIDDLEWARE_VERSION, NODE_VERSION};
 
+use serde_json::map::Map;
 use std::sync::Arc;
 
 #[actix_rt::test]
 async fn smoke_test() {
+    init_test_logger();
+
     let mut scribe = Scribe::new();
     let num_transactions: usize = 1000;
     let num_accounts = 100;
@@ -39,40 +42,87 @@ async fn smoke_test() {
 
     let msg = NetworkRequest::new(req_handler.network_id());
     let res = req_handler.network_status(msg).await;
-    println!("Network status: {:?}", res);
+    assert_eq!(
+        res,
+        Ok(NetworkStatusResponse::new(
+            block_id(&scribe.blockchain.back().unwrap()).unwrap(),
+            timestamp(scribe.blockchain.back().unwrap().block.timestamp().into()).unwrap(),
+            block_id(&scribe.blockchain.front().unwrap()).unwrap(),
+            Some(block_id(&scribe.blockchain.front().unwrap()).unwrap()),
+            SyncStatus::new(scribe.blockchain.back().unwrap().index as i64, None),
+            vec![]
+        ))
+    );
 
-    //let msg = MetadataRequest::new();
-    //let resp = ic_rosetta_api::network_list(msg,)
+    let msg = MetadataRequest::new();
+    let res = req_handler.network_list(msg).await;
+    assert_eq!(
+        res,
+        Ok(NetworkListResponse::new(vec![req_handler.network_id()]))
+    );
 
     let msg = NetworkRequest::new(req_handler.network_id());
     let res = req_handler.network_options(msg).await;
-    println!("Network options: {:?}", res);
+    assert_eq!(
+        res,
+        Ok(NetworkOptionsResponse::new(
+            Version::new(
+                API_VERSION.to_string(),
+                NODE_VERSION.to_string(),
+                Some(MIDDLEWARE_VERSION.to_string()),
+                Some(Map::new())
+            ),
+            Allow::new(
+                vec![OperationStatus::new("COMPLETED".to_string(), true)],
+                vec![
+                    "BURN".to_string(),
+                    "MINT".to_string(),
+                    "TRANSACTION".to_string()
+                ],
+                vec![
+                    Error::new(&ApiError::InternalError(true, None)),
+                    Error::new(&ApiError::InvalidRequest(false, None)),
+                    Error::new(&ApiError::InvalidNetworkId(false, None)),
+                    Error::new(&ApiError::InvalidAccountId(false, None)),
+                    Error::new(&ApiError::InvalidBlockId(false, None)),
+                    Error::new(&ApiError::MempoolTransactionMissing(false, None)),
+                    Error::new(&ApiError::BlockchainEmpty(false, None)),
+                    Error::new(&ApiError::InvalidTransaction(false, None)),
+                ],
+                true
+            )
+        ))
+    );
 
     let msg = NetworkRequest::new(req_handler.network_id());
     let res = req_handler.mempool(msg).await;
-    println!("Mempool : {:?}", res);
+    assert_eq!(res, Ok(MempoolResponse::new(vec![])));
 
     let msg = MempoolTransactionRequest::new(
         req_handler.network_id(),
         TransactionIdentifier::new("hello there".to_string()),
     );
     let res = req_handler.mempool_transaction(msg).await;
-    println!("Mempool transaction : {:?}", res);
+    assert_eq!(res, Err(ApiError::MempoolTransactionMissing(false, None)));
 
     let msg = AccountBalanceRequest::new(
         req_handler.network_id(),
         ic_rosetta_api::convert::account_identifier(&to_uid(0)),
     );
     let res = req_handler.account_balance(msg).await;
-    println!("Account balance : {:?}", res);
-    println!(
-        "From balance book: {}",
-        scribe.balance_book.get(&to_uid(0)).unwrap()
+    assert_eq!(
+        res,
+        Ok(AccountBalanceResponse::new(
+            block_id(&scribe.blockchain.back().unwrap()).unwrap(),
+            vec![amount_(*scribe.balance_book.get(&to_uid(0)).unwrap()).unwrap()]
+        ))
     );
 }
 
 #[actix_rt::test]
 async fn blocks_test() {
+    init_test_logger();
+
     let ledger = Arc::new(TestLedger::new());
     let req_handler = RosettaRequestHandler::new(ledger.clone());
     let mut scribe = Scribe::new();
@@ -148,6 +198,8 @@ async fn blocks_test() {
 
 #[actix_rt::test]
 async fn balances_test() {
+    init_test_logger();
+
     let ledger = Arc::new(TestLedger::new());
     let req_handler = RosettaRequestHandler::new(ledger.clone());
     let mut scribe = Scribe::new();
@@ -215,4 +267,36 @@ async fn balances_test() {
         get_balance(&req_handler, Some(2), 0).await.unwrap(),
         after_buy_balance
     );
+}
+
+#[actix_rt::test]
+async fn load_from_store_test() {
+    init_test_logger();
+    let tmpdir = create_tmp_dir();
+
+    let scribe = Scribe::new_with_sample_data(10, 100);
+
+    let mut blocks = Blocks::new_on_disk(tmpdir.path().into()).unwrap();
+    for hb in &scribe.blockchain {
+        blocks.add_block(hb.clone()).unwrap();
+    }
+    drop(blocks);
+
+    let mut blocks = Blocks::new_on_disk(tmpdir.path().into()).unwrap();
+    blocks.load_from_store().unwrap();
+
+    for hb in &scribe.blockchain {
+        assert_eq!(*hb, blocks.get_at(hb.index).unwrap());
+        assert_eq!(*hb, blocks.get(hb.hash).unwrap());
+        assert!(blocks.get_balances_at(hb.index).is_ok());
+        for (account, amount) in scribe.balance_history.get(hb.index as usize).unwrap() {
+            assert_eq!(
+                blocks
+                    .get_balances_at(hb.index)
+                    .unwrap()
+                    .account_balance(account),
+                *amount
+            );
+        }
+    }
 }

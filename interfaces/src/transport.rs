@@ -1,13 +1,13 @@
 //! Transport layer public interface.
 
-use std::sync::Arc;
-
+use async_trait::async_trait;
 use ic_protobuf::registry::node::v1::NodeRecord;
 use ic_types::transport::{
     FlowId, FlowTag, TransportClientType, TransportErrorCode, TransportPayload,
     TransportStateChange,
 };
 use ic_types::{NodeId, RegistryVersion};
+use std::{error::Error, sync::Arc};
 
 /// Transport layer APIs.
 pub trait Transport: Send + Sync {
@@ -75,4 +75,15 @@ pub trait TransportEventHandler: Send + Sync {
 
     /// Invoked by the transport layer to notify of any changes in the state.
     fn on_state_change(&self, state_change: TransportStateChange);
+}
+
+// Async version of the transport event handler
+#[async_trait]
+pub trait AsyncTransportEventHandler: Send + Sync {
+    async fn send_message(
+        &mut self,
+        flow: FlowId,
+        message: TransportPayload,
+    ) -> Result<(), Box<dyn Error>>;
+    async fn state_changed(&self, state_change: TransportStateChange);
 }

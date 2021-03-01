@@ -32,9 +32,9 @@ pub enum WasmMethod {
 impl WasmMethod {
     pub fn name(&self) -> String {
         match self {
-            WasmMethod::Update(name) => name.to_string(),
-            WasmMethod::Query(name) => name.to_string(),
-            WasmMethod::System(system_method) => system_method.to_string(),
+            Self::Update(name) => name.to_string(),
+            Self::Query(name) => name.to_string(),
+            Self::System(system_method) => system_method.to_string(),
         }
     }
 }
@@ -42,9 +42,9 @@ impl WasmMethod {
 impl fmt::Display for WasmMethod {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         match self {
-            WasmMethod::Update(name) => write!(f, "canister_update {}", name),
-            WasmMethod::Query(name) => write!(f, "canister_query {}", name),
-            WasmMethod::System(system_method) => system_method.fmt(f),
+            Self::Update(name) => write!(f, "canister_update {}", name),
+            Self::Query(name) => write!(f, "canister_query {}", name),
+            Self::System(system_method) => system_method.fmt(f),
         }
     }
 }
@@ -87,6 +87,8 @@ impl From<&WasmMethod> for pb::WasmMethod {
                     SystemMethod::CanisterInit => PbSystemMethod::CanisterInit,
                     SystemMethod::CanisterPreUpgrade => PbSystemMethod::CanisterPreUpgrade,
                     SystemMethod::CanisterPostUpgrade => PbSystemMethod::CanisterPostUpgrade,
+                    SystemMethod::CanisterInspectMessage => PbSystemMethod::CanisterInspectMessage,
+                    SystemMethod::CanisterHeartbeat => PbSystemMethod::CanisterHeartbeat,
                 } as i32)),
             },
         }
@@ -100,13 +102,13 @@ impl TryFrom<pb::WasmMethod> for WasmMethod {
         use pb::wasm_method::{SystemMethod as PbSystemMethod, WasmMethod as PbWasmMethod};
 
         match try_from_option_field(method.wasm_method, "WasmMethod::wasm_method")? {
-            PbWasmMethod::Update(update) => Ok(WasmMethod::Update(update)),
-            PbWasmMethod::Query(query) => Ok(WasmMethod::Query(query)),
+            PbWasmMethod::Update(update) => Ok(Self::Update(update)),
+            PbWasmMethod::Query(query) => Ok(Self::Query(query)),
             PbWasmMethod::System(system) => {
                 let method =
                     PbSystemMethod::from_i32(system).unwrap_or(PbSystemMethod::Unspecified);
 
-                Ok(WasmMethod::System(match method {
+                Ok(Self::System(match method {
                     PbSystemMethod::Unspecified => {
                         return Err(ProxyDecodeError::ValueOutOfRange {
                             typ: "WasmMethod::System",
@@ -117,6 +119,8 @@ impl TryFrom<pb::WasmMethod> for WasmMethod {
                     PbSystemMethod::CanisterInit => SystemMethod::CanisterInit,
                     PbSystemMethod::CanisterPreUpgrade => SystemMethod::CanisterPreUpgrade,
                     PbSystemMethod::CanisterPostUpgrade => SystemMethod::CanisterPostUpgrade,
+                    PbSystemMethod::CanisterInspectMessage => SystemMethod::CanisterInspectMessage,
+                    PbSystemMethod::CanisterHeartbeat => SystemMethod::CanisterHeartbeat,
                 }))
             }
         }
@@ -133,6 +137,11 @@ pub enum SystemMethod {
     CanisterPreUpgrade,
     /// A system method that is run at the end of a canister upgrade.
     CanisterPostUpgrade,
+    /// A system method that is run pre-consensus to ask the canister if it
+    /// wants to accept an ingress message.
+    CanisterInspectMessage,
+    /// A system method that is run at regular intervals for cron support.
+    CanisterHeartbeat,
 }
 
 impl TryFrom<&str> for SystemMethod {
@@ -144,6 +153,8 @@ impl TryFrom<&str> for SystemMethod {
             "canister_post_upgrade" => Ok(SystemMethod::CanisterPostUpgrade),
             "canister_init" => Ok(SystemMethod::CanisterInit),
             "canister_start" => Ok(SystemMethod::CanisterStart),
+            "canister_inspect_message" => Ok(SystemMethod::CanisterInspectMessage),
+            "canister_heartbeat" => Ok(SystemMethod::CanisterHeartbeat),
             _ => Err(format!("Cannot convert {} to SystemMethod.", value)),
         }
     }
@@ -152,10 +163,12 @@ impl TryFrom<&str> for SystemMethod {
 impl fmt::Display for SystemMethod {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         match self {
-            SystemMethod::CanisterPreUpgrade => write!(f, "canister_pre_upgrade"),
-            SystemMethod::CanisterPostUpgrade => write!(f, "canister_post_upgrade"),
-            SystemMethod::CanisterInit => write!(f, "canister_init"),
-            SystemMethod::CanisterStart => write!(f, "canister_start"),
+            Self::CanisterPreUpgrade => write!(f, "canister_pre_upgrade"),
+            Self::CanisterPostUpgrade => write!(f, "canister_post_upgrade"),
+            Self::CanisterInit => write!(f, "canister_init"),
+            Self::CanisterStart => write!(f, "canister_start"),
+            Self::CanisterInspectMessage => write!(f, "canister_inspect_message"),
+            Self::CanisterHeartbeat => write!(f, "canister_heartbeat"),
         }
     }
 }
@@ -255,10 +268,16 @@ impl FuncRef {
     /// function reference should be committed or not.
     pub fn to_commit(&self) -> bool {
         match self {
-            FuncRef::Method(WasmMethod::Update(_))
-            | FuncRef::Method(WasmMethod::System(_))
-            | FuncRef::UpdateClosure(_) => true,
-            FuncRef::QueryClosure(_) | FuncRef::Method(WasmMethod::Query(_)) => false,
+            Self::Method(WasmMethod::Update(_))
+            | Self::Method(WasmMethod::System(SystemMethod::CanisterStart))
+            | Self::Method(WasmMethod::System(SystemMethod::CanisterInit))
+            | Self::Method(WasmMethod::System(SystemMethod::CanisterPreUpgrade))
+            | Self::Method(WasmMethod::System(SystemMethod::CanisterPostUpgrade))
+            | Self::Method(WasmMethod::System(SystemMethod::CanisterHeartbeat))
+            | Self::UpdateClosure(_) => true,
+            Self::QueryClosure(_)
+            | Self::Method(WasmMethod::Query(_))
+            | Self::Method(WasmMethod::System(SystemMethod::CanisterInspectMessage)) => false,
         }
     }
 }

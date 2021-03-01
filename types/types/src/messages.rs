@@ -8,14 +8,15 @@ mod read_state;
 mod webauthn;
 
 use crate::{
-    user_id_into_protobuf, user_id_try_from_protobuf, CountBytes, Funds, NumBytes, Time, UserId,
+    user_id_into_protobuf, user_id_try_from_protobuf, CountBytes, Funds, NumBytes, UserId,
 };
 pub use blob::Blob;
 pub use http::{
-    Certificate, CertificateDelegation, Delegation, HttpCanisterUpdate, HttpQueryResponse,
-    HttpQueryResponseReply, HttpReadContent, HttpReadState, HttpReadStateResponse, HttpReply,
-    HttpRequestEnvelope, HttpResponseStatus, HttpStatusResponse, HttpSubmitContent, HttpUserQuery,
-    RawHttpRequest, RawHttpRequestVal, SignedDelegation,
+    validate_ingress_expiry, Authentication, Certificate, CertificateDelegation, Delegation,
+    HttpCanisterUpdate, HttpQueryResponse, HttpQueryResponseReply, HttpReadContent, HttpReadState,
+    HttpReadStateResponse, HttpReply, HttpRequest, HttpRequestContent, HttpRequestEnvelope,
+    HttpResponseStatus, HttpStatusResponse, HttpSubmitContent, HttpUserQuery, RawHttpRequest,
+    RawHttpRequestVal, ReadContent, SignedDelegation,
 };
 pub use ic_base_types::CanisterInstallMode;
 use ic_base_types::{CanisterId, CanisterIdError, PrincipalId};
@@ -27,8 +28,8 @@ pub use inter_canister::{
     CallContextId, CallbackId, Payload, RejectContext, Request, RequestOrResponse, Response,
 };
 pub use message_id::{MessageId, MessageIdError, EXPECTED_MESSAGE_ID_LENGTH};
-pub use query::{SignedUserQuery, SignedUserQueryContent, UserQuery};
-pub use read_state::{ReadState, SignedReadState, SignedReadStateContent};
+pub use query::UserQuery;
+pub use read_state::ReadState;
 use serde::{Deserialize, Serialize};
 use std::{convert::TryFrom, error::Error, fmt};
 pub use webauthn::{WebAuthnEnvelope, WebAuthnSignature};
@@ -201,100 +202,10 @@ impl From<CanisterIdError> for HttpHandlerError {
     }
 }
 
-#[derive(Debug, PartialEq)]
-pub enum SignedReadRequest {
-    Query(SignedUserQuery),
-    ReadState(SignedReadState),
-}
-
-impl SignedReadRequest {
-    pub fn signature(&self) -> Option<&UserSignature> {
-        match self {
-            Self::Query(query) => query.signature.as_ref(),
-            Self::ReadState(read_state) => read_state.signature.as_ref(),
-        }
-    }
-
-    pub fn message_id(&self) -> MessageId {
-        match self {
-            Self::Query(query) => MessageId::from(query.content()),
-            Self::ReadState(read_state) => MessageId::from(read_state.content()),
-        }
-    }
-}
-
-impl TryFrom<(HttpRequestEnvelope<HttpReadContent>, Time)> for SignedReadRequest {
-    type Error = HttpHandlerError;
-
-    fn try_from(input: (HttpRequestEnvelope<HttpReadContent>, Time)) -> Result<Self, Self::Error> {
-        let (request, current_time) = input;
-        match request.content {
-            HttpReadContent::Query { query } => {
-                let content = RawHttpRequest::try_from((query, current_time))?;
-                match (
-                    request.sender_pubkey,
-                    request.sender_sig,
-                    request.sender_delegation,
-                ) {
-                    (Some(pubkey), Some(signature), delegation) => {
-                        let signature = UserSignature {
-                            signature: signature.0,
-                            signer_pubkey: pubkey.0,
-                            sender_delegation: delegation,
-                        };
-                        Ok(Self::Query(SignedUserQuery {
-                            content: SignedUserQueryContent::new(content),
-                            signature: Some(signature),
-                        }))
-                    }
-                    (None, None, None) => Ok(Self::Query(SignedUserQuery {
-                        content: SignedUserQueryContent::new(content),
-
-                        signature: None,
-                    })),
-                    rest => Err(Self::Error::MissingPubkeyOrSignature(format!(
-                        "Got {:?}",
-                        rest
-                    ))),
-                }
-            }
-
-            HttpReadContent::ReadState { read_state } => {
-                let content = RawHttpRequest::try_from((read_state, current_time))?;
-                match (
-                    request.sender_pubkey,
-                    request.sender_sig,
-                    request.sender_delegation,
-                ) {
-                    (Some(pubkey), Some(signature), delegation) => {
-                        let signature = UserSignature {
-                            signature: signature.0,
-                            signer_pubkey: pubkey.0,
-                            sender_delegation: delegation,
-                        };
-                        Ok(SignedReadRequest::ReadState(SignedReadState {
-                            content: SignedReadStateContent::new(content),
-                            signature: Some(signature),
-                        }))
-                    }
-                    (None, None, None) => Ok(Self::ReadState(SignedReadState {
-                        content: SignedReadStateContent::new(content),
-                        signature: None,
-                    })),
-                    rest => Err(Self::Error::MissingPubkeyOrSignature(format!(
-                        "Got {:?}",
-                        rest
-                    ))),
-                }
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::time::current_time_and_expiry_time;
+    use crate::{time::current_time_and_expiry_time, Time};
     use maplit::btreemap;
     use proptest::prelude::*;
     use serde_cbor::Value;

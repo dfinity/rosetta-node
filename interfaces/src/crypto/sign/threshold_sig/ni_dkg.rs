@@ -1,11 +1,10 @@
 use ic_types::crypto::threshold_sig::ni_dkg::config::NiDkgConfig;
 use ic_types::crypto::threshold_sig::ni_dkg::errors::create_dealing_error::DkgCreateDealingError;
 use ic_types::crypto::threshold_sig::ni_dkg::errors::create_transcript_error::DkgCreateTranscriptError;
-use ic_types::crypto::threshold_sig::ni_dkg::errors::delete_decryption_key_error::DkgDeleteDecryptionKeyError;
-use ic_types::crypto::threshold_sig::ni_dkg::errors::delete_threshold_signing_key_error::DkgDeleteThresholdSigningKeyError;
+use ic_types::crypto::threshold_sig::ni_dkg::errors::key_removal_error::DkgKeyRemovalError;
 use ic_types::crypto::threshold_sig::ni_dkg::errors::load_transcript_error::DkgLoadTranscriptError;
 use ic_types::crypto::threshold_sig::ni_dkg::errors::verify_dealing_error::DkgVerifyDealingError;
-use ic_types::crypto::threshold_sig::ni_dkg::{NiDkgDealing, NiDkgTranscript};
+use ic_types::crypto::threshold_sig::ni_dkg::{NiDkgDealing, NiDkgTag, NiDkgTranscript};
 use ic_types::NodeId;
 use std::collections::BTreeMap;
 
@@ -127,24 +126,36 @@ pub trait NiDkgAlgorithm {
     ///   not be parsed.
     fn load_transcript(&self, transcript: &NiDkgTranscript) -> Result<(), DkgLoadTranscriptError>;
 
-    /// Deletes all decryption keys corresponding to `config.registry_version`
-    /// and preceding epochs.
+    /// Retains only keys for the current and next transcripts.
     ///
-    /// # Panics:
-    /// * If it fails to delete keys from the store.
-    fn delete_old_decryption_keys(
-        &self,
-        config: &NiDkgConfig,
-    ) -> Result<(), DkgDeleteDecryptionKeyError>;
-
-    /// Removes all the threshold signing keys for instances with Height smaller
-    /// or equal than `config.dkg_id.start_block_height` and same
-    /// `config.dkg_id.dkg_tag` from the secret key store.
+    /// This ensures that any other keys are no longer stored in the Secret Key
+    /// Store. It ensures the following:
+    /// * The only threshold signing keys in the store are the ones for
+    ///   `transcript.dkg_id` for any `transcript` in `current_transcripts` or
+    ///   `next_transcripts`.
+    /// * The decryption key of the FS encryption keys is updated to the epoch
+    ///   `epoch:= min(current_transcripts.get(LowThreshold).registry_version,
+    ///   current_transcripts.get(HighThreshold).registry_version)`. Decryption
+    ///   can no longer be performed on earlier epochs. This means that it
+    ///   should still be possible to decrypt the signing keys for the current
+    ///   and next transcripts.
     ///
-    /// # Panics:
-    /// * If it fails to delete keys from the store.
-    fn delete_old_threshold_signing_keys(
+    /// # Errors:
+    /// * `DkgKeyRemovalError::InputValidationError`: if any of the invariants
+    ///   of the constructor of `CurrentAndNextTranscripts` fails.
+    /// * `DkgKeyRemovalError::FsEncryptionPublicKeyNotInRegistry`,
+    ///   `DkgKeyRemovalError::MalformedFsEncryptionPublicKey`, or
+    ///   `DkgKeyRemovalError::Registry`: If the FS encryption public key stored
+    ///   for the node in the registry at version
+    ///   `version=min(current_transcripts.get(LowThreshold).registry_version,
+    ///   current_transcripts.get(HighThreshold).registry_version)` cannot be
+    ///   obtained or is malformed. In this case the FS decryption key is not
+    ///   updated, but the removal of threshold signing keys is still ensured.
+    /// * `FsKeyNotInSecretKeyStoreError::FsKeyNotInSecretKeyStoreError`: If the
+    ///   forward secure key to be updated is not found in the secret key store.
+    fn retain_only_active_keys_if_present(
         &self,
-        config: &NiDkgConfig,
-    ) -> Result<(), DkgDeleteThresholdSigningKeyError>;
+        current_transcripts: &BTreeMap<NiDkgTag, NiDkgTranscript>,
+        next_transcripts: &BTreeMap<NiDkgTag, NiDkgTranscript>,
+    ) -> Result<(), DkgKeyRemovalError>;
 }

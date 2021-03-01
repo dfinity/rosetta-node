@@ -3,7 +3,6 @@ cfg_if::cfg_if! {
     // When the `wee_alloc` feature is enabled, use `wee_alloc` as the global
     // allocator.
     if #[cfg(feature = "wee_alloc")] {
-        use wee_alloc;
         #[global_allocator]
         static ALLOC: wee_alloc::WeeAlloc<'_> = wee_alloc::WeeAlloc::INIT;
     }
@@ -169,9 +168,7 @@ pub mod ic0 {
     pub unsafe fn msg_reply_data_append(_offset: u32, _size: u32) {
         wrong_arch("msg_reply_data_append")
     }
-    pub unsafe fn msg_funds_accept(_unit_src: u32, _unit_size: u32, _amount: u64) {
-        wrong_arch("msg_funds_accept")
-    }
+
     pub unsafe fn trap(_offset: u32, _size: u32) {
         wrong_arch("trap")
     }
@@ -248,10 +245,6 @@ pub mod ic0 {
 
     pub unsafe fn canister_cycle_balance() -> u64 {
         wrong_arch("canister_cycle_balance")
-    }
-
-    pub unsafe fn msg_funds_available(_unit_src: u32, _unit_size: u32) -> u64 {
-        wrong_arch("msg_funds_available")
     }
 
     pub unsafe fn msg_funds_refunded(_unit_src: u32, _unit_size: u32) -> u64 {
@@ -553,6 +546,8 @@ pub fn reject_message() -> String {
 
 /// Replies with the given byte array.
 /// Note, currently we do not support chunkwise assembling of the response.
+/// Warning if you use this with an endpoint it will cause a trap due to the
+/// message trying to return multiple responses
 pub fn reply(payload: &[u8]) {
     unsafe {
         ic0::msg_reply_data_append(payload.as_ptr() as u32, payload.len() as u32);
@@ -560,16 +555,9 @@ pub fn reply(payload: &[u8]) {
     }
 }
 
-/// Indicates that `amount` of funds of specified `unit` should be accepted in
-/// the current message.
-pub fn msg_funds_accept(unit: TokenUnit, amount: u64) {
-    let unit_blob: Vec<u8> = unit.into();
-    unsafe {
-        ic0::msg_funds_accept(unit_blob.as_ptr() as u32, 1, amount);
-    }
-}
-
 /// Rejects the current call with the given message.
+/// Warning if you use this with an endpoint it will cause a trap due to the
+/// message trying to return multiple responses
 pub fn reject(err_message: &str) {
     let err_message = err_message.as_bytes();
     unsafe {
@@ -629,12 +617,6 @@ pub fn canister_balance(unit: TokenUnit) -> u64 {
 /// Returns the amount of cycles in the canister's account.
 pub fn canister_cycle_balance() -> u64 {
     unsafe { ic0::canister_cycle_balance() }
-}
-
-/// Returns the amount of funds available in this current message.
-pub fn msg_funds_available(unit: TokenUnit) -> u64 {
-    let unit_blob: Vec<u8> = unit.into();
-    unsafe { ic0::msg_funds_available(unit_blob.as_ptr() as u32, unit_blob.len() as u32) }
 }
 
 /// Returns the amount of funds refunded with a response.

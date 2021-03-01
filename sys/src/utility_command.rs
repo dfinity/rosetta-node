@@ -56,7 +56,9 @@ impl UtilityCommand {
         cmd.stderr(Stdio::piped());
         cmd.stdout(Stdio::piped());
 
-        let map_to_err = |e: std::io::Error| UtilityCommandError::IoError(e.to_string());
+        let map_to_err = |e: std::io::Error| {
+            UtilityCommandError::IoError(format!("Error while running '{}': {}", self, e))
+        };
         let mut child = cmd.spawn().map_err(map_to_err)?;
 
         let mut stdin = match child.stdin.take() {
@@ -76,9 +78,13 @@ impl UtilityCommand {
             Ok(output.stdout)
         } else {
             Err(UtilityCommandError::Failed(
-                std::str::from_utf8(output.stderr.as_slice())
-                    .unwrap()
-                    .to_string(),
+                format!(
+                    "Error while running '{}': {}",
+                    self,
+                    std::str::from_utf8(output.stderr.as_slice())
+                        .unwrap()
+                        .to_string()
+                ),
                 output.status,
             ))
         }

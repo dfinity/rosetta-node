@@ -12,11 +12,13 @@ message CallContext {
     types.v1.CanisterId canister_id = 1;
     uint64 callback_id = 2;
   }
+  message Heartbeat { }
   oneof call_origin {
     Ingress ingress = 1;
     CanisterUpdateOrQuery canister_update = 2;
     types.v1.UserId query = 3;
     CanisterUpdateOrQuery canister_query = 4;
+    Heartbeat heartbeat = 7;
   }
   bool responded = 5;
   state.queues.v1.Funds available_funds = 6;
@@ -72,6 +74,8 @@ message WasmMethod {
     SYSTEM_METHOD_CANISTER_INIT = 2;
     SYSTEM_METHOD_CANISTER_PRE_UPGRADE = 3;
     SYSTEM_METHOD_CANISTER_POST_UPGRADE = 4;
+    SYSTEM_METHOD_CANISTER_INSPECT_MESSAGE = 5;
+    SYSTEM_METHOD_CANISTER_HEARTBEAT = 6;
   }
   oneof wasm_method {
     string update = 1;
@@ -130,11 +134,16 @@ message CanisterStateBits {
     CanisterStatusStopping stopping = 12;
     CanisterStatusStopped stopped = 13;
   };
-  uint64 scheduled_to_run = 14;
+  reserved 14;
+  reserved "scheduled_to_run";
   uint64 scheduled_as_first = 15;
-  uint64 skipped_round_due_to_low_cycles = 16;
+  reserved 16;
+  reserved "skipped_round_due_to_low_cycles";
   uint64 skipped_round_due_to_no_messages = 17;
+  // In how many rounds a canister is executed.
   uint64 executed = 18;
-  uint64 executed_and_exhausted_its_messages = 19;
-  bytes certified_data = 20;
+  reserved 19;
+  reserved "executed_and_exhausted_its_messages";
+  bytes certified_data = 20; 
+  uint64 interruped_during_execution = 21;
 }

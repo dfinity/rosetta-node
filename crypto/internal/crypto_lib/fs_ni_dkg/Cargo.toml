@@ -1,0 +1,11 @@
+[package]
+name = "ic-crypto-internal-fs-ni-dkg"
+version = "0.0.0"
+edition = "2018"
+
+[dependencies]
+hex = "0.4.2"
+miracl_core = { path = "miracl_core"}
+rand_chacha = "0.2.2"
+zeroize = "1.1.1"
+ic-crypto-internal-bls12381-serde-miracl = { path = "../bls12_381/serde/miracl" }

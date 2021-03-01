@@ -1,6 +1,5 @@
 #![allow(clippy::redundant_clone)]
-use super::*;
-use crate::{Digest, Label, LabeledTree, Witness};
+use crate::{flatmap, Digest, FlatMap, Label, LabeledTree, Witness};
 use ic_protobuf::messaging::xnet::v1;
 use ic_protobuf::proxy::{ProtoProxy, ProxyDecodeError};
 
@@ -63,9 +62,10 @@ fn error_invalid_digest() {
 
 fn labeled_tree_for_test() -> LabeledTree<Vec<u8>> {
     use LabeledTree::*;
-    let mut subtree = BTreeMap::new();
-    subtree.insert(Label::from("first"), Leaf(vec![7, 5, 3]));
-    subtree.insert(Label::from("second"), SubTree(BTreeMap::new()));
+    let subtree = flatmap!(
+        Label::from("first") => Leaf(vec![7, 5, 3]),
+        Label::from("second") => SubTree(Default::default()),
+    );
     SubTree(subtree)
 }
 
@@ -92,19 +92,28 @@ fn large_labeled_tree_for_test() -> LabeledTree<Vec<u8>> {
     let label_b_4_3 = Label::from("label_b_4_3");
     let label_c = Label::from("label_c");
 
-    let mut subtree_a_3_map = BTreeMap::new();
-    subtree_a_3_map.insert(label_a_3_2, LabeledTree::Leaf(Vec::from("a_3_2")));
-    let mut subtree_a_map = BTreeMap::new();
-    subtree_a_map.insert(label_a_3, LabeledTree::SubTree(subtree_a_3_map));
-    let mut subtree_b_4_map = BTreeMap::new();
-    subtree_b_4_map.insert(label_b_4_3, LabeledTree::Leaf(Vec::from("b_4_3")));
-    let mut subtree_b_map = BTreeMap::new();
-    subtree_b_map.insert(label_b_2, LabeledTree::SubTree(BTreeMap::new()));
-    subtree_b_map.insert(label_b_4, LabeledTree::SubTree(subtree_b_4_map));
-    let mut root_map = BTreeMap::new();
-    root_map.insert(label_a, LabeledTree::SubTree(subtree_a_map));
-    root_map.insert(label_b, LabeledTree::SubTree(subtree_b_map));
-    root_map.insert(label_c, LabeledTree::Leaf(Vec::from("c")));
+    let subtree_a_3_map = flatmap!(
+        label_a_3_2 => LabeledTree::Leaf(Vec::from("a_3_2"))
+    );
+
+    let subtree_a_map = flatmap!(
+        label_a_3 => LabeledTree::SubTree(subtree_a_3_map),
+    );
+
+    let subtree_b_4_map = flatmap!(
+        label_b_4_3 => LabeledTree::Leaf(Vec::from("b_4_3")),
+    );
+
+    let subtree_b_map = flatmap!(
+        label_b_2 => LabeledTree::SubTree(FlatMap::new()),
+        label_b_4 => LabeledTree::SubTree(subtree_b_4_map),
+    );
+
+    let root_map = flatmap!(
+        label_a => LabeledTree::SubTree(subtree_a_map),
+        label_b => LabeledTree::SubTree(subtree_b_map),
+        label_c => LabeledTree::Leaf(Vec::from("c")),
+    );
 
     LabeledTree::SubTree(root_map)
 }

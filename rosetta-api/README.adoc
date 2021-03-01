@@ -65,7 +65,7 @@ Building Docker image requires GitHub token `repository` permissions in order to
 ....
 docker build . \
     --build-arg GITHUB_TOKEN=$(cat github-token.txt) \
-    --file Dockerfile \
+    --file Dockerfile-Coinbase \
     --tag dfinity/rosetta-api
 ....
 
@@ -79,4 +79,3 @@ docker run \
     --publish 8080:8080 \
     --rm \
     dfinity/rosetta-api
-

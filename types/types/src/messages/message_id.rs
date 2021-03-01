@@ -473,7 +473,7 @@ mod tests {
             vec![3; 32],
             vec![6; 32],
         );
-        let message_id1 = MessageId::from(signed_ingress1.content());
+        let message_id1 = signed_ingress1.id();
         let signed_ingress2 = signed_ingress(
             CanisterId::new(PrincipalId::try_from(&[0, 0, 0, 0, 0, 0, 4, 210][..]).unwrap())
                 .unwrap(),
@@ -484,7 +484,7 @@ mod tests {
             vec![1; 32],
             vec![5; 32],
         );
-        let message_id2 = MessageId::from(signed_ingress2.content());
+        let message_id2 = signed_ingress2.id();
         assert_eq!(message_id1, message_id2);
     }
 

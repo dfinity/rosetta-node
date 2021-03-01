@@ -1,8 +1,7 @@
 use crate::{
-    arbitrary::arbitrary_well_formed_mixed_hash_tree, InvalidHashTreeError, Label, LabeledTree,
-    MixedHashTree,
+    arbitrary::arbitrary_well_formed_mixed_hash_tree, flatmap, InvalidHashTreeError, Label,
+    LabeledTree, MixedHashTree,
 };
-use maplit::btreemap;
 use proptest::prelude::*;
 use std::convert::TryInto;
 
@@ -33,7 +32,7 @@ type M = MixedHashTree;
 
 #[test]
 fn convert_empty_tree() {
-    assert_eq!(must_convert(M::Empty), T::SubTree(btreemap!()));
+    assert_eq!(must_convert(M::Empty), T::SubTree(flatmap!()));
 }
 
 #[test]
@@ -48,7 +47,7 @@ fn convert_one_leaf() {
 fn convert_small_tree() {
     assert_eq!(
         must_convert(labeled("a", b"123")),
-        T::SubTree(btreemap!(label("a") => T::Leaf(b"123".to_vec()))),
+        T::SubTree(flatmap!(label("a") => T::Leaf(b"123".to_vec()))),
     );
 }
 
@@ -57,7 +56,7 @@ fn convert_small_nested_tree() {
     assert_eq!(
         must_convert(M::Fork(Box::new((labeled("a", b"1"), labeled("b", b"2"))))),
         T::SubTree(
-            btreemap!(label("a") => T::Leaf(b"1".to_vec()), label("b") => T::Leaf(b"2".to_vec()))
+            flatmap!(label("a") => T::Leaf(b"1".to_vec()), label("b") => T::Leaf(b"2".to_vec()))
         ),
     );
 }

@@ -1,9 +1,10 @@
 syntax = "proto3";
 package registry.canister.v1;
 
-// Registry information for a canister.
+// There used to be a canister record proto.
+// This existed when the mapping canister -> subnet was per canister.
+// This is now obsolete: the routing table supersedes it.
 message CanisterRecord {
-  // The subnet hosting this canister.
-  reserved 1;   // this is from subnet_id being a uint64
-  bytes subnet_id = 2;
+  reserved 1, 2;
+  reserved "subnet_id";
 }

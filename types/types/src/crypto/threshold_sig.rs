@@ -2,7 +2,7 @@ use crate::crypto::threshold_sig::ni_dkg::NiDkgTranscript;
 use crate::crypto::AlgorithmId;
 use ic_crypto_internal_types::sign::threshold_sig::ni_dkg::CspNiDkgTranscript;
 use ic_crypto_internal_types::sign::threshold_sig::public_key::bls12_381;
-use ic_crypto_internal_types::sign::threshold_sig::public_key::bls12_381::MalformedThresholdSigPublicKeyError;
+pub use ic_crypto_internal_types::sign::threshold_sig::public_key::bls12_381::ThresholdSigPublicKeyError;
 use ic_crypto_internal_types::sign::threshold_sig::public_key::CspThresholdSigPublicKey;
 use ic_protobuf::registry::crypto::v1::AlgorithmId as AlgorithmIdProto;
 use ic_protobuf::registry::crypto::v1::PublicKey as PublicKeyProto;
@@ -61,11 +61,11 @@ impl From<ThresholdSigPublicKey> for bls12_381::PublicKeyBytes {
 }
 
 impl TryFrom<PublicKeyProto> for ThresholdSigPublicKey {
-    type Error = MalformedThresholdSigPublicKeyError;
+    type Error = ThresholdSigPublicKeyError;
 
     fn try_from(public_key: PublicKeyProto) -> Result<Self, Self::Error> {
         if AlgorithmId::from(public_key.algorithm) != AlgorithmId::ThresBls12_381 {
-            return Err(MalformedThresholdSigPublicKeyError {
+            return Err(ThresholdSigPublicKeyError::Malformed {
                 key_bytes: Some(public_key.key_value),
                 internal_error: format!(
                     "Invalid algorithm: expected {:?} but got {:?}",
@@ -76,7 +76,7 @@ impl TryFrom<PublicKeyProto> for ThresholdSigPublicKey {
         }
         const PUBKEY_LEN: usize = bls12_381::PublicKeyBytes::SIZE;
         if public_key.key_value.len() != PUBKEY_LEN {
-            return Err(MalformedThresholdSigPublicKeyError {
+            return Err(ThresholdSigPublicKeyError::Malformed {
                 internal_error: format!(
                     "Invalid length: expected {} but got {}",
                     PUBKEY_LEN,

@@ -43,8 +43,8 @@ create_account(1){
 }
 
 transfer(10){
-  transfer{
-    transfer.network = {"network": "00000000001000000101" , "blockchain":"Internet Computer"};
+  transfer_dry_run{
+    transfer_dry_run.network = {"network":"00000000001000000101", "blockchain":"Internet Computer"};
     currency = {"symbol":"ICP", "decimals":8};
     sender = find_balance({
       "minimum_balance":{
@@ -68,10 +68,11 @@ transfer(10){
         "currency": {{currency}}
       },
       "create_limit": 100,
-      "create_probability": 50
+      "create_probability": 67
     });
-    transfer.confirmation_depth = "1";
-    transfer.operations = [
+    transfer_dry_run.confirmation_depth = "1";
+    transfer_dry_run.dry_run = true;
+    transfer_dry_run.operations = [
       {
         "operation_identifier":{"index":0},
         "type":"TRANSACTION",
@@ -92,5 +93,43 @@ transfer(10){
         "related_operations": [ { "index": 0 } ]
       }
     ];
-  }
+  },
+  transfer{
+      // The suggested_fee is returned in the /construction/metadata
+      // response and saved to transfer_dry_run.suggested_fee.
+      suggested_fee = find_currency_amount({
+        "currency":{{currency}},
+        "amounts":{{transfer_dry_run.suggested_fee}}
+      });
+
+      transfer.network = {{transfer_dry_run.network}};
+      transfer.confirmation_depth = {{transfer_dry_run.confirmation_depth}};
+
+      sender_amount_with_fee = {{sender_amount}} - {{suggested_fee.value}};
+      print_message({"suggested fee":{{suggested_fee.value}}});
+      print_message({"sender_amount (with fee)":{{sender_amount_with_fee}}});
+
+      transfer.operations = [
+        {
+          "operation_identifier":{"index":0},
+          "type":"TRANSACTION",
+          "account":{{sender.account_identifier}},
+          "amount":{
+            "value":{{sender_amount_with_fee}},
+            "currency":{{currency}}
+          }
+        },
+        {
+          "operation_identifier":{"index":1},
+          "type":"TRANSACTION",
+          "account":{{recipient.account_identifier}},
+          "amount":{
+            "value":{{recipient_amount}},
+            "currency":{{currency}}
+          },
+          "related_operations": [ { "index": 0 } ]
+        }
+      ];
+    }
+
 }

@@ -5,6 +5,35 @@ pub(crate) fn arbitrary_leaf() -> impl Strategy<Value = T> {
     prop::collection::vec(any::<u8>(), 1..100).prop_map(T::Leaf)
 }
 
+/// Changes labels in the tree without changing the tree structure.
+/// This is needed to make randomly generated trees satisfy type invariants:
+/// labels must be unique and sorted.
+fn fix_labels(mut t: T) -> T {
+    fn prepend(l: &mut Label, n: u64) {
+        let mut buf = n.to_be_bytes().to_vec();
+        buf.extend_from_slice(l.as_bytes());
+        *l = Label::from(buf);
+    }
+    fn relabel(t: &mut T, id: &mut u64) {
+        match t {
+            T::Empty | T::Leaf(_) | T::Pruned(_) => (),
+            T::Fork(ref mut lr) => {
+                relabel(&mut lr.0, id);
+                relabel(&mut lr.1, id);
+            }
+            T::Labeled(ref mut l, ref mut t) => {
+                prepend(l, *id);
+                *id += 1;
+                relabel(t, id);
+            }
+        }
+    }
+
+    let mut id = 0;
+    relabel(&mut t, &mut id);
+    t
+}
+
 pub(crate) fn arbitrary_mixed_hash_tree() -> impl Strategy<Value = T> {
     let leaf = prop_oneof![
         Just(T::Empty),
@@ -23,6 +52,7 @@ pub(crate) fn arbitrary_mixed_hash_tree() -> impl Strategy<Value = T> {
             ]
         },
     )
+    .prop_map(fix_labels)
 }
 
 pub(crate) fn arbitrary_well_formed_mixed_hash_tree() -> impl Strategy<Value = T> {
@@ -40,5 +70,5 @@ pub(crate) fn arbitrary_well_formed_mixed_hash_tree() -> impl Strategy<Value = T
         },
     );
 
-    prop_oneof![Just(T::Empty), arbitrary_leaf(), tree,]
+    prop_oneof![Just(T::Empty), arbitrary_leaf(), tree,].prop_map(fix_labels)
 }

@@ -82,8 +82,11 @@ impl From<ErrorCode> for RejectCode {
             CanisterStoppingCancelled => CanisterError,
             IngressMessageTimeout => SysTransient,
             InsufficientTransferFunds => CanisterReject,
+            InsufficientCyclesForCreateCanister => CanisterReject,
             CertifiedStateUnavailable => SysTransient,
             InsufficientMemoryAllocation => CanisterReject,
+            SubnetNotFound => CanisterReject,
+            CanisterRejectedMessage => CanisterReject,
         }
     }
 }
@@ -106,6 +109,8 @@ pub enum ErrorCode {
     CanisterEmpty = 305,
     InsufficientTransferFunds = 401,
     InsufficientMemoryAllocation = 402,
+    InsufficientCyclesForCreateCanister = 403,
+    SubnetNotFound = 404,
     CanisterOutOfCycles = 501,
     CanisterTrapped = 502,
     CanisterCalledTrap = 503,
@@ -121,6 +126,7 @@ pub enum ErrorCode {
     CanisterFunctionNotFound = 513,
     CanisterNonEmpty = 514,
     CertifiedStateUnavailable = 515,
+    CanisterRejectedMessage = 516,
 }
 
 impl From<candid::Error> for UserError {
@@ -146,6 +152,8 @@ impl TryFrom<u64> for ErrorCode {
             305 => Ok(ErrorCode::CanisterEmpty),
             401 => Ok(ErrorCode::InsufficientTransferFunds),
             402 => Ok(ErrorCode::InsufficientMemoryAllocation),
+            403 => Ok(ErrorCode::InsufficientCyclesForCreateCanister),
+            404 => Ok(ErrorCode::SubnetNotFound),
             501 => Ok(ErrorCode::CanisterOutOfCycles),
             502 => Ok(ErrorCode::CanisterTrapped),
             503 => Ok(ErrorCode::CanisterCalledTrap),
@@ -161,6 +169,7 @@ impl TryFrom<u64> for ErrorCode {
             513 => Ok(ErrorCode::CanisterFunctionNotFound),
             514 => Ok(ErrorCode::CanisterNonEmpty),
             515 => Ok(ErrorCode::CertifiedStateUnavailable),
+            516 => Ok(ErrorCode::CanisterRejectedMessage),
             _ => Err(ProxyDecodeError::ValueOutOfRange {
                 typ: "ErrorCode",
                 err: err.to_string(),

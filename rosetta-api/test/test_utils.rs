@@ -1,13 +1,17 @@
 mod basic_tests;
 mod rosetta_cli_tests;
+mod store_tests;
 
 use lazy_static::lazy_static;
 use reqwest::Url;
 
 use ic_rosetta_api::models::*;
-use ic_rosetta_api::sync::HashedBlock;
+use ic_rosetta_api::store::HashedBlock;
 use ic_types::{CanisterId, PrincipalId};
-use ledger_canister::{self, Block, BlockHeight, ICPTs, Memo, Transaction, Transfer};
+use ledger_canister::{
+    self, Block, BlockHeight, ICPTs, LedgerCanisterInitPayload, Memo, SendArgs, Serializable,
+    Transaction, Transfer, TRANSACTION_FEE,
+};
 use tokio::sync::RwLock;
 
 use rand::{
@@ -20,29 +24,45 @@ use thread_local::ThreadLocal;
 // TODO remove after disconnecting tests
 use async_std::task::sleep;
 use async_trait::async_trait;
-use dfn_candid::Candid;
 #[allow(unused_imports)]
 use ic_rosetta_api::convert::{
-    account_identifier, from_arg, from_hash, from_hex, internal_error, operations, principal_id,
-    to_hash, to_hex, transaction_id, transaction_identifier,
+    account_identifier, from_arg, from_hash, from_hex, from_public_key, internal_error, operations,
+    principal_id, to_hash, to_hex, transaction_id, transaction_identifier,
 };
-use ic_rosetta_api::ledger_client::{self, Blocks, LedgerAccess};
+use ic_rosetta_api::ledger_client::{self, Balances, Blocks, LedgerAccess};
 use ic_rosetta_api::rosetta_server::RosettaApiServer;
 use ic_rosetta_api::RosettaRequestHandler;
 use ic_scenario_tests::{
     api::system::builder::Subnet, api::system::handle::IcHandle, system_test::InternetComputer,
 };
 use ic_types::messages::{HttpCanisterUpdate, HttpRequestEnvelope, HttpSubmitContent};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::convert::TryFrom;
 use std::ops::{Deref, DerefMut};
 use std::process::Command;
 use std::str::FromStr;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::{
-    path::{Path, PathBuf},
+    path::PathBuf,
     time::{Duration, SystemTime},
 };
+
+fn init_test_logger() {
+    // Unfortunately cargo test doesn't capture stdout properly
+    // so we set the level to warn (so we don't spam).
+    // I tried to use env logger here, which is supposed to work,
+    // and sure, cargo test captures it's output on MacOS, but it
+    // doesn't on linux.
+    log4rs::init_file("log_config_tests.yml", Default::default()).ok();
+}
+
+fn create_tmp_dir() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix("test_tmp_")
+        .tempdir_in(".")
+        .unwrap()
+}
 
 const SEED: u64 = 137;
 
@@ -88,7 +108,7 @@ impl TestLedger {
         Self {
             blockchain: RwLock::new(Blocks::default()),
             canister_id: CanisterId::new(
-                PrincipalId::try_from(&[0, 0, 0, 0, 0, 0, 4, 210][..]).unwrap(),
+                PrincipalId::from_str("5v3p4-iyaaa-aaaaa-qaaaa-cai").unwrap(),
             )
             .unwrap(),
             ic: None,
@@ -125,7 +145,7 @@ impl LedgerAccess for TestLedger {
         Box::new(self.blockchain.read().await)
     }
 
-    async fn sync_blocks(&self) -> Result<(), ApiError> {
+    async fn sync_blocks(&self, _stopped: Arc<AtomicBool>) -> Result<(), ApiError> {
         let mut queue = self.submit_queue.write().await;
 
         {
@@ -166,24 +186,54 @@ impl LedgerAccess for TestLedger {
 
         let from = PrincipalId::try_from(sender.0).map_err(internal_error)?;
 
-        let (memo, amount, to, created_at) = from_arg(arg.0).unwrap();
-        let created_at = created_at.unwrap();
+        let SendArgs {
+            memo,
+            amount,
+            fee,
+            from_subaccount,
+            to,
+            to_subaccount,
+            block_height,
+        } = from_arg(arg.0).unwrap();
+        let block_height = block_height.unwrap();
 
-        let transaction = Transfer::Send { from, to, amount };
+        let from =
+            ledger_canister::account_identifier(from, from_subaccount).map_err(internal_error)?;
+        let to = ledger_canister::account_identifier(to, to_subaccount).map_err(internal_error)?;
+
+        let transaction = Transfer::Send {
+            from,
+            to,
+            amount,
+            fee,
+        };
 
         let (parent_hash, index) = match self.last_submitted().await? {
             None => (None, 0),
             Some(hb) => (Some(hb.hash), hb.index + 1),
         };
 
-        let block = Block::new(transaction, memo, created_at).map_err(internal_error)?;
+        let block = Block::new(
+            None, /* FIXME */
+            transaction,
+            memo,
+            block_height,
+            dfn_core::api::now().into(),
+        )
+        .map_err(internal_error)?;
 
         let hb = HashedBlock::hash_block(block, parent_hash, index);
 
         self.submit_queue.write().await.push(hb.clone());
 
-        Ok(transaction_identifier(&hb.block.transaction.hash()))
+        Ok(transaction_identifier(&hb.block.transaction().hash()))
     }
+}
+
+pub(crate) fn to_balances(b: BTreeMap<PrincipalId, ICPTs>) -> Balances {
+    let mut balances = Balances::default();
+    balances.inner = b.into();
+    balances
 }
 
 enum Trans {
@@ -211,6 +261,16 @@ impl Scribe {
         }
     }
 
+    pub fn new_with_sample_data(num_accounts: u64, num_transactions: u64) -> Self {
+        let mut scribe = Scribe::new();
+
+        scribe.gen_accounts(num_accounts, 1_000_000);
+        for _i in 0..num_transactions {
+            scribe.gen_transaction();
+        }
+        scribe
+    }
+
     pub fn num_accounts(&self) -> u64 {
         self.accounts.len() as u64
     }
@@ -235,7 +295,7 @@ impl Scribe {
         for i in num_accounts..num_accounts + num {
             let amount = rand_val(balance, 0.1);
             self.accounts.push_back(to_uid(i));
-            self.balance_book.insert(to_uid(i), ICPTs::zero());
+            self.balance_book.insert(to_uid(i), ICPTs::ZERO);
             self.buy(to_uid(i), amount);
         }
     }
@@ -245,7 +305,7 @@ impl Scribe {
             PrincipalId::try_from(hex::decode(address).expect("The address should be hex"))
                 .expect("Hex was not valid pid");
         self.accounts.push_back(address);
-        self.balance_book.insert(address, ICPTs::zero());
+        self.balance_book.insert(address, ICPTs::ZERO);
         self.buy(address, balance);
     }
 
@@ -257,7 +317,7 @@ impl Scribe {
     }
 
     pub fn buy(&mut self, uid: PrincipalId, amount: u64) {
-        let amount = ICPTs::from_icpts(amount).unwrap();
+        let amount = ICPTs::from_doms(amount);
         self.transactions.push_back(Trans::Buy(uid, amount));
         *self.balance_book.get_mut(&uid).unwrap() += amount;
         let transaction = Transaction {
@@ -265,16 +325,17 @@ impl Scribe {
             memo: self.next_message(),
             created_at: 1,
         };
-        let block = Block {
+        let block = Block::new_from_transaction(
+            None, // FIXME
             transaction,
-            timestamp: self.time(),
-        };
+            self.time().into(),
+        );
         self.balance_history.push_back(self.balance_book.clone());
         self.add_block(block);
     }
 
     pub fn sell(&mut self, uid: PrincipalId, amount: u64) {
-        let amount = ICPTs::from_icpts(amount).unwrap();
+        let amount = ICPTs::from_doms(amount);
         self.transactions.push_back(Trans::Sell(uid, amount));
         *self.balance_book.get_mut(&uid).unwrap() -= amount;
         let transaction = Transaction {
@@ -282,20 +343,21 @@ impl Scribe {
             memo: self.next_message(),
             created_at: 1,
         };
-        let block = Block {
+        let block = Block::new_from_transaction(
+            None, // FIXME
             transaction,
-            timestamp: self.time(),
-        };
+            self.time().into(),
+        );
         self.balance_history.push_back(self.balance_book.clone());
 
         self.add_block(block);
     }
 
     pub fn transfer(&mut self, src: PrincipalId, dst: PrincipalId, amount: u64) {
-        let amount = ICPTs::from_icpts(amount).unwrap();
+        let amount = ICPTs::from_doms(amount);
         self.transactions
             .push_back(Trans::Transfer(src, dst, amount));
-        *self.balance_book.get_mut(&src).unwrap() -= amount;
+        *self.balance_book.get_mut(&src).unwrap() -= (amount + TRANSACTION_FEE).unwrap();
         *self.balance_book.get_mut(&dst).unwrap() += amount;
 
         let transaction = Transaction {
@@ -303,14 +365,16 @@ impl Scribe {
                 from: src,
                 to: dst,
                 amount,
+                fee: TRANSACTION_FEE,
             },
             memo: self.next_message(),
             created_at: 1,
         };
-        let block = Block {
+        let block = Block::new_from_transaction(
+            None, // FIXME
             transaction,
-            timestamp: self.time(),
-        };
+            self.time().into(),
+        );
         self.balance_history.push_back(self.balance_book.clone());
         self.add_block(block);
     }
@@ -329,7 +393,9 @@ impl Scribe {
                 }
             }
             _ => {
-                if *self.balance_book.get(&account1).unwrap() >= amount_ {
+                if *self.balance_book.get(&account1).unwrap()
+                    >= (amount_ + TRANSACTION_FEE).unwrap()
+                {
                     let mut account2 = self.accounts[dice_num(self.num_accounts()) as usize];
                     while account1 == account2 {
                         account2 = self.accounts[dice_num(self.num_accounts()) as usize];
@@ -369,6 +435,8 @@ pub async fn get_balance(
 
 #[actix_rt::test]
 async fn smoke_test_with_server() {
+    init_test_logger();
+
     let addr = "127.0.0.1:8090".to_string();
 
     let mut scribe = Scribe::new();
@@ -393,9 +461,9 @@ async fn smoke_test_with_server() {
         Arc::new(RosettaApiServer::new(serv_ledger, serv_req_handler, addr.clone()).unwrap());
     let serv_run = serv.clone();
     actix_rt::spawn(async move {
-        println!("Spawning server");
-        serv_run.run(false).await.unwrap();
-        println!("Server thread done");
+        log::info!("Spawning server");
+        serv_run.run(false, false).await.unwrap();
+        log::info!("Server thread done");
     });
 
     let reqwest_client = reqwest::Client::new();
@@ -441,9 +509,11 @@ async fn smoke_test_with_server() {
 // ignored because this takes 30 seconds
 // TODO put it somewhere where it can run slowly
 #[ignore]
-#[actix_rt::test]
+#[tokio::test(threaded_scheduler)]
 async fn simple_ic_test() -> Result<(), String> {
     use canister_test::*;
+
+    println!("[test] starting IC");
 
     let ic = InternetComputer::new()
         .with_subnet(Subnet::new().add_nodes(1))
@@ -477,23 +547,49 @@ async fn simple_ic_test() -> Result<(), String> {
         curve_type: CurveType::EDWARDS25519,
     };
 
-    let tester = PrincipalId::new_self_authenticating(&keypair.public.to_bytes()[..]);
+    let public_key_der =
+        ic_canister_client::ed25519_public_key_to_der(keypair.public.to_bytes().to_vec());
+
+    assert_eq!(
+        from_public_key(&public_key).unwrap(),
+        keypair.public.to_bytes()
+    );
+
+    let tester = PrincipalId::new_self_authenticating(&public_key_der);
 
     // Install the ledger canister with one account owned by the arbitrary public
     // key
 
-    let recipients: Vec<(PrincipalId, ICPTs)> = Vec::new();
+    println!(
+        "[test] installing ledger-canister {} {:?}",
+        tester, proj.cargo_manifest_dir
+    );
 
     let canister = proj
         .cargo_bin("ledger-canister")
-        .install_(&r, Candid((tester, recipients)))
+        .install_(
+            &r,
+            LedgerCanisterInitPayload {
+                minting_canister: CanisterId::new(tester).unwrap(),
+                initial_values: HashMap::new(),
+                archive_canister: None,
+                max_message_size_bytes: None,
+            },
+        )
         .await?;
 
+    let tmpdir = create_tmp_dir();
+    println!("[test] using {} for storage", tmpdir.path().display());
+
     // Setup the ledger + request handler
+    println!("[test] starting rosetta server");
+
     let client = ledger_client::LedgerClient::create_on_disk(
         url,
         canister.canister_id(),
-        Path::new("./data"),
+        tmpdir.path(),
+        None,
+        false,
     )
     .await
     .expect("Failed to initialize ledger client");
@@ -521,6 +617,7 @@ async fn simple_ic_test() -> Result<(), String> {
     // println!("Address: {}", address.account_identifier.unwrap().address);
 
     // Go through the submit workflow
+    println!("[test] getting metadata");
     let metadata = req_handler
         .construction_metadata(ConstructionMetadataRequest {
             network_identifier: network_identifier.clone(),
@@ -531,11 +628,13 @@ async fn simple_ic_test() -> Result<(), String> {
         .unwrap()
         .metadata;
 
+    println!("[test] constructing payloads");
     let operations = operations(
         &Transfer::Send {
             from: tester,
             to: CanisterId::ic_00().get(),
             amount: ICPTs::from_doms(100),
+            fee: TRANSACTION_FEE,
         },
         false,
     )
@@ -555,10 +654,11 @@ async fn simple_ic_test() -> Result<(), String> {
         .unwrap();
 
     // Sign the transactions using the public key
+    println!("[test] signing transaction");
     let signatures = payloads
         .into_iter()
         .map(|p| {
-            let bytes = from_hex(p.hex_bytes.clone()).unwrap();
+            let bytes = from_hex(&p.hex_bytes).unwrap();
             let signature_bytes = keypair.sign(&bytes).to_bytes();
             let hex_bytes = to_hex(&signature_bytes);
             Signature {
@@ -580,6 +680,7 @@ async fn simple_ic_test() -> Result<(), String> {
         .unwrap()
         .signed_transaction;
 
+    println!("[test] submitting transaction {:?}", signed_transaction);
     let sent_tid = req_handler
         .construction_submit(ConstructionSubmitRequest {
             network_identifier: network_identifier.clone(),
@@ -588,12 +689,18 @@ async fn simple_ic_test() -> Result<(), String> {
         .await
         .unwrap()
         .transaction_identifier;
+    println!("[test] tid = {:?}", sent_tid);
 
     // Wait for the block to arrive on the ledger
+    println!("[test] waiting for transaction");
     sleep(Duration::from_secs(5)).await;
-    ledger.sync_blocks().await.unwrap();
+    ledger
+        .sync_blocks(Arc::new(AtomicBool::new(false)))
+        .await
+        .unwrap();
 
     // Check the block has arrived on the ledger
+    println!("[test] checking for block on ledger");
     let block = req_handler
         .block(BlockRequest {
             network_identifier,
@@ -611,6 +718,8 @@ async fn simple_ic_test() -> Result<(), String> {
 
     // Check the transaction hash is the same off and on the ledger
     assert_eq!(&sent_tid, recieved_tid);
+
+    println!("[test] success");
 
     Ok(())
 }

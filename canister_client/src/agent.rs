@@ -2,7 +2,12 @@ use crate::{
     cbor::{parse_canister_query_response, parse_read_state_response, RequestStatus},
     time_source::SystemTimeTimeSource,
 };
+use async_trait::async_trait;
 use ed25519_dalek::{Keypair, KEYPAIR_LENGTH};
+use hyper::client::HttpConnector as HyperHttpConnector;
+use hyper::client::ResponseFuture as HyperFuture;
+use hyper::Client as HyperClient;
+use hyper::Uri as HyperUri;
 use ic_crypto_tree_hash::Path;
 use ic_interfaces::{crypto::DOMAIN_IC_REQUEST, time_source::TimeSource};
 use ic_protobuf::types::v1 as pb;
@@ -15,10 +20,10 @@ use ic_types::{
     CanisterId, PrincipalId, Time,
 };
 use prost::Message;
-use reqwest::{RequestBuilder, Url};
 use serde_cbor::value::Value as CBOR;
 use std::{convert::TryFrom, error::Error, fmt, sync::Arc, time::Duration};
 use tokio::time::delay_for;
+use url::Url;
 
 /// Maximum time in seconds to wait for a result (successful or otherwise)
 /// from an 'execute_update' call.
@@ -127,6 +132,232 @@ impl Sender {
     }
 }
 
+#[async_trait]
+pub trait HttpClientStub: Send + Sync {
+    /// Sends a GET request and returns the response bytes
+    async fn get(&self, end_point: &str, timeout: Duration) -> Result<Vec<u8>, String>;
+
+    /// Sends a POST request
+    async fn post(
+        &self,
+        end_point: &str,
+        http_body: Vec<u8>,
+        timeout: Duration,
+    ) -> Result<(), String>;
+
+    /// Sends a POST request and returns the response bytes
+    async fn post_with_response(
+        &self,
+        end_point: &str,
+        http_body: Vec<u8>,
+        timeout: Duration,
+    ) -> Result<Vec<u8>, String>;
+
+    /// Temp hack for workload generator. WG assumes that agent uses reqwest,
+    /// directly issues commands on the Agent's client, and also parses the
+    /// returned reqwest error codes.
+    fn as_reqwest_client(&self) -> &reqwest::Client;
+}
+
+// reqwest based implementation of HttpClientStub
+struct ReqwestHttpClientStub {
+    url: Url,
+
+    // Per reqwest document, cloning a client does not clone the actual connection pool inside.
+    // Therefore directly owning a client as opposed to a reference is the standard way to go.
+    client: reqwest::Client,
+}
+
+impl ReqwestHttpClientStub {
+    fn new(url: Url, client: reqwest::Client) -> Self {
+        Self { url, client }
+    }
+
+    fn build_url(&self, end_point: &str) -> Result<Url, String> {
+        let url = self.url.join(end_point).map_err(|e| {
+            format!(
+                "ReqwestAgent: Failed to create URL for {}: {:?}",
+                end_point, e
+            )
+        })?;
+
+        Ok(url)
+    }
+
+    fn build_post_request(
+        &self,
+        url: Url,
+        http_body: Vec<u8>,
+        timeout: Duration,
+    ) -> reqwest::RequestBuilder {
+        self.client
+            .post(url)
+            .header("Content-Type", "application/cbor")
+            .body(http_body)
+            .timeout(timeout)
+    }
+
+    async fn wait_for_one_http_request(
+        url: Url,
+        request: reqwest::RequestBuilder,
+    ) -> Result<Vec<u8>, String> {
+        let ret = request
+            .send()
+            .await
+            .map_err(|e| format!("ReqwestAgent: Request failed {:?}: {:?}", url, e))?;
+
+        let bytes = ret
+            .bytes()
+            .await
+            .map_err(|e| format!("ReqwestAgent: Failed byte conversion: {:?}: {:?}", url, e))?;
+
+        Ok(bytes.to_vec())
+    }
+}
+
+#[async_trait]
+impl HttpClientStub for ReqwestHttpClientStub {
+    async fn get(&self, end_point: &str, timeout: Duration) -> Result<Vec<u8>, String> {
+        let url = self.build_url(end_point)?;
+        let request = self.client.get(url.clone()).timeout(timeout);
+        Self::wait_for_one_http_request(url, request).await
+    }
+
+    async fn post(
+        &self,
+        end_point: &str,
+        http_body: Vec<u8>,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        let url = self.build_url(end_point)?;
+        let request = self.build_post_request(url.clone(), http_body, timeout);
+        request
+            .send()
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("ReqwestAgent: POST Failed {:?}: {:?}", url, e))
+    }
+
+    async fn post_with_response(
+        &self,
+        end_point: &str,
+        http_body: Vec<u8>,
+        timeout: Duration,
+    ) -> Result<Vec<u8>, String> {
+        let url = self.build_url(end_point)?;
+        let request = self.build_post_request(url.clone(), http_body, timeout);
+        Self::wait_for_one_http_request(url, request).await
+    }
+
+    fn as_reqwest_client(&self) -> &reqwest::Client {
+        &self.client
+    }
+}
+
+// hyper based implementation of HttpClientStub
+struct HyperHttpClientStub {
+    url: Url,
+    client: HyperClient<HyperHttpConnector>,
+}
+
+impl HyperHttpClientStub {
+    fn new(url: Url) -> Self {
+        let client = HyperClient::builder()
+            .pool_idle_timeout(Some(Duration::from_secs(600)))
+            .pool_max_idle_per_host(1)
+            .build_http();
+        Self { url, client }
+    }
+
+    fn build_uri(&self, end_point: &str) -> Result<HyperUri, String> {
+        let url = self.url.join(end_point).map_err(|e| {
+            format!(
+                "HyperAgent: Failed to create URI for {}: {:?}",
+                end_point, e
+            )
+        })?;
+
+        url.as_str()
+            .parse::<HyperUri>()
+            .map_err(|e| format!("HyperAgent: Failed to parse {:?}: {:?}", url, e))
+    }
+
+    fn build_post_request(&self, uri: HyperUri, http_body: Vec<u8>) -> Result<HyperFuture, String> {
+        let req = hyper::Request::builder()
+            .method("POST")
+            .uri(uri.clone())
+            .header("Content-Type", "application/cbor")
+            .body(hyper::Body::from(http_body))
+            .map_err(|e| {
+                format!(
+                    "HyperAgent: Failed to create POST request for {:?}: {:?}",
+                    uri, e
+                )
+            })?;
+        Ok(self.client.request(req))
+    }
+
+    async fn wait_for_one_http_request(
+        uri: HyperUri,
+        response_future: HyperFuture,
+        timeout: Duration,
+    ) -> Result<Vec<u8>, String> {
+        let result = tokio::time::timeout(timeout, response_future)
+            .await
+            .map_err(|e| format!("HyperAgent: Request timed out for {:?}: {:?}", uri, e))?;
+        let response = result.map_err(|e| format!("Request failed for {:?}: {:?}", uri, e))?;
+        hyper::body::to_bytes(response)
+            .await
+            .map(|bytes| bytes.to_vec())
+            .map_err(|e| {
+                format!(
+                    "HyperAgent: Request failed to get bytes for {:?}: {:?}",
+                    uri, e
+                )
+            })
+    }
+}
+
+#[async_trait]
+impl HttpClientStub for HyperHttpClientStub {
+    async fn get(&self, end_point: &str, timeout: Duration) -> Result<Vec<u8>, String> {
+        let uri = self.build_uri(end_point)?;
+        Self::wait_for_one_http_request(uri.clone(), self.client.get(uri), timeout).await
+    }
+
+    async fn post(
+        &self,
+        end_point: &str,
+        http_body: Vec<u8>,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        let uri = self.build_uri(end_point)?;
+        let response_future = self.build_post_request(uri.clone(), http_body)?;
+
+        let result = tokio::time::timeout(timeout, response_future)
+            .await
+            .map_err(|e| format!("HyperAgent: POST Timed out for {:?}: {:?}", uri, e))?;
+        result
+            .map(|_| ())
+            .map_err(|e| format!("HyperAgent: POST failed for {:?}: {:?}", uri, e))
+    }
+
+    async fn post_with_response(
+        &self,
+        end_point: &str,
+        http_body: Vec<u8>,
+        timeout: Duration,
+    ) -> Result<Vec<u8>, String> {
+        let uri = self.build_uri(end_point)?;
+        let response_future = self.build_post_request(uri.clone(), http_body)?;
+        Self::wait_for_one_http_request(uri, response_future, timeout).await
+    }
+
+    fn as_reqwest_client(&self) -> &reqwest::Client {
+        panic!("as_reqwest_client(): requested for Hyper client");
+    }
+}
+
 /// An agent to talk to the Internet Computer through the public endpoints.
 #[derive(Clone)]
 pub struct Agent {
@@ -145,7 +376,7 @@ pub struct Agent {
 
     // Per reqwest document, cloning a client does not clone the actual connection pool inside.
     // Therefore directly owning a client as opposed to a reference is the standard way to go.
-    pub client: reqwest::Client,
+    pub client: Arc<dyn HttpClientStub>,
 
     pub sender: Sender,
 
@@ -179,7 +410,14 @@ impl Agent {
     /// sent. If the requests are authenticated, the corresponding `pub_key` and
     /// `sender_sig` field are set in the request envelope.
     pub fn new(url: Url, sender: Sender) -> Self {
-        Self::new_with_client(reqwest::Client::new(), url, sender)
+        let client = ReqwestHttpClientStub::new(url.clone(), reqwest::Client::new());
+        Self::build_agent(url, Arc::new(client), sender)
+    }
+
+    /// Creates an agents using Hyper connector
+    pub fn new_with_hyper(url: Url, sender: Sender) -> Self {
+        let client = HyperHttpClientStub::new(url.clone());
+        Self::build_agent(url, Arc::new(client), sender)
     }
 
     /// Creates an agent.
@@ -187,6 +425,17 @@ impl Agent {
     /// Same as above except gives the caller the option to retain a
     /// pre-existing reqwest-client.
     pub fn new_with_client(client: reqwest::Client, url: Url, sender: Sender) -> Self {
+        let client = ReqwestHttpClientStub::new(url.clone(), client);
+        Self::build_agent(url, Arc::new(client), sender)
+    }
+
+    /// This is needed by rust_canister tests
+    pub fn new_for_test(&self, sender: Sender) -> Self {
+        Self::build_agent(self.url.clone(), self.client.clone(), sender)
+    }
+
+    /// Helper to create the agent
+    fn build_agent(url: Url, client: Arc<dyn HttpClientStub>, sender: Sender) -> Self {
         let sender_field = Blob(sender.get_principal_id().into_vec());
         Self {
             url,
@@ -229,24 +478,13 @@ impl Agent {
         &self,
         param: Option<CatchUpPackageParam>,
     ) -> Result<Option<pb::CatchUpPackage>, String> {
-        let url = self
-            .url
-            .join(CATCH_UP_PACKAGE_PATH)
-            .map_err(|e| format!("{}", e))?;
-
         let body = param
             .and_then(|param| serde_cbor::to_vec(&param).ok())
             .unwrap_or_default();
-        let request = self.prepare_cbor_post_request_body(url, body);
-
-        let bytes = request
-            .timeout(Duration::from_secs(10))
-            .send()
-            .await
-            .map_err(|e| format!("Sending CUP request failed: {:?}", e))?
-            .bytes()
-            .await
-            .map_err(|e| format!("Receiving from CUP endpoint failed: {:?}", e))?;
+        let bytes = self
+            .client
+            .post_with_response(CATCH_UP_PACKAGE_PATH, body, Duration::from_secs(10))
+            .await?;
 
         // Response is either empty or a protobuf encoded byte stream.
         let cup = if bytes.is_empty() {
@@ -271,16 +509,15 @@ impl Agent {
         method: &str,
         arg: Option<Vec<u8>>,
     ) -> Result<Option<Vec<u8>>, String> {
-        let url = self.url.join(QUERY_PATH).map_err(|e| format!("{}", e))?;
         let envelope = self
             .prepare_query(method, canister_id, arg)
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
-        let request = self.prepare_cbor_post_request_body(url, envelope);
+        let bytes = self
+            .client
+            .post_with_response(QUERY_PATH, envelope, self.query_timeout)
+            .await?;
+        let cbor = bytes_to_cbor(bytes)?;
 
-        let cbor = match wait_for_one_http_request(request, self.query_timeout).await {
-            Ok(c) => Ok(c),
-            Err(e) => Err(format!("Canister query call failed: {:?}", e)),
-        }?;
         let call_response = parse_canister_query_response(&cbor)?;
         if call_response.status == "replied" {
             Ok(call_response.reply)
@@ -316,14 +553,7 @@ impl Agent {
         timeout: Duration,
     ) -> Result<Option<Vec<u8>>, String> {
         let (http_body, request_id) = self.prepare_update(canister_id, method, arguments, nonce)?;
-
-        let url = self.url.join(UPDATE_PATH).map_err(|e| format!("{}", e))?;
-        let deadline = self.time_source.get_relative_time() + timeout;
-        let request = self.prepare_cbor_post_request_body(url, http_body);
-
-        if let Err(e) = request.timeout(timeout).send().await {
-            return Err(format!("Error while performing update: {:?}", e));
-        }
+        self.client.post(UPDATE_PATH, http_body, timeout).await?;
 
         // Exponential backoff from 100ms to 10s with a multiplier of 1.3.
         const MIN_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -332,6 +562,7 @@ impl Agent {
 
         let mut poll_interval = MIN_POLL_INTERVAL;
         let mut next_poll_time = self.time_source.get_relative_time() + poll_interval;
+        let deadline = self.time_source.get_relative_time() + timeout;
 
         while next_poll_time < deadline {
             delay_for(poll_interval).await;
@@ -376,12 +607,17 @@ impl Agent {
         &self,
         request_id: MessageId,
         timeout: Duration,
-    ) -> Result<CBOR, Box<dyn Error>> {
-        let url = self.url.join(QUERY_PATH)?;
-        let request = self.prepare_cbor_post_request(url);
+    ) -> Result<CBOR, String> {
         let path = Path::new(vec!["request_status".into(), request_id.into()]);
-        let status_request_body = self.prepare_read_state(&[path])?;
-        wait_for_one_http_request(request.body(status_request_body), timeout).await
+        let status_request_body = self
+            .prepare_read_state(&[path])
+            .map_err(|e| format!("Failed to prepare read state: {:?}", e))?;
+
+        let bytes = self
+            .client
+            .post_with_response(QUERY_PATH, status_request_body, timeout)
+            .await?;
+        bytes_to_cbor(bytes)
     }
 
     /// Requests the status of a pending canister update call request exactly
@@ -395,24 +631,18 @@ impl Agent {
     ) -> Result<RequestStatus, String> {
         let cbor = self
             .request_status_once(request_id.clone(), timeout)
-            .await
-            .map_err(|e| {
-                format!(
-                    "Couldn't get the status of request {} due to {:?}.",
-                    request_id, e
-                )
-            })?;
+            .await?;
         parse_read_state_response(&request_id, cbor)
     }
 
     /// Requests the version of the public spec supported by this node by
     /// querying /api/v1/status.
     pub async fn ic_api_version(&self) -> Result<String, String> {
-        let url = self.url.join(NODE_STATUS_PATH).unwrap();
-        let resp = wait_for_one_http_request(self.client.get(url), self.query_timeout)
-            .await
-            .map_err(|e| format!("{}", e))?;
-
+        let bytes = self
+            .client
+            .get(NODE_STATUS_PATH, self.query_timeout)
+            .await?;
+        let resp = bytes_to_cbor(bytes)?;
         let response = serde_cbor::value::from_value::<HttpStatusResponse>(resp)
             .map_err(|source| format!("decoding to HttpStatusResponse failed: {}", source))?;
 
@@ -422,29 +652,15 @@ impl Agent {
     /// Requests the Replica impl version of this node by querying
     /// /api/v1/status
     pub async fn impl_version(&self) -> Result<Option<String>, String> {
-        let url = self.url.join(NODE_STATUS_PATH).unwrap();
-        let resp = wait_for_one_http_request(self.client.get(url), self.query_timeout)
-            .await
-            .map_err(|e| format!("{}", e))?;
-
+        let bytes = self
+            .client
+            .get(NODE_STATUS_PATH, self.query_timeout)
+            .await?;
+        let resp = bytes_to_cbor(bytes)?;
         let response = serde_cbor::value::from_value::<HttpStatusResponse>(resp)
             .map_err(|source| format!("decoding to HttpStatusResponse failed: {}", source))?;
 
         Ok(response.impl_version)
-    }
-
-    fn prepare_cbor_post_request(&self, url: Url) -> RequestBuilder {
-        self.client
-            .post(url)
-            .header("Content-Type", "application/cbor")
-    }
-
-    pub(crate) fn prepare_cbor_post_request_body(
-        &self,
-        url: Url,
-        http_body: Vec<u8>,
-    ) -> RequestBuilder {
-        self.prepare_cbor_post_request(url).body(http_body)
     }
 }
 
@@ -534,16 +750,10 @@ pub fn sign_read(
     })
 }
 
-/// Sends the given request, waits for the response from the server, and parses
-/// it as CBOR.
-async fn wait_for_one_http_request(
-    request: reqwest::RequestBuilder,
-    timeout: Duration,
-) -> Result<CBOR, Box<dyn Error>> {
-    let bytes = request.timeout(timeout).send().await?.bytes().await?;
+fn bytes_to_cbor(bytes: Vec<u8>) -> Result<CBOR, String> {
     let cbor = serde_cbor::from_slice(&bytes).map_err(|e| {
         format!(
-            "Failed to parse result from IC, got: {:?} - error {:?}",
+            "Agent::bytes_to_cbor: Failed to parse result from IC, got: {:?} - error {:?}",
             bytes, e
         )
     })?;
@@ -557,9 +767,11 @@ mod tests {
     use ic_test_utilities::{
         crypto::temp_crypto_component_with_fake_registry, FastForwardTimeSource,
     };
-    use ic_types::messages::{HttpCanisterUpdate, HttpUserQuery, SignedIngress, SignedReadRequest};
+    use ic_types::messages::{
+        HttpCanisterUpdate, HttpRequest, HttpUserQuery, ReadContent, SignedIngress,
+    };
     use ic_types::{PrincipalId, Time, UserId};
-    use ic_validator::{validate_message, validate_user_id_and_signature};
+    use ic_validator::{validate_message, validate_request_auth};
     use rand_chacha::ChaChaRng;
     use rand_core::SeedableRng;
     use tokio_test::assert_ok;
@@ -610,7 +822,7 @@ mod tests {
 
         // The message id matches one that can be reconstructed from the output
         let signed_ingress = SignedIngress::try_from((submit, current_time)).unwrap();
-        assert_eq!(id, MessageId::from(signed_ingress.content()));
+        assert_eq!(id, signed_ingress.id());
 
         // The envelope can be successfully authenticated
         let validator = temp_crypto_component_with_fake_registry(node_test_id(VALIDATOR_NODE_ID));
@@ -651,7 +863,7 @@ mod tests {
 
         // The message id matches one that can be reconstructed from the output
         let signed_ingress = SignedIngress::try_from((submit, current_time)).unwrap();
-        assert_eq!(id, MessageId::from(signed_ingress.content()));
+        assert_eq!(id, signed_ingress.id());
 
         // The envelope can be successfully authenticated
         let validator = temp_crypto_component_with_fake_registry(node_test_id(VALIDATOR_NODE_ID));
@@ -701,15 +913,8 @@ mod tests {
         assert_eq!(read.content, content_copy);
 
         // The signature matches
-        let signed_read = SignedReadRequest::try_from((read, current_time)).unwrap();
+        let read_request = HttpRequest::<ReadContent>::try_from(read).unwrap();
         let validator = temp_crypto_component_with_fake_registry(node_test_id(VALIDATOR_NODE_ID));
-        let message_id = signed_read.message_id();
-        assert_ok!(validate_user_id_and_signature(
-            &validator,
-            &sender,
-            &message_id,
-            &signed_read.signature().cloned(),
-            time_now()
-        ));
+        assert_ok!(validate_request_auth(&read_request, &validator, time_now()));
     }
 }

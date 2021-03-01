@@ -1,11 +1,13 @@
-use crate::{consensus::ValidationResult, consensus_pool::ConsensusPoolCache};
+use crate::{
+    consensus_pool::ConsensusPoolCache,
+    validation::{ValidationError, ValidationResult},
+};
 use ic_types::artifact::CertificationArtifact;
 use ic_types::{
     artifact::{CertificationMessageFilter, PriorityFn},
     consensus::certification::{Certification, CertificationMessage, CertificationShare},
     crypto::CryptoError,
-    registry::RegistryClientError,
-    Height, RegistryVersion, SubnetId,
+    CryptoHashOfPartialState, Height, RegistryVersion, SubnetId,
 };
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
@@ -63,7 +65,7 @@ pub trait CertifierGossip: Send + Sync {
 pub type ChangeSet = Vec<ChangeAction>;
 
 /// Change actions applicable to the certification pool.
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum ChangeAction {
     /// Adds the artifact to the validated pool.
     AddToValidated(CertificationMessage),
@@ -118,12 +120,45 @@ pub trait MutableCertificationPool: CertificationPool {
     fn apply_changes(&mut self, change_set: ChangeSet);
 }
 
-/// Enumeration of all possible errors the verifier component can return.
+/// Enumeration of all permanent errors the verifier component can return.
 #[derive(Debug, PartialEq)]
-pub enum VerifierError {
+pub enum CertificationPermanentError {
     CryptoError(CryptoError),
-    RegistryClientError(RegistryClientError),
+    UnexpectedCertificationHash(CryptoHashOfPartialState),
+    RejectedByRejectingVerifier, // for testing only
 }
+
+/// Enumeration of all transient errors the verifier component can return.
+#[derive(Debug, PartialEq)]
+pub enum CertificationTransientError {
+    CryptoError(CryptoError),
+}
+
+impl From<CryptoError> for CertificationTransientError {
+    fn from(err: CryptoError) -> CertificationTransientError {
+        CertificationTransientError::CryptoError(err)
+    }
+}
+
+impl From<CryptoError> for CertificationPermanentError {
+    fn from(err: CryptoError) -> CertificationPermanentError {
+        CertificationPermanentError::CryptoError(err)
+    }
+}
+
+impl<T> From<CertificationPermanentError> for ValidationError<CertificationPermanentError, T> {
+    fn from(err: CertificationPermanentError) -> ValidationError<CertificationPermanentError, T> {
+        ValidationError::Permanent(err)
+    }
+}
+
+impl<P> From<CertificationTransientError> for ValidationError<P, CertificationTransientError> {
+    fn from(err: CertificationTransientError) -> ValidationError<P, CertificationTransientError> {
+        ValidationError::Transient(err)
+    }
+}
+
+pub type VerifierError = ValidationError<CertificationPermanentError, CertificationTransientError>;
 
 /// Verifier is used to verify state hash certifications. It will be injected
 /// into XNet and StateSync components so that they can ensure the authenticity

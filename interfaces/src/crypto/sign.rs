@@ -320,10 +320,7 @@ pub trait ThresholdSigner<T: Signable> {
     ///   `DkgAlgorithm::load_transcript`, respectively) must be called prior to
     ///   calling this method.
     /// * `CryptoError::SecretKeyNotFound` if the secret key is not present in
-    ///   the secret key store. Note that calling
-    ///   `NiDkgAlgorithm::load_transcript` (or `DkgAlgorithm::load_transcript`,
-    ///   respectively) does not help to recover from this, since this error
-    ///   only occurs in case the transcript has been loaded successfully.
+    ///   the secret key store.
     // TODO (CRP-479): switch to Result<ThresholdSigShareOf<T>,
     // ThresholdSigDataNotFoundError>
     fn sign_threshold(&self, message: &T, dkg_id: DkgId) -> CryptoResult<ThresholdSigShareOf<T>>;

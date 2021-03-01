@@ -1,8 +1,7 @@
 use crate::{
     artifact::Artifact,
     chunkable::{
-        ArtifactChunk, ArtifactChunkData, ArtifactErrorCode, ChunkData, ChunkId, Chunkable,
-        ChunkableArtifact,
+        ArtifactChunk, ArtifactChunkData, ArtifactErrorCode, ChunkId, Chunkable, ChunkableArtifact,
     },
     crypto::CryptoHash,
 };
@@ -36,14 +35,12 @@ impl ChunkableArtifact for FileTreeSyncArtifact {
         // Return manifest for artifact. Returns a count of files
         // under the artifact directory
         if chunk_id.get() == CHUNKID_MANIFEST_CHUNK {
-            let chunk_data = ChunkData {
-                payload: serialize(&count).expect("Binary serialization failed"),
-            };
             return Some(ArtifactChunk {
                 chunk_id,
                 witness: Default::default(),
-                size: 0,
-                artifact_chunk_data: ArtifactChunkData::SemiStructuredChunkData(chunk_data),
+                artifact_chunk_data: ArtifactChunkData::SemiStructuredChunkData(
+                    serialize(&count).expect("Binary serialization failed"),
+                ),
             });
         }
 
@@ -56,15 +53,12 @@ impl ChunkableArtifact for FileTreeSyncArtifact {
             return None;
         }
 
-        // echo back the chunk id signaling that chunk is present.
-        let chunk_data = ChunkData {
-            payload: serialize(&chunk_id).expect("Binary serialization failed"),
-        };
         Some(ArtifactChunk {
             chunk_id,
             witness: Default::default(),
-            size: 0,
-            artifact_chunk_data: ArtifactChunkData::SemiStructuredChunkData(chunk_data),
+            artifact_chunk_data: ArtifactChunkData::SemiStructuredChunkData(
+                serialize(&chunk_id).expect("Binary serialization failed"),
+            ),
         })
     }
 }
@@ -137,7 +131,7 @@ impl Chunkable for FileTreeSyncChunksTracker {
         let count_or_chunk_id = if let ArtifactChunkData::SemiStructuredChunkData(chunkdata) =
             artifact_chunk.artifact_chunk_data
         {
-            deserialize(&chunkdata.payload).expect("Failed to deserialize chunk data")
+            deserialize(&chunkdata).expect("Failed to deserialize chunk data")
         } else {
             println!("File tree sync FSM error 1");
             return Err(ArtifactErrorCode::ChunkVerificationFailed);

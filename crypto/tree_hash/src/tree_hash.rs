@@ -1,12 +1,13 @@
 use crate::hasher::Hasher;
 use crate::{
-    Digest, HashTree, HashTreeBuilder, Label, LabeledTree, MixedHashTree, Path, TreeHashError,
-    Witness, WitnessGenerator,
+    flatmap, Digest, FlatMap, HashTree, HashTreeBuilder, Label, LabeledTree, MixedHashTree, Path,
+    TreeHashError, Witness, WitnessGenerator,
 };
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 use std::convert::TryFrom;
 use std::fmt;
 use std::fmt::Debug;
+use std::iter::Peekable;
 
 #[cfg(test)]
 mod tests;
@@ -90,7 +91,7 @@ fn write_labeled_tree<T: Debug>(
     match tree {
         LabeledTree::Leaf(t) => writeln!(f, "{}\\__ leaf:{:?}", indent, t),
         LabeledTree::SubTree(children) => {
-            for child in children {
+            for child in children.iter() {
                 writeln!(f, "{}+-- {}:", indent, child.0)?;
                 write_labeled_tree(child.1, level + 1, f)?;
             }
@@ -123,6 +124,179 @@ fn write_hash_tree(tree: &HashTree, level: u8, f: &mut fmt::Formatter<'_>) -> fm
     }
 }
 
+/// Prunes from `witness` the given (non-empty) `LabeledTree::SubTree` children.
+///
+/// A non-empty `LabeledTree::Subtree` maps to a tree of zero or more
+/// `Witness::Forks` with `Witness::Node` or `Witness::Known` leaves, so subtree
+/// pruning is recursive.
+///
+/// `children` is an iterator over the `SubTree` children to be pruned, sorted
+/// by label. If one or more children could not be pruned (because no such nodes
+/// exist in the witness) the iterator will not be consumed and will point to
+/// the first such child.
+fn prune_witness_subtree<'a, I>(
+    witness: &Witness,
+    children: &mut Peekable<I>,
+    curr_path: &mut Vec<Label>,
+) -> Result<Witness, TreeHashError>
+where
+    I: Iterator<Item = (&'a Label, &'a LabeledTree<Vec<u8>>)>,
+{
+    match witness {
+        Witness::Fork {
+            left_tree,
+            right_tree,
+        } => {
+            let left = prune_witness_subtree(left_tree, children, curr_path)?;
+            let right = prune_witness_subtree(right_tree, children, curr_path)?;
+
+            match (&left, &right) {
+                // Both children got pruned, replace by a `Pruned` node.
+                (
+                    Witness::Pruned {
+                        digest: left_digest,
+                    },
+                    Witness::Pruned {
+                        digest: right_digest,
+                    },
+                ) => Ok(Witness::Pruned {
+                    digest: compute_fork_digest(left_digest, right_digest),
+                }),
+
+                // Still have some (possibly modified) non-pruned nodes, create a `Fork`.
+                _ => Ok(Witness::Fork {
+                    left_tree: Box::new(left),
+                    right_tree: Box::new(right),
+                }),
+            }
+        }
+
+        Witness::Node { label, sub_witness } => {
+            match children.peek() {
+                // Labeled branch that requires some pruning.
+                Some(&(tree_label, child)) if tree_label == label => {
+                    children.next();
+
+                    curr_path.push(label.to_owned());
+                    let res = prune_witness_impl(sub_witness, child, curr_path)?;
+                    curr_path.pop();
+
+                    if let Witness::Pruned { digest } = res {
+                        // Child was pruned, prune the `Node`.
+                        Ok(Witness::Pruned {
+                            digest: compute_node_digest(label, &digest),
+                        })
+                    } else {
+                        // Return `Node` with (possibly) modified child.
+                        Ok(Witness::Node {
+                            label: label.to_owned(),
+                            sub_witness: Box::new(res),
+                        })
+                    }
+                }
+
+                // Labeled branch to be kept.
+                _ => Ok(witness.to_owned()),
+            }
+        }
+
+        // Already pruned `Node` or `Fork`, all done.
+        Witness::Pruned { .. } => Ok(witness.to_owned()),
+
+        Witness::Known() => Err(TreeHashError::InconsistentPartialTree {
+            offending_path: curr_path.to_owned(),
+        }),
+    }
+}
+
+/// Recursive implementation of `prune_witness()`.
+fn prune_witness_impl(
+    witness: &Witness,
+    partial_tree: &LabeledTree<Vec<u8>>,
+    curr_path: &mut Vec<Label>,
+) -> Result<Witness, TreeHashError> {
+    match partial_tree {
+        LabeledTree::SubTree(children) if children.is_empty() => {
+            match witness {
+                // Empty `SubTree`, prune it.
+                Witness::Known() => Ok(Witness::Pruned {
+                    digest: empty_subtree_hash(),
+                }),
+
+                // Attempting to prune `SubTree` with children without providing them.
+                _ => Err(TreeHashError::InconsistentPartialTree {
+                    offending_path: curr_path.to_owned(),
+                }),
+            }
+        }
+
+        LabeledTree::SubTree(children) if !children.is_empty() => {
+            match witness {
+                // Top-level `Fork` or `Node`, corresponding to a `LabeledTree::SubTree`.
+                Witness::Fork { .. } | Witness::Node { .. } => {
+                    let mut children = children.iter().peekable();
+
+                    let res = prune_witness_subtree(witness, &mut children, curr_path)?;
+                    if let Some((label, _)) = children.next() {
+                        curr_path.push(label.to_owned());
+                        return Err(TreeHashError::InconsistentPartialTree {
+                            offending_path: curr_path.to_owned(),
+                        });
+                    }
+                    Ok(res)
+                }
+
+                // Attempting to prune children of already pruned or empty `SubTree`.
+                Witness::Pruned { .. } | Witness::Known() => {
+                    Err(TreeHashError::InconsistentPartialTree {
+                        offending_path: curr_path.to_owned(),
+                    })
+                }
+            }
+        }
+
+        LabeledTree::SubTree(_) => unreachable!(),
+
+        LabeledTree::Leaf(v) => {
+            match witness {
+                // LabeledTree <-> Witness mismatch.
+                Witness::Fork { .. } | Witness::Node { .. } => {
+                    Err(TreeHashError::InconsistentPartialTree {
+                        offending_path: curr_path.to_owned(),
+                    })
+                }
+
+                // Nothing to do here.
+                Witness::Pruned { .. } => Ok(witness.to_owned()),
+
+                // Provided 'Leaf`, prune it.
+                Witness::Known() => Ok(Witness::Pruned {
+                    digest: compute_leaf_digest(v),
+                }),
+            }
+        }
+    }
+}
+
+/// Prunes from `witness` the nodes in `partial_tree`. If `partial_tree` is
+/// inconsistent with `witness`, e.g. includes nodes not covered by `witness`;
+/// or attempts to prune a non-empty `SubTree` by providing an empty one; an
+/// error is returned.
+///
+/// This is useful e.g. for selecting the prefix of a certified stream slice for
+/// inclusion into a block; or discarding it when already included in an earlier
+/// block.
+///
+/// Does not panic.
+#[allow(dead_code)]
+pub fn prune_witness(
+    witness: &Witness,
+    partial_tree: &LabeledTree<Vec<u8>>,
+) -> Result<Witness, TreeHashError> {
+    let mut curr_path = Vec::new();
+    prune_witness_impl(witness, partial_tree, &mut curr_path)
+}
+
 pub(crate) fn compute_leaf_digest(contents: &[u8]) -> Digest {
     let mut hasher = new_leaf_hasher();
     hasher.update(contents);
@@ -143,80 +317,20 @@ pub(crate) fn compute_fork_digest(left_digest: &Digest, right_digest: &Digest) -
     hasher.finalize()
 }
 
-fn compute_subtree_digest(
-    witness: &Witness,
-    subtree_digests: &BTreeMap<Label, Digest>,
-    curr_path: &mut Vec<Label>,
-) -> Result<Digest, TreeHashError> {
+/// Recursively searches for the first `Witness::Known` node and returns its
+/// path.
+fn path_to_first_known(witness: &Witness) -> Option<Vec<Label>> {
     match witness {
-        Witness::Pruned { digest } => Ok(digest.to_owned()),
-        Witness::Node { label, .. } => {
-            curr_path.push(label.to_owned());
-            if let Some(subtree_digest) = subtree_digests.get(label) {
-                curr_path.pop();
-                Ok(compute_node_digest(label, subtree_digest))
-            } else {
-                Err(TreeHashError::InconsistentPartialTree {
-                    offending_path: curr_path.to_owned(),
-                })
-            }
-        }
+        Witness::Known() => Some(vec![]),
         Witness::Fork {
             left_tree,
             right_tree,
-        } => {
-            let left_digest = compute_subtree_digest(left_tree, subtree_digests, curr_path)?;
-            let right_digest = compute_subtree_digest(right_tree, subtree_digests, curr_path)?;
-            Ok(compute_fork_digest(&left_digest, &right_digest))
-        }
-        _ => Err(TreeHashError::InconsistentPartialTree {
-            offending_path: curr_path.to_owned(),
+        } => path_to_first_known(left_tree).or_else(|| path_to_first_known(right_tree)),
+        Witness::Node { label, sub_witness } => path_to_first_known(sub_witness).map(|mut path| {
+            path.insert(0, label.to_owned());
+            path
         }),
-    }
-}
-
-fn recompute_digest_impl(
-    partial_tree: &LabeledTree<Vec<u8>>,
-    witness: &Witness,
-    curr_path: &mut Vec<Label>,
-) -> Result<Digest, TreeHashError> {
-    match partial_tree {
-        LabeledTree::Leaf(contents) => {
-            if *witness == Witness::Known() {
-                Ok(compute_leaf_digest(&contents))
-            } else {
-                Err(TreeHashError::InconsistentPartialTree {
-                    offending_path: curr_path.to_owned(),
-                })
-            }
-        }
-        LabeledTree::SubTree(children) if children.is_empty() => {
-            if *witness == Witness::Known() {
-                Ok(empty_subtree_hash())
-            } else {
-                Err(TreeHashError::InconsistentPartialTree {
-                    offending_path: curr_path.to_owned(),
-                })
-            }
-        }
-        LabeledTree::SubTree(children) if !children.is_empty() => {
-            let mut subtree_digests = BTreeMap::new();
-            for (label, subtree) in children.iter() {
-                curr_path.push(label.to_owned());
-                let subwitness = find_subwitness_node(label, witness);
-                if let Some(subwitness) = subwitness {
-                    let subtree_digest = recompute_digest_impl(subtree, subwitness, curr_path)?;
-                    subtree_digests.insert(label.to_owned(), subtree_digest);
-                    curr_path.pop();
-                } else {
-                    return Err(TreeHashError::InconsistentPartialTree {
-                        offending_path: curr_path.to_owned(),
-                    });
-                };
-            }
-            compute_subtree_digest(witness, &subtree_digests, curr_path)
-        }
-        _ => unreachable!(),
+        _ => None,
     }
 }
 
@@ -232,8 +346,15 @@ pub fn recompute_digest(
     partial_tree: &LabeledTree<Vec<u8>>,
     witness: &Witness,
 ) -> Result<Digest, TreeHashError> {
-    let mut curr_path = Vec::new();
-    recompute_digest_impl(partial_tree, witness, &mut curr_path)
+    let pruned = prune_witness(witness, partial_tree)?;
+    match pruned {
+        Witness::Pruned { digest } => Ok(digest),
+        Witness::Fork { .. } | Witness::Node { .. } | Witness::Known() => {
+            Err(TreeHashError::InconsistentPartialTree {
+                offending_path: path_to_first_known(&pruned).unwrap_or_else(Vec::new),
+            })
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Clone)]
@@ -264,19 +385,6 @@ fn largest_label(hash_tree: &HashTree) -> Label {
     }
 }
 
-fn largest_witness_label(witness: &Witness) -> Option<Label> {
-    match witness {
-        Witness::Fork {
-            right_tree,
-            left_tree,
-        } => {
-            largest_witness_label(right_tree).map_or_else(|| largest_witness_label(left_tree), Some)
-        }
-        Witness::Node { label, .. } => Some(label.to_owned()),
-        _ => None,
-    }
-}
-
 fn any_is_in_range(hash_tree: &HashTree, labels: &[Label]) -> bool {
     let smallest = smallest_label(hash_tree);
     let largest = largest_label(hash_tree);
@@ -289,7 +397,7 @@ fn any_is_in_range(hash_tree: &HashTree, labels: &[Label]) -> bool {
 // Returns a missing label, if any is indeed missing.
 fn find_missing_label(
     needed_labels: &[Label],
-    map: &BTreeMap<Label, LabeledTree<Digest>>,
+    map: &FlatMap<Label, LabeledTree<Digest>>,
 ) -> Option<Label> {
     for label in needed_labels {
         if map.get(label) == None {
@@ -406,44 +514,14 @@ fn find_subtree_node<'a>(target_label: &Label, hash_tree: &'a HashTree) -> &'a H
     }
 }
 
-// Finds in the given `witness` a sub-witness corresponding to `target_label`,
-// if present.
-//
-// TODO(CRP-426) currently the running time is O((log n)^2); make it O(log(n))
-//     via binary search on the list of all labels in `hash_tree`.
-fn find_subwitness_node<'a>(target_label: &Label, witness: &'a Witness) -> Option<&'a Witness> {
-    match witness {
-        Witness::Node { label, sub_witness } => {
-            if target_label == label {
-                Some(sub_witness)
-            } else {
-                None
-            }
-        }
-        Witness::Fork {
-            left_tree,
-            right_tree,
-        } => {
-            let largest_left = largest_witness_label(left_tree);
-            if largest_left.is_some() && *target_label <= largest_left.unwrap() {
-                find_subwitness_node(target_label, left_tree)
-            } else {
-                find_subwitness_node(target_label, right_tree)
-            }
-        }
-        _ => None,
-    }
-}
-
 // Generates a witness for a HashTree that represents a single
 // LabeledTree::SubTree node, and uses the given sub_witnesses
 // for the children of the node (if provided).
 fn witness_for_subtree<Builder: WitnessBuilder>(
     hash_tree: &HashTree,
-    sub_witnesses: &mut BTreeMap<Label, Builder::Tree>,
+    sub_witnesses: &mut FlatMap<Label, Builder::Tree>,
 ) -> Builder::Tree {
-    let labels: Vec<Label> = sub_witnesses.keys().cloned().collect();
-    if any_is_in_range(hash_tree, &labels) {
+    if any_is_in_range(hash_tree, sub_witnesses.keys()) {
         match hash_tree {
             HashTree::Fork {
                 // inside HashTree, recurse to subtrees
@@ -503,7 +581,7 @@ impl WitnessGeneratorImpl {
             }
             LabeledTree::SubTree(children) if !children.is_empty() => {
                 if let LabeledTree::SubTree(orig_children) = orig_tree {
-                    let needed_labels: Vec<Label> = children.keys().cloned().collect();
+                    let needed_labels: Vec<Label> = children.keys().to_vec();
                     if let Some(missing_label) = find_missing_label(&needed_labels, orig_children) {
                         curr_path.push(missing_label);
                         return Err(TreeHashError::InconsistentPartialTree {
@@ -514,7 +592,7 @@ impl WitnessGeneratorImpl {
                     // of the current LabeledTree::SubTree.
                     // TODO(CRP-426) remove the multiple traversal of the subtree-HashTree
                     //   (in find_subtree_node() and in witness_for_subtree()).
-                    let mut sub_witnesses = BTreeMap::new();
+                    let mut sub_witnesses = FlatMap::new();
                     for label in children.keys() {
                         curr_path.push(label.to_owned());
                         let sub_witness = self.witness_impl::<Builder, _>(
@@ -523,8 +601,12 @@ impl WitnessGeneratorImpl {
                             find_subtree_node(label, hash_tree),
                             curr_path,
                         )?;
+                        sub_witnesses
+                            .try_append(label.to_owned(), sub_witness)
+                            .unwrap_or_else(|_| {
+                                panic!("Tree is not sorted at path {}", path_as_string(curr_path))
+                            });
                         curr_path.pop();
-                        sub_witnesses.insert(label.to_owned(), sub_witness);
                     }
 
                     // `children` is a subset of `orig_children`
@@ -570,41 +652,56 @@ fn path_as_string(path: &[Label]) -> String {
     str
 }
 
-// If 'labeled_tree` is a LabeledTree::SubTree with an non-empty map,
-// returns this map, and otherwise returns an error.
-fn maybe_nonempty_map(
-    labeled_tree: LabeledTree<Digest>,
-    curr_path: &[Label],
-) -> Result<BTreeMap<Label, LabeledTree<Digest>>, TreeHashError> {
-    match labeled_tree {
-        LabeledTree::Leaf(_) => Err(TreeHashError::InvalidArgument {
-            info: "subtree leaf without a node at path ".to_owned() + &path_as_string(curr_path),
-        }),
-        LabeledTree::SubTree(map) => {
-            if map.is_empty() {
-                // This is actually not reachable from within `labeled_tree_from_hashtree()`,
-                // as before we could create from `HashTree` a `LabeledTree::SubTree`
-                // with an empty map, we would encounter the other error case in this match,
-                // namely `LabeledTree::Leaf()` with the error "subtree leaf without a node".
-                Err(TreeHashError::InvalidArgument {
-                    info: "subtree without labels at path ".to_owned() + &path_as_string(curr_path),
-                })
-            } else {
-                Ok(map)
-            }
-        }
-    }
-}
-
-#[allow(clippy::map_entry)]
 fn labeled_tree_from_hashtree(
     hash_tree: &HashTree,
     curr_path: &mut Vec<Label>,
 ) -> Result<LabeledTree<Digest>, TreeHashError> {
+    /// Traverses the first level of labeled Nodes reacheable from the specified
+    /// tree root, recursively converts those into labeled trees and
+    /// collects them into a map indexed by the corresponding label.
+    fn collect_children(
+        tree: &HashTree,
+        path: &mut Vec<Label>,
+        map: &mut FlatMap<Label, LabeledTree<Digest>>,
+    ) -> Result<(), TreeHashError> {
+        match tree {
+            HashTree::Leaf { .. } => Err(TreeHashError::InvalidArgument {
+                info: format!(
+                    "subtree leaf without a node at path {}",
+                    path_as_string(path)
+                ),
+            }),
+
+            HashTree::Node {
+                label, hash_tree, ..
+            } => {
+                path.push(label.clone());
+                let child = labeled_tree_from_hashtree(hash_tree, path)?;
+                path.pop();
+                map.try_append(label.clone(), child)
+                    .map_err(|_| TreeHashError::InvalidArgument {
+                        info: format!(
+                            "non-sorted labels in a subtree at path {}",
+                            path_as_string(path)
+                        ),
+                    })
+            }
+
+            HashTree::Fork {
+                ref left_tree,
+                ref right_tree,
+                ..
+            } => {
+                collect_children(left_tree, path, map)?;
+                collect_children(right_tree, path, map)
+            }
+        }
+    }
+
     match hash_tree {
         HashTree::Leaf { digest } => {
             if *digest == empty_subtree_hash() {
-                Ok(LabeledTree::SubTree(BTreeMap::new()))
+                Ok(LabeledTree::SubTree(FlatMap::new()))
             } else {
                 Ok(LabeledTree::Leaf(digest.to_owned()))
             }
@@ -617,8 +714,7 @@ fn labeled_tree_from_hashtree(
             curr_path.push(label.to_owned());
             let labeled_subtree = labeled_tree_from_hashtree(hash_subtree, curr_path)?;
             curr_path.pop();
-            let mut map = BTreeMap::new();
-            map.insert(label.to_owned(), labeled_subtree);
+            let map = flatmap!(label.to_owned() => labeled_subtree);
             Ok(LabeledTree::SubTree(map))
         }
 
@@ -627,23 +723,11 @@ fn labeled_tree_from_hashtree(
             right_tree,
             ..
         } => {
-            let mut map = labeled_tree_from_hashtree(left_tree, curr_path)
-                .and_then(|labeled_tree| maybe_nonempty_map(labeled_tree, curr_path))?;
+            let mut children = FlatMap::new();
+            collect_children(left_tree, curr_path, &mut children)?;
+            collect_children(right_tree, curr_path, &mut children)?;
 
-            let right_map = labeled_tree_from_hashtree(right_tree, curr_path)
-                .and_then(|labeled_tree| maybe_nonempty_map(labeled_tree, curr_path))?;
-            let max_left_label = map.keys().last().unwrap().to_owned();
-            for (label, subtree) in right_map {
-                if label <= max_left_label {
-                    return Err(TreeHashError::InvalidArgument {
-                        info: "non-sorted labels in a subtree at path ".to_owned()
-                            + &path_as_string(curr_path),
-                    });
-                } else {
-                    map.insert(label, subtree);
-                }
-            }
-            Ok(LabeledTree::SubTree(map))
+            Ok(LabeledTree::SubTree(children))
         }
     }
 }
@@ -685,7 +769,7 @@ pub fn sparse_labeled_tree_from_paths(paths: &mut [Path]) -> LabeledTree<()> {
     // is always first.
     paths.sort();
 
-    let mut root = LabeledTree::SubTree(BTreeMap::new());
+    let mut root = LabeledTree::SubTree(FlatMap::new());
 
     for path in paths.iter() {
         let mut tree = &mut root;
@@ -700,10 +784,12 @@ pub fn sparse_labeled_tree_from_paths(paths: &mut [Path]) -> LabeledTree<()> {
                     if !map.contains_key(label) {
                         if i < path.len() - 1 {
                             // Add a subtree for the label on the path.
-                            map.insert(label.clone(), LabeledTree::SubTree(BTreeMap::new()));
+                            map.try_append(label.clone(), LabeledTree::SubTree(FlatMap::new()))
+                                .unwrap();
                         } else {
                             // The last label on the path is always a leaf.
-                            map.insert(label.clone(), LabeledTree::Leaf(()));
+                            map.try_append(label.clone(), LabeledTree::Leaf(()))
+                                .unwrap();
                         }
                     }
                     // Traverse to the newly created tree.
@@ -713,7 +799,7 @@ pub fn sparse_labeled_tree_from_paths(paths: &mut [Path]) -> LabeledTree<()> {
         }
     }
 
-    if root == LabeledTree::SubTree(BTreeMap::new()) {
+    if root == LabeledTree::SubTree(FlatMap::new()) {
         root = LabeledTree::Leaf(())
     }
 
@@ -775,9 +861,9 @@ enum ActiveNode {
         label: Label,
     },
     SubTree {
-        children: BTreeMap<Label, LabeledTree<Digest>>,
+        children: Vec<(Label, LabeledTree<Digest>)>,
         label: Label,
-        hash_nodes: BTreeMap<Label, HashTree>,
+        hash_nodes: Vec<(Label, HashTree)>,
     },
     Undefined {
         label: Label,
@@ -855,8 +941,8 @@ impl fmt::Debug for HashTreeBuilderImpl {
                     children, label, ..
                 } => {
                     write!(f, "[{}]: {} ", pos, label)?;
-                    for child in children {
-                        write!(f, " child({}, {:?}) ", child.0.clone(), child.1)?;
+                    for (label, child) in children.iter() {
+                        write!(f, " child({}, {:?}) ", label, child)?;
                     }
                 }
             }
@@ -922,12 +1008,12 @@ impl HashTreeBuilder for HashTreeBuilderImpl {
                             label,
                             mut hash_nodes,
                         } => {
-                            children.insert(
+                            children.push((
                                 child_label.to_owned(),
                                 LabeledTree::Leaf(digest.to_owned()),
-                            );
+                            ));
                             let hash_node = into_hash_node(&child_label, HashTree::Leaf { digest });
-                            hash_nodes.insert(child_label, hash_node);
+                            hash_nodes.push((child_label, hash_node));
                             self.curr_path.push(ActiveNode::SubTree {
                                 children,
                                 label,
@@ -947,9 +1033,9 @@ impl HashTreeBuilder for HashTreeBuilderImpl {
         match head {
             ActiveNode::Undefined { label } => {
                 self.curr_path.push(ActiveNode::SubTree {
-                    children: BTreeMap::new(),
+                    children: Default::default(),
                     label,
-                    hash_nodes: BTreeMap::new(),
+                    hash_nodes: Default::default(),
                 });
             }
             _ => panic!("Invalid operation, expected Undefined-node."),
@@ -965,9 +1051,6 @@ impl HashTreeBuilder for HashTreeBuilderImpl {
                 label,
                 hash_nodes,
             } => {
-                if children.contains_key(&edge_label) {
-                    panic!("Edge with label {} already exists.", edge_label);
-                }
                 self.curr_path.push(ActiveNode::SubTree {
                     children,
                     label,
@@ -988,13 +1071,19 @@ impl HashTreeBuilder for HashTreeBuilderImpl {
                 label: finished_label,
                 hash_nodes: finished_hash_nodes,
             } => {
-                let hash_trees: VecDeque<_> =
-                    finished_hash_nodes.into_iter().map(|(_k, v)| v).collect();
+                let finished_children_map = FlatMap::from_key_values(finished_children);
+                let finished_hash_nodes_map = FlatMap::from_key_values(finished_hash_nodes);
+
+                let hash_trees: VecDeque<_> = finished_hash_nodes_map
+                    .into_iter()
+                    .map(|(_k, v)| v)
+                    .collect();
+
                 let hash_tree = into_hash_tree(hash_trees);
 
                 if self.curr_path.is_empty() {
                     // At root.
-                    self.labeled_tree = Some(LabeledTree::SubTree(finished_children));
+                    self.labeled_tree = Some(LabeledTree::SubTree(finished_children_map));
                     self.hash_tree = Some(hash_tree);
                 } else {
                     // In a subtree.
@@ -1004,12 +1093,12 @@ impl HashTreeBuilder for HashTreeBuilderImpl {
                             label,
                             mut hash_nodes,
                         } => {
-                            children.insert(
+                            children.push((
                                 finished_label.to_owned(),
-                                LabeledTree::SubTree(finished_children),
-                            );
+                                LabeledTree::SubTree(finished_children_map),
+                            ));
                             let hash_node = into_hash_node(&finished_label, hash_tree);
-                            hash_nodes.insert(finished_label, hash_node);
+                            hash_nodes.push((finished_label, hash_node));
 
                             self.curr_path.push(ActiveNode::SubTree {
                                 children,

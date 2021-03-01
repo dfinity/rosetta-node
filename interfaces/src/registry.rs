@@ -88,6 +88,31 @@ pub trait RegistryClient: Send + Sync {
         version: RegistryVersion,
     ) -> RegistryClientVersionedResult<Vec<u8>>;
 
+    /// Returns all keys that start with `key_prefix` and are present at version
+    /// `version`.
+    ///
+    /// Given the definition of get_value above, let K* be the set of all
+    /// possible keys that start with `key_prefix`, then the following
+    /// holds:
+    ///
+    /// (1) ∀ k ∈ K*: get_value(k, version).is_err()
+    ///      <=> get_versioned_key_family(key_prefix, version).is_err()
+    ///
+    ///   (For a given version, all keys of a key family must be well-defined.)
+    ///
+    /// (2) ∀ k ∈ K*: get_value(k, version).is_ok().is_some() <=>
+    ///     get_key_family(key_prefix, version).is_ok().contains(k)
+    ///
+    ///   (get_key_family is consistent with get_value)
+    ///
+    /// The returned list does not contain any duplicates. There are no
+    /// guarantees wrt. the order of the contained elements.
+    fn get_key_family(
+        &self,
+        key_prefix: &str,
+        version: RegistryVersion,
+    ) -> Result<Vec<String>, RegistryClientError>;
+
     fn get_value(&self, key: &str, version: RegistryVersion) -> RegistryClientResult<Vec<u8>> {
         self.get_versioned_value(key, version).map(|vr| vr.value)
     }

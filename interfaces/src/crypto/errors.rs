@@ -14,9 +14,9 @@ impl ErrorReplication for CryptoError {
             // true, as validity checks of arguments are stable across replicas
             CryptoError::InvalidArgument { .. } => true,
             // true, as the registry is guaranteed to be consistent across replicas
-            CryptoError::PublicKeyNotFound { .. } => true,
+            CryptoError::PublicKeyNotFound { .. } | CryptoError::TlsCertNotFound { .. } => true,
             // panic, as during signature verification no secret keys are involved
-            CryptoError::SecretKeyNotFound { .. } => {
+            CryptoError::SecretKeyNotFound { .. } | CryptoError::TlsSecretKeyNotFound { .. } => {
                 panic!("Unexpected error {}, no secret keys involved", &self)
             }
             // true tentatively, but may change to panic! in the future:

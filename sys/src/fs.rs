@@ -5,6 +5,8 @@ use std::path::Path;
 pub enum FileCloneError {
     /// The underlying file system doesn't support reflinks (file clones).
     OperationNotSupported,
+    /// Source and destination are not on the same filesystem.
+    DifferentFileSystems,
     /// Unexpected IO error happened when we called the syscall that clones a
     /// file.
     IoError(std::io::Error),
@@ -14,6 +16,7 @@ impl std::fmt::Display for FileCloneError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::OperationNotSupported => write!(f, "filesystem doesn't support reflinks"),
+            Self::DifferentFileSystems => write!(f, "src and dst aren't on the same filesystem"),
             Self::IoError(err) => write!(f, "IO error: {}", err),
         }
     }
@@ -45,6 +48,7 @@ fn handle_last_os_error() -> FileCloneError {
     let err = std::io::Error::last_os_error();
     match err.raw_os_error() {
         Some(libc::EOPNOTSUPP) | Some(libc::ENOSYS) => FileCloneError::OperationNotSupported,
+        Some(libc::EXDEV) => FileCloneError::DifferentFileSystems,
         _ => FileCloneError::IoError(err),
     }
 }
