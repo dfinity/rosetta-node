@@ -1,7 +1,13 @@
 FROM ubuntu:latest
+
+WORKDIR /root
+
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         ca-certificates \
         libssl1.1
+
+COPY log_config.yml /root/
 COPY target/release/ic-rosetta-api /usr/local/bin/ic-rosetta-api
+
 ENTRYPOINT ["/usr/local/bin/ic-rosetta-api", "--store-location", "/data"]
