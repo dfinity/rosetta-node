@@ -45,6 +45,9 @@ message SubnetRecord {
 
   // The type of subnet.
   SubnetType subnet_type = 15;
+
+  // The upper bound for the number of dealings we allow in a block.
+  uint64 dkg_dealings_per_block = 16;
 }
 
 // Contains the initial DKG transcripts for the subnet and materials to construct a base CUP (i.e.
@@ -122,15 +125,15 @@ message GossipConfig {
   uint32 retransmission_request_ms = 8;
 }
 
-// Represents the type of subnet. Subnets of different type might exhibit different 
-// behavior, e.g. being more restrictive in what operations are allowed or privileged 
+// Represents the type of subnet. Subnets of different type might exhibit different
+// behavior, e.g. being more restrictive in what operations are allowed or privileged
 // compared to other subnet types.
 enum SubnetType {
     SUBNET_TYPE_UNSPECIFIED = 0;
     // A normal subnet where no restrictions are applied.
     SUBNET_TYPE_APPLICATION = 1;
-    // A more privileged subnet where certain restrictions are applied, 
-    // like not charging for cycles or restricting who can create and 
+    // A more privileged subnet where certain restrictions are applied,
+    // like not charging for cycles or restricting who can create and
     // install canisters on it.
     SUBNET_TYPE_SYSTEM = 2;
 }

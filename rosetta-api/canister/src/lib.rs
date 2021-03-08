@@ -20,7 +20,7 @@ mod icpts;
 mod timestamp;
 
 pub mod spawn;
-pub use icpts::{ICPTs, DECIMAL_PLACES, ICP_SUBDIVIDABLE_BY, TRANSACTION_FEE};
+pub use icpts::{ICPTs, DECIMAL_PLACES, ICP_SUBDIVIDABLE_BY, MIN_BURN_AMOUNT, TRANSACTION_FEE};
 pub use timestamp::Timestamp;
 
 pub type RawBlock = Box<[u8]>;
@@ -161,28 +161,52 @@ pub type BlockHeight = u64;
 // This type will change when we implement certification
 pub type Certification = u64;
 
-/// Describes the state of users accounts at the tip of the chain
-#[derive(Debug)]
-pub struct Balances {
-    // This uses a mutable map because we don't want to risk a space leak and we only require the
-    // account balances at the tip of the chain
-    pub inner: HashMap<PrincipalId, ICPTs>,
-    icpt_pool: ICPTs,
+pub type LedgerBalances = Balances<HashMap<PrincipalId, ICPTs>>;
+
+pub trait BalancesStore {
+    fn get_balance(&self, k: &PrincipalId) -> Option<&ICPTs>;
+    fn get_balance_mut(&mut self, k: &PrincipalId) -> Option<&mut ICPTs>;
+    fn get_create_balance(&mut self, k: PrincipalId) -> &mut ICPTs;
+    fn remove_account(&mut self, k: &PrincipalId) -> Option<ICPTs>;
 }
 
-impl Default for Balances {
-    fn default() -> Self {
-        Self {
-            inner: HashMap::default(),
-            icpt_pool: ICPTs::MAX,
-        }
+impl BalancesStore for HashMap<PrincipalId, ICPTs> {
+    fn get_balance(&self, k: &PrincipalId) -> Option<&ICPTs> {
+        self.get(k)
+    }
+
+    fn get_balance_mut(&mut self, k: &PrincipalId) -> Option<&mut ICPTs> {
+        self.get_mut(k)
+    }
+
+    fn get_create_balance(&mut self, k: PrincipalId) -> &mut ICPTs {
+        self.entry(k).or_insert(ICPTs::ZERO)
+    }
+
+    fn remove_account(&mut self, k: &PrincipalId) -> Option<ICPTs> {
+        self.remove(k)
     }
 }
 
-impl Balances {
+/// Describes the state of users accounts at the tip of the chain
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Balances<S: BalancesStore> {
+    // This uses a mutable map because we don't want to risk a space leak and we only require the
+    // account balances at the tip of the chain
+    pub store: S,
+    pub icpt_pool: ICPTs,
+}
+
+impl<S: Default + BalancesStore> Default for Balances<S> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<S: Default + BalancesStore> Balances<S> {
     pub fn new() -> Self {
         Self {
-            inner: HashMap::default(),
+            store: S::default(),
             icpt_pool: ICPTs::MAX,
         }
     }
@@ -215,9 +239,9 @@ impl Balances {
     // HashMap if the balance reaches zero.
     pub fn debit(&mut self, from: &PrincipalId, amount: ICPTs) {
         let balance = self
-            .inner
-            .get_mut(from)
-            .expect("You tried to withdraw funds from an account that is empty");
+            .store
+            .get_balance_mut(from)
+            .unwrap_or_else(|| panic!("You tried to withdraw funds from empty account {}", from));
         // This is technically redundant because Amount uses checked arithmetic, but
         // belt an braces
         assert!(
@@ -228,28 +252,45 @@ impl Balances {
 
         // Remove an account whose balance reaches ZERO
         if *balance == ICPTs::ZERO {
-            self.inner.remove(from);
+            self.store.remove_account(from);
         }
     }
 
     // Crediting an account will automatically add it to the `inner` HashMap if
     // not already present.
     pub fn credit(&mut self, to: &PrincipalId, amount: ICPTs) {
-        let balance = self.inner.entry(*to).or_insert(ICPTs::ZERO);
+        let balance = self.store.get_create_balance(*to);
         *balance += amount;
     }
 
     pub fn account_balance(&self, account: &PrincipalId) -> ICPTs {
-        self.inner.get(account).cloned().unwrap_or(ICPTs::ZERO)
+        self.store
+            .get_balance(account)
+            .cloned()
+            .unwrap_or(ICPTs::ZERO)
     }
 
+    /// Returns the total quantity of ICPs that are "in existence" -- that
+    /// is, excluding un-minted "potential" ICPs.
+    pub fn total_supply(&self) -> ICPTs {
+        (ICPTs::MAX - self.icpt_pool).unwrap_or_else(|e| {
+            panic!(
+                "It is expected that the icpt_pool is always smaller than \
+            or equal to ICPTs::MAX, yet subtracting it lead to the following error: {}",
+                e
+            )
+        })
+    }
+}
+
+impl LedgerBalances {
     // Find the specified number of accounts with lowest balances so that their
     // balances can be reclaimed.
     fn select_accounts_to_trim(&mut self, num_accounts: usize) -> Vec<(ICPTs, PrincipalId)> {
         let mut to_trim: std::collections::BinaryHeap<(ICPTs, PrincipalId)> =
             std::collections::BinaryHeap::new();
 
-        let mut iter = self.inner.iter();
+        let mut iter = self.store.iter();
 
         // Accumulate up to `trim_quantity` accounts
         for (account, balance) in iter.by_ref().take(num_accounts) {
@@ -564,14 +605,14 @@ impl BlockChain {
 }
 
 pub struct State {
-    pub balances: Balances,
+    pub balances: LedgerBalances,
     pub blocks: BlockChain,
     // A cap on the maximum number of accounts
     maximum_number_of_accounts: usize,
     // When maximum number of accounts is exceeded, a specified number of
     // accounts with lowest balances are removed
     accounts_overflow_trim_quantity: usize,
-    pub minting_canister_id: Option<PrincipalId>,
+    pub minting_account_id: Option<PrincipalId>,
     // This is a set of blockheights that have been notified
     pub blocks_notified: IntMap<()>,
 }
@@ -579,11 +620,11 @@ pub struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
-            balances: Balances::default(),
+            balances: LedgerBalances::default(),
             blocks: BlockChain::default(),
             maximum_number_of_accounts: 50_000_000,
             accounts_overflow_trim_quantity: 100_000,
-            minting_canister_id: None,
+            minting_account_id: None,
             blocks_notified: IntMap::new(),
         }
     }
@@ -602,7 +643,7 @@ impl State {
         let result = self
             .blocks
             .add_payment(message, payment, created_at, timestamp);
-        let to_trim = if self.balances.inner.len() > self.maximum_number_of_accounts {
+        let to_trim = if self.balances.store.len() > self.maximum_number_of_accounts {
             self.balances
                 .select_accounts_to_trim(self.accounts_overflow_trim_quantity)
         } else {
@@ -633,11 +674,11 @@ impl State {
     pub fn from_init(
         &mut self,
         initial_values: HashMap<PrincipalId, ICPTs>,
-        minting_canister: PrincipalId,
+        minting_account: PrincipalId,
         timestamp: Timestamp,
     ) {
         self.balances.icpt_pool = ICPTs::MAX;
-        self.minting_canister_id = Some(minting_canister);
+        self.minting_account_id = Some(minting_account);
 
         for (to, amount) in initial_values.into_iter() {
             self.add_payment(
@@ -652,8 +693,8 @@ impl State {
 
     const VERSION: u32 = 1;
 
-    /// Serialize the state. This is just all the blocks and a version
-    /// field to accomodate canister upgrades.
+    /// Serialize the state. This is just all the blocks, their notification
+    /// state and a version field to accomodate canister upgrades.
     pub fn encode(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.write_u32::<LittleEndian>(Self::VERSION).unwrap();
@@ -784,11 +825,10 @@ pub fn account_identifier(
     }
 }
 
-/// The UserID is the canister that can mint tokens and the HashMap is a set of
-/// accounts that will have tokens minted for them
-#[derive(Clone, Debug)]
+// This is how we pass arguments to 'init' in main.rs
+#[derive(Serialize, Deserialize, CandidType, Clone, Debug, PartialEq, Eq)]
 pub struct LedgerCanisterInitPayload {
-    pub minting_canister: CanisterId,
+    pub minting_account: PrincipalId,
     pub initial_values: HashMap<PrincipalId, ICPTs>,
     pub archive_canister: Option<CanisterId>,
     pub max_message_size_bytes: Option<usize>,
@@ -796,7 +836,7 @@ pub struct LedgerCanisterInitPayload {
 
 impl LedgerCanisterInitPayload {
     pub fn new(
-        minting_canister: CanisterId,
+        minting_account: PrincipalId,
         initial_values: HashMap<PrincipalId, ICPTs>,
         archive_canister: Option<CanisterId>,
         max_message_size_bytes: Option<usize>,
@@ -807,10 +847,10 @@ impl LedgerCanisterInitPayload {
         });
 
         // Don't allow self-transfers of the minting canister
-        assert!(initial_values.get(&minting_canister.get()).is_none());
+        assert!(initial_values.get(&minting_account).is_none());
 
         Self {
-            minting_canister,
+            minting_account,
             initial_values,
             archive_canister,
             max_message_size_bytes,
@@ -818,20 +858,7 @@ impl LedgerCanisterInitPayload {
     }
 }
 
-impl on_wire::IntoWire for LedgerCanisterInitPayload {
-    fn into_bytes(self) -> Result<Vec<u8>, String> {
-        let initial_values: Vec<(PrincipalId, ICPTs)> =
-            self.initial_values.iter().map(|(k, v)| (*k, *v)).collect();
-        on_wire::IntoWire::into_bytes(dfn_candid::Candid((
-            self.minting_canister,
-            initial_values,
-            self.archive_canister,
-            self.max_message_size_bytes,
-        )))
-    }
-}
-
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, CandidType)]
 pub struct ArchiveCanisterInitPayload {
     pub node_max_memory_size_bytes: Option<usize>,
     pub max_message_size_bytes: Option<usize>,
@@ -846,15 +873,6 @@ impl ArchiveCanisterInitPayload {
             node_max_memory_size_bytes,
             max_message_size_bytes,
         }
-    }
-}
-
-impl on_wire::IntoWire for ArchiveCanisterInitPayload {
-    fn into_bytes(self) -> Result<Vec<u8>, String> {
-        on_wire::IntoWire::into_bytes(dfn_candid::Candid((
-            self.node_max_memory_size_bytes,
-            self.max_message_size_bytes,
-        )))
     }
 }
 
@@ -880,13 +898,13 @@ mod tests {
 
     #[test]
     fn balances_overflow() {
-        let balances = Balances::new();
+        let balances = LedgerBalances::new();
         let mut state = State {
             balances,
             blocks: BlockChain::default(),
             maximum_number_of_accounts: 8,
             accounts_overflow_trim_quantity: 2,
-            minting_canister_id: Some(PrincipalId::new_user_test_id(137)),
+            minting_account_id: Some(PrincipalId::new_user_test_id(137)),
             blocks_notified: IntMap::new(),
         };
         assert_eq!(state.balances.icpt_pool, ICPTs::MAX);
@@ -916,7 +934,7 @@ mod tests {
 
         // The two accounts with lowest balances, 0 and 1 respectively, have been
         // removed
-        assert!(state.balances.inner.len() == 8);
+        assert!(state.balances.store.len() == 8);
         assert_eq!(
             state
                 .balances
@@ -939,7 +957,7 @@ mod tests {
 
     #[test]
     fn balances_remove_accounts_with_zero_balance() {
-        let mut b = Balances::new();
+        let mut b = LedgerBalances::new();
         let canister = CanisterId::from_u64(7).get();
         let target_canister = CanisterId::from_u64(13).get();
         b.add_payment(&Transfer::Mint {
@@ -947,7 +965,7 @@ mod tests {
             amount: ICPTs::from_doms(1000),
         });
         // verify that an account entry exists for the `canister`
-        assert_eq!(b.inner.get(&canister), Some(&ICPTs::from_doms(1000)));
+        assert_eq!(b.store.get(&canister), Some(&ICPTs::from_doms(1000)));
         // make 2 transfers that empty the account
         for _ in 0..2 {
             b.add_payment(&Transfer::Send {
@@ -958,15 +976,15 @@ mod tests {
             });
         }
         // target canister's balance adds up
-        assert_eq!(b.inner.get(&target_canister), Some(&ICPTs::from_doms(800)));
+        assert_eq!(b.store.get(&target_canister), Some(&ICPTs::from_doms(800)));
         // source canister has been removed
-        assert_eq!(b.inner.get(&canister), None);
+        assert_eq!(b.store.get(&canister), None);
         assert_eq!(b.account_balance(&canister), ICPTs::ZERO);
     }
 
     #[test]
     fn balances_fee() {
-        let mut b = Balances::new();
+        let mut b = LedgerBalances::new();
         let pool_start_balance = b.icpt_pool.get_doms();
         let uid0 = PrincipalId::new_user_test_id(1000);
         let uid1 = PrincipalId::new_user_test_id(1007);
@@ -1082,7 +1100,7 @@ mod tests {
         );
         assert_eq!(state.blocks.last_hash, state_decoded.blocks.last_hash);
         assert_eq!(state.blocks.inner.len(), state_decoded.blocks.inner.len());
-        assert_eq!(state.balances.inner, state_decoded.balances.inner);
+        assert_eq!(state.balances.store, state_decoded.balances.store);
     }
 }
 
@@ -1135,3 +1153,12 @@ impl AccountBalanceArgs {
         }
     }
 }
+
+/// Argument taken by the total_supply endpoint
+///
+/// The reason it is a struct is so that it can be extended -- e.g., to be able
+/// to query past values. Requiring 1 candid value instead of zero is a
+/// non-backward compatible change. But adding optional fields to a struct taken
+/// as input is backward-compatible.
+#[derive(Serialize, Deserialize, CandidType, Clone, Hash, Debug, PartialEq, Eq)]
+pub struct TotalSupplyArgs {}

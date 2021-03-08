@@ -1024,6 +1024,7 @@ impl Error {
             ApiError::InvalidTransaction(r, d) => {
                 (730, "An invalid transaction has been detected", r, d)
             }
+            ApiError::ICError(r, d) => (740, "Internet Computer error", r, d),
         };
         Self {
             code,
@@ -1058,6 +1059,7 @@ pub enum ApiError {
     BlockchainEmpty(bool, Option<Object>),
     InvalidTransaction(bool, Option<Object>),
     NotAvailableOffline(bool, Option<Object>),
+    ICError(bool, Option<Object>),
 }
 
 impl serde::Serialize for ApiError {

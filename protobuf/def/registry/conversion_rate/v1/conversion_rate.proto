@@ -1,8 +1,14 @@
 syntax = "proto3";
 package registry.conversion_rate.v1;
 
-message SdrPerIcp {
-  // The SDR/ICP rate in the form of an integer with four decimal digits, i.e., the value corresponds to
-  // 10^4 times the value of 1 ICP in SDR.
-  uint64 sdr_per_icp = 1;
+// Instruct the NNS about the market value of 1 ICP as measured by
+// an IMF SDR.
+message IcpXdrConversionRateRecord {
+  // The time for which the market data was queried, expressed in Unix
+  // time seconds.
+  uint64 timestamp_seconds = 1;
+  // The number of 100ths of IMF SDR (currency code XDR) that corresponds to 1
+  // ICP. Reflects the current market price of one ICP token. In other words,
+  // this value specifies the ICP/XDR conversion rate to two decimal places.
+  uint64 xdr_per_icp = 2;
 }

@@ -5,7 +5,6 @@ pub use errors::{CanisterHeartbeatError, MessageAcceptanceError};
 pub use errors::{HypervisorError, TrapCode};
 use ic_registry_provisional_whitelist::ProvisionalWhitelist;
 use ic_registry_routing_table::RoutingTable;
-use ic_registry_subnet_type::SubnetType;
 use ic_types::{
     ingress::{IngressStatus, WasmResult},
     messages::{MessageId, SignedIngress, UserQuery},
@@ -71,7 +70,6 @@ pub trait ExecutionEnvironment: Sync + Send {
         instructions_limit: NumInstructions,
         rng: &mut (dyn RngCore + 'static),
         provisional_whitelist: &ProvisionalWhitelist,
-        subnet_type: SubnetType,
     ) -> Self::State;
 
     /// Executes a message sent to a canister.
@@ -82,7 +80,6 @@ pub trait ExecutionEnvironment: Sync + Send {
         msg: CanisterInputMessage,
         time: Time,
         routing_table: Arc<RoutingTable>,
-        subnet_type: SubnetType,
     ) -> ExecResult<ExecuteMessageResult<Self::CanisterState>>;
 
     /// Asks the canister if it is willing to accept the provided ingress
@@ -99,7 +96,6 @@ pub trait ExecutionEnvironment: Sync + Send {
         canister_state: Self::CanisterState,
         instructions_limit: NumInstructions,
         routing_table: Arc<RoutingTable>,
-        subnet_type: SubnetType,
         time: Time,
     ) -> ExecResult<(
         Self::CanisterState,

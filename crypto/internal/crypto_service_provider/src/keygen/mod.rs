@@ -5,7 +5,7 @@ use crate::types::{CspPop, CspPublicKey, CspSecretKey};
 use crate::Csp;
 use ic_crypto_internal_basic_sig_ed25519 as ed25519;
 use ic_crypto_internal_multi_sig_bls12381 as multi_sig;
-use ic_crypto_internal_tls::keygen::generate_tls_key_pair;
+use ic_crypto_internal_tls::keygen::generate_tls_key_pair_der;
 use ic_crypto_internal_types::context::{Context, DomainSeparationContext};
 use ic_protobuf::registry::crypto::v1::X509PublicKeyCert;
 use ic_types::crypto::{AlgorithmId, CryptoError, KeyId};
@@ -60,7 +60,8 @@ impl<R: Rng + CryptoRng, S: SecretKeyStore> CspKeyGenerator for Csp<R, S> {
         let common_name = &node.get().to_string()[..];
         let not_after = Asn1Time::from_str_x509(not_after)
             .expect("invalid X.509 certificate expiration date (not_after)");
-        let (cert, secret_key) = generate_tls_key_pair(common_name, serial, &not_after);
+        let (cert, secret_key) = generate_tls_key_pair_der(common_name, serial, &not_after);
+
         let x509_pk_cert = X509PublicKeyCert {
             certificate_der: cert.bytes.clone(),
         };

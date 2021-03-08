@@ -77,7 +77,8 @@ async fn smoke_test() {
                 vec![
                     "BURN".to_string(),
                     "MINT".to_string(),
-                    "TRANSACTION".to_string()
+                    "TRANSACTION".to_string(),
+                    "FEE".to_string()
                 ],
                 vec![
                     Error::new(&ApiError::InternalError(true, None)),
@@ -269,23 +270,8 @@ async fn balances_test() {
     );
 }
 
-#[actix_rt::test]
-async fn load_from_store_test() {
-    init_test_logger();
-    let tmpdir = create_tmp_dir();
-
-    let scribe = Scribe::new_with_sample_data(10, 100);
-
-    let mut blocks = Blocks::new_on_disk(tmpdir.path().into()).unwrap();
-    for hb in &scribe.blockchain {
-        blocks.add_block(hb.clone()).unwrap();
-    }
-    drop(blocks);
-
-    let mut blocks = Blocks::new_on_disk(tmpdir.path().into()).unwrap();
-    blocks.load_from_store().unwrap();
-
-    for hb in &scribe.blockchain {
+fn verify_balances(scribe: &Scribe, blocks: &Blocks, start_idx: usize) {
+    for hb in scribe.blockchain.iter().skip(start_idx) {
         assert_eq!(*hb, blocks.get_at(hb.index).unwrap());
         assert_eq!(*hb, blocks.get(hb.hash).unwrap());
         assert!(blocks.get_balances_at(hb.index).is_ok());
@@ -299,4 +285,40 @@ async fn load_from_store_test() {
             );
         }
     }
+}
+
+#[actix_rt::test]
+async fn load_from_store_test() {
+    init_test_logger();
+    let tmpdir = create_tmp_dir();
+
+    let scribe = Scribe::new_with_sample_data(10, 100);
+
+    let mut blocks = Blocks::new_on_disk(tmpdir.path().into()).unwrap();
+    for hb in &scribe.blockchain {
+        blocks.add_block(hb.clone()).unwrap();
+    }
+    let balances_at_10 = blocks.get_balances_at(10).unwrap();
+    drop(blocks);
+
+    let mut blocks = Blocks::new_on_disk(tmpdir.path().into()).unwrap();
+    blocks.load_from_store().unwrap();
+
+    verify_balances(&scribe, &blocks, 0);
+
+    // now load pruned
+    blocks
+        .try_prune(&Some((scribe.blockchain.len() - 11) as u64), 0)
+        .unwrap();
+
+    assert!(blocks.get_at(9).is_err());
+    assert!(blocks.get_at(10).is_ok());
+
+    drop(blocks);
+
+    let mut blocks = Blocks::new_on_disk(tmpdir.path().into()).unwrap();
+    blocks.load_from_store().unwrap();
+
+    assert_eq!(balances_at_10, blocks.get_balances_at(10).unwrap());
+    verify_balances(&scribe, &blocks, 10);
 }

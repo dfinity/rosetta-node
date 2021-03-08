@@ -151,7 +151,6 @@ impl Agent {
         arguments: Vec<u8>,
         nonce: Vec<u8>,
     ) -> Result<(Vec<u8>, MessageId), String> {
-        let current_time = self.time_source.get_relative_time();
         let content = HttpSubmitContent::Call {
             update: HttpCanisterUpdate {
                 canister_id: to_blob(canister_id),
@@ -163,7 +162,7 @@ impl Agent {
             },
         };
 
-        let (submit_request, request_id) = sign_submit(content, &self.sender, current_time)?;
+        let (submit_request, request_id) = sign_submit(content, &self.sender)?;
         let http_body = serde_cbor::to_vec(&submit_request).map_err(|e| {
             format!(
                 "Cannot serialize the submit request in CBOR format because of: {}",
@@ -191,7 +190,7 @@ impl Agent {
             },
         };
 
-        let request = sign_read(content, &self.sender, self.time_source.get_relative_time())?;
+        let request = sign_read(content, &self.sender)?;
         let cbor: CBOR = serde_cbor::value::to_value(request).unwrap();
 
         Ok(serde_cbor::to_vec(&cbor).unwrap())
@@ -208,7 +207,7 @@ impl Agent {
             },
         };
 
-        let request = sign_read(content, &self.sender, self.time_source.get_relative_time())?;
+        let request = sign_read(content, &self.sender)?;
         let cbor: CBOR = serde_cbor::value::to_value(request).unwrap();
 
         Ok(serde_cbor::to_vec(&cbor).unwrap())

@@ -20,6 +20,15 @@ use std::{
 /// the system call failed.
 pub struct RefCounted<T>(Rc<RefCell<T>>);
 
+/// In order to be able to have an async method that returns the
+/// result of a call to another canister, we need that result to
+/// be Send + Sync, but Rc and RefCell are not. Since inside
+/// a canister there isn't actual concurrent access to the referenced
+/// cell or the reference counted container, it is safe to force
+/// these to be Send/Sync.
+unsafe impl<T> Send for RefCounted<T> {}
+unsafe impl<T> Sync for RefCounted<T> {}
+
 impl<T> RefCounted<T> {
     pub fn new(val: T) -> Self {
         RefCounted(Rc::new(RefCell::new(val)))

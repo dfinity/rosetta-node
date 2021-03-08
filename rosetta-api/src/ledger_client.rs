@@ -1,4 +1,4 @@
-use crate::convert::{internal_error, invalid_block_id, transaction_id};
+use crate::convert::{ic_error, internal_error, invalid_block_id, transaction_id};
 use crate::models::{ApiError, TransactionIdentifier};
 use crate::store::{BlockStore, BlockStoreError, HashedBlock, InMemoryStore, OnDiskStore};
 use async_trait::async_trait;
@@ -10,18 +10,19 @@ use ic_types::messages::{HttpRequestEnvelope, HttpSubmitContent};
 use ic_types::{CanisterId, PrincipalId};
 use im::OrdMap;
 use ledger_canister::{
-    Block, BlockHeight, Certification, HashOf, ICPTs, RawBlock, Serializable, Transfer,
+    BalancesStore, Block, BlockHeight, Certification, HashOf, ICPTs, RawBlock, Serializable,
 };
 use log::{debug, error, info, trace};
 use on_wire::{FromWire, IntoWire};
 use reqwest::Url;
 use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+
+pub type Balances = ledger_canister::Balances<OrdMapBalancesStore>;
 
 #[async_trait]
 pub trait LedgerAccess {
@@ -35,6 +36,7 @@ pub trait LedgerAccess {
         &self,
         _envelope: HttpRequestEnvelope<HttpSubmitContent>,
     ) -> Result<TransactionIdentifier, ApiError>;
+    async fn chain_length(&self) -> BlockHeight;
 }
 
 pub struct LedgerClient {
@@ -188,7 +190,6 @@ impl LedgerAccess for LedgerClient {
         let canister = self.canister_access.as_ref().unwrap();
         let (cert, tip) = canister.query_tip().await?;
         let chain_length = tip + 1;
-        debug!("Chain length is {}", chain_length);
 
         if chain_length == 0 {
             return Ok(());
@@ -290,10 +291,7 @@ impl LedgerAccess for LedgerClient {
 
         if !status.is_success() {
             let body = response.text().await.map_err(internal_error)?;
-            return Err(internal_error(format!(
-                "IC returned HTTP error {}: {}",
-                status, body
-            )));
+            return Err(ic_error(status.as_u16(), body));
         }
 
         // If we need to debug the response
@@ -309,6 +307,13 @@ impl LedgerAccess for LedgerClient {
         // })?;
 
         transaction_id(submit_request)
+    }
+
+    async fn chain_length(&self) -> BlockHeight {
+        match self.blockchain.read().await.synced_to() {
+            None => 0,
+            Some((_, block_index)) => block_index + 1,
+        }
     }
 }
 
@@ -359,69 +364,25 @@ impl CanisterAccess {
     }
 }
 
-/// describes the state of users accounts
-/// This mirrors Balances in the canister code, but is immutable so it can be
-/// more easily queried
-#[must_use = "`Balances` are immutable, if you don't use it you'll lose your changes"]
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Balances {
-    pub inner: OrdMap<PrincipalId, ICPTs>,
-}
+#[derive(Clone, Default, Debug, PartialEq, Eq)]
+pub struct OrdMapBalancesStore(pub OrdMap<PrincipalId, ICPTs>);
 
-// Annoyingly this is code duplication from Balances, I don't think rust can be
-// polymorphic over mutability, so I think this is how it's going to have to be
-// Perhaps I can break this up in the future to reduce duplication
-impl Balances {
-    pub fn account_balance(&self, account: &PrincipalId) -> ICPTs {
-        self.inner.get(account).cloned().unwrap_or(ICPTs::ZERO)
+/// This is essencially copy-paste of BalancesStore for HashMap
+impl BalancesStore for OrdMapBalancesStore {
+    fn get_balance(&self, k: &PrincipalId) -> Option<&ICPTs> {
+        self.0.get(k)
     }
 
-    pub fn add_payment(&mut self, payment: &Transfer) {
-        match payment {
-            Transfer::Send {
-                from,
-                to,
-                amount,
-                fee,
-            } => {
-                self.debit(from, (*amount + *fee).expect("amount + fee failed"));
-                self.credit(to, *amount);
-            }
-            Transfer::Burn { from, amount, .. } => self.debit(from, *amount),
-            Transfer::Mint { to, amount, .. } => self.credit(to, *amount),
-        }
+    fn get_balance_mut(&mut self, k: &PrincipalId) -> Option<&mut ICPTs> {
+        self.0.get_mut(k)
     }
 
-    fn debit(&mut self, from: &PrincipalId, amount: ICPTs) {
-        let balance = self
-            .inner
-            .get_mut(from)
-            .expect("You tried to withdraw funds from an account that is empty");
-        // This is technically redundant because Amount uses checked arithmetic, but
-        // belt an braces
-        assert!(
-            *balance >= amount,
-            "You have tried to spend more than the balance of your account"
-        );
-        *balance -= amount;
-
-        // Remove an account whose balance reaches ZERO
-        if *balance == ICPTs::ZERO {
-            self.inner.remove(from);
-        }
+    fn get_create_balance(&mut self, k: PrincipalId) -> &mut ICPTs {
+        self.0.entry(k).or_insert(ICPTs::ZERO)
     }
 
-    fn credit(&mut self, to: &PrincipalId, amount: ICPTs) {
-        let balance = self.inner.entry(*to).or_insert(ICPTs::ZERO);
-        *balance += amount;
-    }
-}
-
-impl Default for Balances {
-    fn default() -> Balances {
-        Balances {
-            inner: OrdMap::new(),
-        }
+    fn remove_account(&mut self, k: &PrincipalId) -> Option<ICPTs> {
+        self.0.remove(k)
     }
 }
 
@@ -585,7 +546,11 @@ impl Blocks {
         self.last().ok().flatten().map(|hb| (hb.hash, hb.index))
     }
 
-    fn try_prune(&mut self, max_blocks: &Option<u64>, prune_delay: u64) -> Result<(), ApiError> {
+    pub fn try_prune(
+        &mut self,
+        max_blocks: &Option<u64>,
+        prune_delay: u64,
+    ) -> Result<(), ApiError> {
         if let Some(block_limit) = max_blocks {
             let first_idx = self.first()?.map(|hb| hb.index).unwrap_or(0);
             let last_idx = self.last()?.map(|hb| hb.index).unwrap_or(0);

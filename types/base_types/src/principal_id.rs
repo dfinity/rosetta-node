@@ -249,9 +249,13 @@ impl PrincipalId {
     }
 
     pub fn new_self_authenticating(pubkey: &[u8]) -> Self {
-        let mut bytes = Sha224::hash(pubkey).to_vec();
-        bytes.push(Self::TYPE_SELF_AUTH);
-        PrincipalId::try_from(&bytes[..]).unwrap()
+        let mut id: [u8; 29] = [0; 29];
+        id[..28].copy_from_slice(&Sha224::hash(pubkey));
+        id[28] = Self::TYPE_SELF_AUTH;
+        PrincipalId {
+            len: id.len(),
+            data: id,
+        }
     }
 
     pub fn new_derived(registerer: &PrincipalId, seed: &[u8]) -> Self {

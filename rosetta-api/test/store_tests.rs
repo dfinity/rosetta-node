@@ -203,7 +203,7 @@ fn verify_balance_snapshot(scribe: &Scribe, store: &mut impl BlockStore, prune_a
     let (oldest_block, balances) = store.first_snapshot().unwrap().clone();
     assert_eq!(oldest_block, *scribe.blockchain.get(oldest_idx).unwrap());
     assert_eq!(
-        balances.inner,
-        to_balances(scribe.balance_history.get(oldest_idx).unwrap().clone(),).inner
+        balances.store,
+        to_balances(scribe.balance_history.get(oldest_idx).unwrap().clone(),).store
     );
 }

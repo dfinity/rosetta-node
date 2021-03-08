@@ -15,7 +15,6 @@ use ledger_canister::{
 use on_wire::{FromWire, IntoWire};
 use serde_json::map::Map;
 use serde_json::{from_value, Value};
-use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -38,6 +37,7 @@ const STATUS: &str = "COMPLETED";
 const TRANSACTION: &str = "TRANSACTION";
 const MINT: &str = "MINT";
 const BURN: &str = "BURN";
+const FEE: &str = "FEE";
 
 pub fn transaction(
     transaction: &Transfer,
@@ -72,18 +72,26 @@ pub fn operations(transaction: &Transfer, completed: bool) -> Result<Vec<Operati
                 0,
                 TRANSACTION.to_string(),
                 status.clone(),
-                from_account,
-                Some(signed_amount(-amount - (fee.get_doms() as i128))),
+                from_account.clone(),
+                Some(signed_amount(-amount)),
             );
             let mut cr = Operation::new(
                 1,
                 TRANSACTION.to_string(),
-                status,
+                status.clone(),
                 to_account,
                 Some(signed_amount(amount)),
             );
             cr.related_operations = Some(vec![db.operation_identifier.clone()]);
-            vec![db, cr]
+            let mut fee = Operation::new(
+                2,
+                FEE.to_string(),
+                status,
+                from_account,
+                Some(signed_amount(-(fee.get_doms() as i128))),
+            );
+            fee.related_operations = Some(vec![db.operation_identifier.clone()]);
+            vec![db, cr, fee]
         }
         // TODO include the destination in the metadata
         Transfer::Mint { to, amount, .. } => {
@@ -105,124 +113,85 @@ pub fn operations(transaction: &Transfer, completed: bool) -> Result<Vec<Operati
 }
 
 pub fn from_operations(ops: Vec<Operation>) -> Result<Vec<Transfer>, ApiError> {
-    fn min_identifier_index(op: &Operation) -> i64 {
-        let op_index = op.operation_identifier.index;
-        let mut related_indicies: Vec<i64> = match &op.related_operations {
-            Some(ops) => ops.iter().map(|id| id.index).collect(),
-            None => Vec::new(),
-        };
-        related_indicies.push(op_index);
-        *related_indicies
-            .iter()
-            .min()
-            .expect("This is impossible because there is at least 1 element")
+    let trans_err = |msg| {
+        let msg = format!("Bad transaction in {:?}: {}", &ops, msg);
+        let err = ApiError::InvalidTransaction(false, into_error(msg));
+        Err(err)
+    };
+
+    let op_error = |op: &Operation, e| {
+        let msg = format!("In operation '{:?}': {}", op, e);
+        ApiError::InvalidTransaction(false, into_error(msg))
+    };
+
+    if ops.len() != 3 {
+        return trans_err(
+            "Operations do not combine to make a recognizable transaction".to_string(),
+        );
     }
 
-    // Group related operations
-    let mut related: HashMap<i64, Vec<Operation>> = HashMap::new();
-    for o in ops.into_iter() {
-        let min = min_identifier_index(&o);
-        let entry = related.entry(min).or_insert_with(Vec::new);
-        entry.push(o);
-    }
+    let mut cr = None;
+    let mut db = None;
+    let mut fee = None;
 
-    // Check that all values have the same _type and return it
-    fn read_transaction(op: &Operation) -> Result<(i128, PrincipalId), String> {
-        // let id = op.operation_identifier.clone();
+    for o in &ops {
+        if o.amount.is_none() || o.account.is_none() {
+            return Err(op_error(&o, "Account and amount must be populated".into()));
+        }
+        if o.coin_change.is_some() {
+            return Err(op_error(&o, "Coin changes are not permitted".into()));
+        }
+        let amount = from_amount(o.amount.as_ref().unwrap()).map_err(|e| op_error(&o, e))?;
+        let account = principal_id(o.account.as_ref().unwrap()).map_err(|e| op_error(&o, e))?;
 
-        // Check the operation looks like part of a transaction
-        let (amount, account_id) = match op {
-            Operation {
-                operation_identifier: _,
-                related_operations: _,
-                _type,
-                account: Some(account),
-                amount: Some(amount),
-                coin_change: None,
-                metadata: _,
-                ..
-            } => match &_type[..] {
-                TRANSACTION => Ok((amount, account)),
-                other => Err(format!(
-                    "Fields _type and status Expected {:?}, but found {:?}",
-                    (TRANSACTION, STATUS),
-                    other
-                )),
-            },
-            Operation { account: None, .. } | Operation { amount: None, .. } => {
-                Err("Fields account and amount must both be populated".to_string())
-            }
-            Operation {
-                coin_change: Some(_),
-                ..
-            } => Err("Coin changes are not permitted".to_string()),
-        }?;
-
-        let principal = principal_id(&account_id)?;
-        let amount = from_amount(amount)?;
-        Ok((amount, principal))
-    }
-
-    fn to_transaction(mut ops: Vec<Operation>) -> Result<Transfer, ApiError> {
-        ops.sort_by_key(|v| v.operation_identifier.index);
-
-        let handle_error = move |id| {
-            move |e| {
-                let msg = format!("In operation '{:?}': {}", id, e);
-                ApiError::InvalidTransaction(false, into_error(msg))
-            }
-        };
-
-        match &ops[..] {
-            [op1, op2] => {
-                let (db_amount, from) =
-                    read_transaction(op1).map_err(handle_error(&op1.operation_identifier))?;
-                let (cr_amount, to) =
-                    read_transaction(op2).map_err(handle_error(&op2.operation_identifier))?;
-
-                let error = move |msg| {
-                    let msg = format!("Bad transaction in {:?} and {:?}: {}", op1, op2, msg);
-                    let err = ApiError::InvalidTransaction(false, into_error(msg));
-                    Err(err)
-                };
-
-                let fee = TRANSACTION_FEE.get_doms() as i128;
-                if db_amount + fee != -cr_amount {
-                    return error("Credit + Debit + fee must net to zero");
-                }
-
-                let amount = if cr_amount > 0 {
-                    ICPTs::from_doms(cr_amount as u64)
+        match o._type.as_str() {
+            TRANSACTION => {
+                if amount < 0 || cr.is_some() && amount == 0 {
+                    let icpts = ICPTs::from_doms((-amount) as u64);
+                    db = Some((icpts, account));
                 } else {
-                    return error("Debit amount must be greater than zero");
-                };
-
-                if from == to {
-                    return error("Transactions can't start and finish in the same place");
+                    let icpts = ICPTs::from_doms(amount as u64);
+                    cr = Some((icpts, account));
                 }
-
-                Ok(Transfer::Send {
-                    from,
-                    to,
-                    amount,
-                    fee: TRANSACTION_FEE,
-                })
             }
-            // TODO support Burn here
-            wrong => Err(ApiError::InvalidTransaction(
-                false,
-                into_error(format!(
-                    "Operations do not combine to make a recognizable transaction: {:?}",
-                    wrong
-                )),
-            )),
+            FEE => {
+                if -amount != TRANSACTION_FEE.get_doms() as i128 {
+                    let msg = format!("Fee should be equal: {}", TRANSACTION_FEE.get_doms());
+                    return Err(op_error(&o, msg));
+                }
+                let icpts = ICPTs::from_doms((-amount) as u64);
+                fee = Some((icpts, account));
+            }
+            _ => {
+                let msg = format!("Unsupported operation type: {}", o._type);
+                return Err(op_error(&o, msg));
+            }
         }
     }
 
-    related
-        .into_iter()
-        .map(|(_k, v)| to_transaction(v))
-        .collect()
+    if cr.is_none() || db.is_none() || fee.is_none() {
+        return trans_err(
+            "Operations do not combine to make a recognizable transaction".to_string(),
+        );
+    }
+    let (cr_amount, to) = cr.unwrap();
+    let (db_amount, from) = db.unwrap();
+    let (fee_amount, fee_acc) = fee.unwrap();
+
+    if fee_acc != from {
+        let msg = format!("Fee should be taken from {}", from);
+        return trans_err(msg);
+    }
+    if cr_amount != db_amount {
+        return trans_err("Debit_amount should be equal -credit_amount".to_string());
+    }
+
+    Ok(vec![Transfer::Send {
+        from,
+        to,
+        amount: cr_amount,
+        fee: fee_amount,
+    }])
 }
 
 pub fn amount_(amount: ICPTs) -> Result<Amount, ApiError> {
@@ -248,12 +217,14 @@ pub fn from_amount(amount: &Amount) -> Result<i128, String> {
             value,
             currency,
             metadata: None,
-        } if currency == &icp() => value.parse().map_err(|e| {
-            format!(
-                "Parsing amount failed, value field should be a number but was: {}",
-                e
-            )
-        }),
+        } if currency == &icp() => {
+            let val: i128 = value
+                .parse()
+                .map_err(|e| format!("Parsing amount failed: {}", e))?;
+            let _ =
+                u64::try_from(val.abs()).map_err(|_| "Amount does not fit in u64".to_string())?;
+            Ok(val)
+        }
         wrong => Err(format!("This value is not icp {:?}", wrong)),
     }
 }
@@ -359,6 +330,13 @@ pub fn transaction_id(
 
 pub fn internal_error<D: Display>(msg: D) -> ApiError {
     ApiError::InternalError(false, into_error(format!("{}", msg)))
+}
+
+pub fn ic_error(http_status: u16, msg: String) -> ApiError {
+    let mut m = Map::new();
+    m.insert("error_message".to_string(), Value::from(msg));
+    m.insert("ic_http_status".to_string(), Value::from(http_status));
+    ApiError::ICError(false, Some(m))
 }
 
 pub fn invalid_block_id<D: Display>(msg: D) -> ApiError {

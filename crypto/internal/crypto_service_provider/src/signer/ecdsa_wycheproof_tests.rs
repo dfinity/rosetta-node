@@ -8,7 +8,7 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::PathBuf;
 
-use crate::crypto_lib::basic_sig::ecdsa;
+use ic_crypto_internal_basic_sig_ecdsa_secp256r1 as ecdsa_secp256r1;
 use std::convert::TryFrom;
 
 #[test]
@@ -88,10 +88,11 @@ impl TestGroup {
     }
 
     fn run_tests(&self, notes: &HashMap<String, String>) -> bool {
-        let pk = match ecdsa::api::public_key_from_der(&hex::decode(&self.keyDer).unwrap()) {
-            Err(_) => None,
-            Ok(pk) => Some(pk),
-        };
+        let pk =
+            match ecdsa_secp256r1::api::public_key_from_der(&hex::decode(&self.keyDer).unwrap()) {
+                Err(_) => None,
+                Ok(pk) => Some(pk),
+            };
         let mut result = true;
         for test in &self.tests {
             let case_result = test.run_test(&pk, notes);
@@ -162,7 +163,7 @@ impl TestCase {
 
     fn run_test(
         &self,
-        pk: &Option<ecdsa::types::PublicKeyBytes>,
+        pk: &Option<ecdsa_secp256r1::types::PublicKeyBytes>,
         notes: &HashMap<String, String>,
     ) -> bool {
         match pk {
@@ -179,7 +180,7 @@ impl TestCase {
             Some(pk) => {
                 let msg = hex::decode(&self.msg).unwrap();
                 let sig = hex::decode(&self.sig).unwrap();
-                match ecdsa::types::SignatureBytes::try_from(sig) {
+                match ecdsa_secp256r1::types::SignatureBytes::try_from(sig) {
                     Err(e) => {
                         let pass = match self.result {
                             TestResult::invalid | TestResult::acceptable => true,
@@ -193,7 +194,8 @@ impl TestCase {
                     }
                     Ok(sig_bytes) => {
                         let msg_hash = sha256(&msg);
-                        let verified = ecdsa::api::verify(&sig_bytes, &msg_hash, &pk).is_ok();
+                        let verified =
+                            ecdsa_secp256r1::api::verify(&sig_bytes, &msg_hash, &pk).is_ok();
                         let pass = match self.result {
                             TestResult::acceptable => true,
                             TestResult::valid => verified,

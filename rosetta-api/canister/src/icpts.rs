@@ -17,6 +17,7 @@ pub const DECIMAL_PLACES: u32 = 8;
 pub const ICP_SUBDIVIDABLE_BY: u64 = 100_000_000;
 
 pub const TRANSACTION_FEE: ICPTs = ICPTs { doms: 137 };
+pub const MIN_BURN_AMOUNT: ICPTs = TRANSACTION_FEE;
 
 impl ICPTs {
     /// The maximum value of this construct is 2^64-1 Doms or Roughly 184

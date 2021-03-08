@@ -11,7 +11,9 @@ message ConnectionEndpoint {
   }
 
   // The IP address. Senders SHOULD use dotted-quad notation for IPv4 addresses
-  // and RFC5952 representation for IPv6 addresses.
+  // and RFC5952 representation for IPv6 addresses (which means that IPv6
+  // addresses are *not* enclosed in `[` and `]`, as they are not written
+  // with the port in the same field).
   //
   // Clients MUST be prepared to accept IPv6 addresses in the forms shown in
   // RFC4291.
@@ -33,7 +35,8 @@ message FlowEndpoint {
 
 // A node: one machine running a replica instance.
 message NodeRecord {
-  // the node_id is redundant as it is already contained in the key for this value.
+  // the node_id is redundant as it is already contained in the key for this
+  // value.
   reserved 1;
   reserved "node_id";
   reserved 2;
@@ -48,6 +51,7 @@ message NodeRecord {
 
   // The endpoint where this node receives xnet messages.
   ConnectionEndpoint xnet = 5;
+
   // The endpoint where this node receives http requests.
   ConnectionEndpoint http = 6;
 
@@ -69,4 +73,7 @@ message NodeRecord {
   // Endpoints on which metrics compatible with the Prometheus export
   // format are served.
   repeated ConnectionEndpoint prometheus_metrics = 13;
+
+  // Endpoints on which the XNet API is served
+  repeated ConnectionEndpoint xnet_api = 14;
 }

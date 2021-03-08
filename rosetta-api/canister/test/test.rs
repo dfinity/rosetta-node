@@ -1,11 +1,13 @@
 use canister_test::*;
-use dfn_candid::{candid, candid_one};
+use dfn_candid::{candid, candid_one, CandidOne};
+use ic_canister_client::Sender;
 use ic_types::{CanisterId, PrincipalId};
 use ledger_canister::{
     account_identifier, AccountBalanceArgs, ArchiveCanisterInitPayload, Block, BlockHeight, ICPTs,
     LedgerCanisterInitPayload, Memo, NotifyCanisterArgs, RawBlock, SendArgs, Serializable,
-    Transfer, TRANSACTION_FEE,
+    TotalSupplyArgs, Transfer, MIN_BURN_AMOUNT, TRANSACTION_FEE,
 };
+use on_wire::IntoWire;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 
@@ -17,6 +19,44 @@ fn create_sender(i: u64) -> ic_canister_client::Sender {
         ed25519_dalek::Keypair::generate(&mut rng)
     };
     ic_canister_client::Sender::from_keypair(&keypair)
+}
+
+async fn simple_send(
+    ledger: &Canister<'_>,
+    to: &Sender,
+    from: &Sender,
+    amount_doms: u64,
+    fee_doms: u64,
+) -> Result<BlockHeight, String> {
+    ledger
+        .update_from_sender(
+            "send",
+            candid_one,
+            SendArgs {
+                memo: Memo::default(),
+                amount: ICPTs::from_doms(amount_doms),
+                fee: ICPTs::from_doms(fee_doms),
+                from_subaccount: None,
+                to: to.get_principal_id(),
+                to_subaccount: None,
+                block_height: None,
+            },
+            &from,
+        )
+        .await
+}
+
+async fn query_balance(ledger: &Canister<'_>, acc: &Sender) -> Result<ICPTs, String> {
+    ledger
+        .query_(
+            "account_balance",
+            candid_one,
+            AccountBalanceArgs {
+                account: acc.get_principal_id(),
+                sub_account: None,
+            },
+        )
+        .await
 }
 
 #[test]
@@ -32,12 +72,12 @@ fn upgrade_test() {
             .cargo_bin("ledger-canister")
             .install_(
                 &r,
-                LedgerCanisterInitPayload {
-                    minting_canister: CanisterId::from_u64(0),
+                CandidOne(LedgerCanisterInitPayload {
+                    minting_account: CanisterId::from_u64(0).get(),
                     initial_values: accounts,
                     archive_canister: None,
                     max_message_size_bytes: None,
-                },
+                }),
             )
             .await?;
 
@@ -82,22 +122,21 @@ fn archive_blocks_small_test() {
         };
         let archive: canister_test::Canister = proj
             .cargo_bin("ledger-archive-canister")
-            .install_(&r, archive_init_args)
+            .install_(&r, CandidOne(archive_init_args))
             .await?;
         println!("[test] archive canister id: {}", archive.canister_id());
 
         println!("[test] installing ledger canister");
         let ledger: canister_test::Canister = {
-            use on_wire::IntoWire;
             let payload = LedgerCanisterInitPayload {
-                minting_canister: CanisterId::from_u64(0),
+                minting_account: CanisterId::from_u64(0).get(),
                 initial_values: accounts,
                 archive_canister: Some(archive.canister_id()),
                 max_message_size_bytes: Some(max_message_size_bytes),
             };
             let mut install = proj.cargo_bin("ledger-canister").install(&r);
             install.memory_allocation = Some(128 * 1024 * 1024);
-            install.bytes(payload.into_bytes()?).await?
+            install.bytes(CandidOne(payload).into_bytes()?).await?
         };
         println!("[test] ledger canister id: {}", ledger.canister_id());
 
@@ -177,22 +216,21 @@ fn archive_blocks_large_test() {
         };
         let archive: canister_test::Canister = proj
             .cargo_bin("ledger-archive-canister")
-            .install_(&r, archive_init_args)
+            .install_(&r, CandidOne(archive_init_args))
             .await?;
         println!("[test] archive canister id: {}", archive.canister_id());
 
         println!("[test] installing ledger canister");
         let ledger: canister_test::Canister = {
-            use on_wire::IntoWire;
             let payload = LedgerCanisterInitPayload {
-                minting_canister: CanisterId::from_u64(0),
+                minting_account: CanisterId::from_u64(0).get(),
                 initial_values: accounts,
                 archive_canister: Some(archive.canister_id()),
                 max_message_size_bytes: Some(max_message_size_bytes),
             };
             let mut install = proj.cargo_bin("ledger-canister").install(&r);
             install.memory_allocation = Some(128 * 1024 * 1024);
-            install.bytes(payload.into_bytes()?).await?
+            install.bytes(CandidOne(payload).into_bytes()?).await?
         };
         println!("[test] ledger canister id: {}", ledger.canister_id());
 
@@ -291,19 +329,20 @@ fn notify_test() {
             .install_(&r, Vec::new())
             .await?;
 
-        let minting_canister = create_sender(0);
+        let minting_account = create_sender(0);
 
         let ledger_canister = proj
             .cargo_bin("ledger-canister")
             .install_(
                 &r,
-                LedgerCanisterInitPayload {
-                    minting_canister: CanisterId::try_from(minting_canister.get_principal_id())
-                        .unwrap(),
+                CandidOne(LedgerCanisterInitPayload {
+                    minting_account: CanisterId::try_from(minting_account.get_principal_id())
+                        .unwrap()
+                        .get(),
                     initial_values: accounts,
                     archive_canister: None,
                     max_message_size_bytes: None,
-                },
+                }),
             )
             .await?;
 
@@ -316,7 +355,7 @@ fn notify_test() {
                     to: test_canister.canister_id().get(),
                     to_subaccount: None,
                     amount: ICPTs::from_icpts(1).unwrap(),
-                    fee: ICPTs::ZERO,
+                    fee: TRANSACTION_FEE,
                     memo: Memo(0),
                     block_height: None,
                 },
@@ -325,7 +364,7 @@ fn notify_test() {
 
         let notify = NotifyCanisterArgs {
             block_height,
-            max_fee: ICPTs::ZERO,
+            max_fee: TRANSACTION_FEE,
             from_subaccount: None,
             to_canister: test_canister.canister_id(),
             to_subaccount: None,
@@ -386,12 +425,12 @@ fn sub_account_test() {
             .cargo_bin("ledger-canister")
             .install_(
                 &r,
-                LedgerCanisterInitPayload {
-                    minting_canister: CanisterId::from_u64(0),
+                CandidOne(LedgerCanisterInitPayload {
+                    minting_account: CanisterId::from_u64(0).get(),
                     initial_values,
                     archive_canister: None,
                     max_message_size_bytes: None,
-                },
+                }),
             )
             .await?;
 
@@ -405,7 +444,7 @@ fn sub_account_test() {
                     to: us,
                     to_subaccount: sub_account(2),
                     amount: ICPTs::from_icpts(1).unwrap(),
-                    fee: ICPTs::ZERO,
+                    fee: TRANSACTION_FEE,
                     memo: Memo(0),
                     block_height: None,
                 },
@@ -454,7 +493,7 @@ fn transaction_test() {
     local_test_e(|r| async move {
         let proj = Project::new(env!("CARGO_MANIFEST_DIR"));
 
-        let minting_canister = create_sender(0);
+        let minting_account = create_sender(0);
         let acc1 = create_sender(1);
         let acc2 = create_sender(2);
 
@@ -469,181 +508,89 @@ fn transaction_test() {
             .cargo_bin("ledger-canister")
             .install_(
                 &r,
-                LedgerCanisterInitPayload {
-                    minting_canister: CanisterId::try_from(minting_canister.get_principal_id())
-                        .unwrap(),
+                CandidOne(LedgerCanisterInitPayload {
+                    minting_account: CanisterId::try_from(minting_account.get_principal_id())
+                        .unwrap()
+                        .get(),
                     initial_values: accounts,
                     archive_canister: None,
                     max_message_size_bytes: None,
-                },
+                }),
             )
             .await?;
 
-        let acc1_balance: ICPTs = ledger
-            .query_(
-                "account_balance",
-                candid_one,
-                AccountBalanceArgs {
-                    account: acc1.get_principal_id(),
-                    sub_account: None,
-                },
-            )
-            .await?;
+        let acc1_balance = query_balance(&ledger, &acc1).await?;
         assert_eq!(acc1_balance.get_doms(), acc1_start_amount);
 
-        let acc2_balance: ICPTs = ledger
-            .query_(
-                "account_balance",
-                candid_one,
-                AccountBalanceArgs {
-                    account: acc2.get_principal_id(),
-                    sub_account: None,
-                },
-            )
-            .await?;
+        let acc2_balance = query_balance(&ledger, &acc2).await?;
         assert_eq!(acc2_balance.get_doms(), acc2_start_amount);
+
+        let supply: ICPTs = ledger
+            .query_("total_supply", candid_one, TotalSupplyArgs {})
+            .await?;
+        assert_eq!(supply.get_doms(), acc1_start_amount + acc2_start_amount);
 
         // perform a mint
         let mint_amount = 100;
-        let _: BlockHeight = ledger
-            .update_from_sender(
-                "send",
-                candid_one,
-                SendArgs {
-                    memo: Memo::default(),
-                    amount: ICPTs::from_doms(mint_amount),
-                    fee: ICPTs::ZERO,
-                    from_subaccount: None,
-                    to: acc1.get_principal_id(),
-                    to_subaccount: None,
-                    block_height: None,
-                },
-                &minting_canister,
-            )
-            .await?;
+        simple_send(&ledger, &acc1, &minting_account, mint_amount, 0).await?;
 
-        let acc1_balance: ICPTs = ledger
-            .query_(
-                "account_balance",
-                candid_one,
-                AccountBalanceArgs {
-                    account: acc1.get_principal_id(),
-                    sub_account: None,
-                },
-            )
-            .await?;
+        let acc1_balance = query_balance(&ledger, &acc1).await?;
         assert_eq!(acc1_balance.get_doms(), acc1_start_amount + mint_amount);
+
+        let supply: ICPTs = ledger
+            .query_("total_supply", candid_one, TotalSupplyArgs {})
+            .await?;
+        assert_eq!(
+            supply.get_doms(),
+            acc1_start_amount + acc2_start_amount + mint_amount
+        );
 
         // perform a send
         let send_amount = 500;
         let send_fee = TRANSACTION_FEE.get_doms();
-        let _: BlockHeight = ledger
-            .update_from_sender(
-                "send",
-                candid_one,
-                SendArgs {
-                    memo: Memo::default(),
-                    amount: ICPTs::from_doms(send_amount),
-                    fee: ICPTs::from_doms(send_fee),
-                    from_subaccount: None,
-                    to: acc2.get_principal_id(),
-                    to_subaccount: None,
-                    block_height: None,
-                },
-                &acc1,
-            )
-            .await?;
+        simple_send(&ledger, &acc2, &acc1, send_amount, send_fee).await?;
 
-        let acc1_balance: ICPTs = ledger
-            .query_(
-                "account_balance",
-                candid_one,
-                AccountBalanceArgs {
-                    account: acc1.get_principal_id(),
-                    sub_account: None,
-                },
-            )
-            .await?;
+        let acc1_balance = query_balance(&ledger, &acc1).await?;
         assert_eq!(
             acc1_balance.get_doms(),
             acc1_start_amount + mint_amount - send_amount - send_fee
         );
 
-        let acc2_balance: ICPTs = ledger
-            .query_(
-                "account_balance",
-                candid_one,
-                AccountBalanceArgs {
-                    account: acc2.get_principal_id(),
-                    sub_account: None,
-                },
-            )
-            .await?;
+        let acc2_balance = query_balance(&ledger, &acc2).await?;
         assert_eq!(acc2_balance.get_doms(), acc2_start_amount + send_amount);
 
         // perform a burn
-        let burn_amount = 20;
-        let _: BlockHeight = ledger
-            .update_from_sender(
-                "send",
-                candid_one,
-                SendArgs {
-                    memo: Memo::default(),
-                    amount: ICPTs::from_doms(burn_amount),
-                    fee: ICPTs::ZERO,
-                    from_subaccount: None,
-                    to: minting_canister.get_principal_id(),
-                    to_subaccount: None,
-                    block_height: None,
-                },
-                &acc2,
-            )
-            .await?;
+        let burn_amount = MIN_BURN_AMOUNT.get_doms();
+        simple_send(&ledger, &minting_account, &acc2, burn_amount, 0).await?;
 
-        let acc2_balance: ICPTs = ledger
-            .query_(
-                "account_balance",
-                candid_one,
-                AccountBalanceArgs {
-                    account: acc2.get_principal_id(),
-                    sub_account: None,
-                },
-            )
-            .await?;
+        let acc2_balance = query_balance(&ledger, &acc2).await?;
         assert_eq!(
             acc2_balance.get_doms(),
             acc2_start_amount + send_amount - burn_amount
         );
 
         // invalid transaction
-        let invalid_transaction_res: Result<BlockHeight, String> = ledger
-            .update_from_sender(
-                "send",
-                candid_one,
-                SendArgs {
-                    memo: Memo::default(),
-                    amount: ICPTs::from_doms(burn_amount),
-                    fee: ICPTs::ZERO,
-                    from_subaccount: None,
-                    to: minting_canister.get_principal_id(),
-                    to_subaccount: None,
-                    block_height: None,
-                },
-                &minting_canister,
-            )
-            .await;
+        let invalid_transaction_res =
+            simple_send(&ledger, &minting_account, &minting_account, burn_amount, 0).await;
         assert!(invalid_transaction_res.is_err());
 
-        let minting_canister_balance: ICPTs = ledger
-            .query_(
-                "account_balance",
-                candid_one,
-                AccountBalanceArgs {
-                    account: minting_canister.get_principal_id(),
-                    sub_account: None,
-                },
-            )
-            .await?;
+        // invalid burn (too little)
+        let invalid_burn_res = simple_send(&ledger, &minting_account, &acc2, 3, 0).await;
+        assert!(invalid_burn_res.is_err());
+
+        // invalid burn (too much)
+        let invalid_burn_res = simple_send(&ledger, &minting_account, &acc2, 3000, 0).await;
+        assert!(invalid_burn_res.is_err());
+
+        // invalid send (too much)
+        let invalid_send_res = simple_send(&ledger, &acc2, &acc1, 3000, send_fee).await;
+        assert!(invalid_send_res.is_err());
+
+        // invalid send (invalid fee)
+        let invalid_send_res = simple_send(&ledger, &acc2, &acc1, 1, 0).await;
+        assert!(invalid_send_res.is_err());
+
+        let minting_canister_balance = query_balance(&ledger, &minting_account).await?;
         assert_eq!(minting_canister_balance.get_doms(), 0);
 
         let raw_blocks: Vec<RawBlock> = ledger

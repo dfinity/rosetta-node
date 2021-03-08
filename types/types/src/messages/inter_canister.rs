@@ -80,11 +80,11 @@ impl RejectContext {
     }
 }
 
-impl Into<RejectContext> for UserError {
-    fn into(self) -> RejectContext {
-        RejectContext {
-            code: RejectCode::from(self.code()),
-            message: self.description().to_string(),
+impl From<UserError> for RejectContext {
+    fn from(err: UserError) -> Self {
+        Self {
+            code: RejectCode::from(err.code()),
+            message: err.description().to_string(),
         }
     }
 }
