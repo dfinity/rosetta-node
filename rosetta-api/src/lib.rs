@@ -16,9 +16,7 @@ use crate::store::HashedBlock;
 
 use convert::{from_metadata, into_metadata, to_arg};
 use ic_interfaces::crypto::DOMAIN_IC_REQUEST;
-use ic_types::messages::{
-    Blob, HttpCanisterUpdate, HttpRequestEnvelope, HttpSubmitContent, MessageId, RawHttpRequest,
-};
+use ic_types::messages::{Blob, HttpCanisterUpdate, HttpRequestEnvelope, HttpSubmitContent};
 use ic_types::time::current_time_and_expiry_time;
 use ic_types::{CanisterId, PrincipalId};
 
@@ -29,7 +27,11 @@ use ledger_canister::{BlockHeight, Memo, SendArgs, Serializable, Transfer, TRANS
 use serde_json::{json, map::Map};
 use std::convert::TryFrom;
 
+use async_std::task::sleep;
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
+
+use log::{debug, warn};
 
 pub const API_VERSION: &str = "1.4.10";
 pub const NODE_VERSION: &str = "1.0.2";
@@ -417,7 +419,7 @@ impl RosettaRequestHandler {
                         block_height: Some(height),
                     });
 
-                    let (current_time, expiry) = current_time_and_expiry_time();
+                    let expiry = current_time_and_expiry_time().1;
 
                     let update = HttpCanisterUpdate {
                         canister_id: Blob(self.ledger.ledger_canister_id().get().to_vec()),
@@ -434,10 +436,7 @@ impl RosettaRequestHandler {
 
                     let unsigned_transaction: String = serde_json::to_string(&update).unwrap();
 
-                    let raw_http_request =
-                        RawHttpRequest::try_from((update, current_time)).unwrap();
-
-                    let message_id = MessageId::from(&raw_http_request);
+                    let message_id = update.id();
 
                     // Lifted from canister_client::agent::sign_message_id
                     let mut sig_data = vec![];
@@ -494,6 +493,7 @@ impl RosettaRequestHandler {
         msg: models::ConstructionSubmitRequest,
     ) -> Result<ConstructionSubmitResponse, ApiError> {
         verify_network_id(self.ledger.ledger_canister_id(), &msg.network_identifier)?;
+
         let request: HttpRequestEnvelope<HttpSubmitContent> =
             serde_json::from_str(&msg.signed_transaction).map_err(|e| {
                 internal_error(format!(
@@ -508,6 +508,54 @@ impl RosettaRequestHandler {
             transaction_identifier,
             metadata: Map::new(),
         })
+    }
+
+    /// Wait until a new block appears that contains the specified
+    /// transaction.
+    pub async fn wait_for_transaction(
+        &self,
+        transaction_identifier: &TransactionIdentifier,
+        mut prev_chain_length: BlockHeight,
+        deadline: std::time::SystemTime,
+    ) -> Result<Option<BlockHeight>, ApiError> {
+        debug!(
+            "Waiting for transaction {:?} to appear...",
+            transaction_identifier
+        );
+
+        loop {
+            let cur_chain_length = self.ledger.chain_length().await;
+
+            for idx in prev_chain_length..cur_chain_length {
+                debug!("Looking at block {}", idx);
+                let blocks = self.ledger.read_blocks().await;
+                let block = get_block(
+                    &blocks,
+                    Some(PartialBlockIdentifier {
+                        index: Some(idx as i64),
+                        hash: None,
+                    }),
+                )?;
+                let hash = block.block.transaction().hash();
+                if convert::transaction_identifier(&hash) == *transaction_identifier {
+                    return Ok(Some(idx));
+                }
+            }
+
+            prev_chain_length = cur_chain_length;
+
+            if SystemTime::now() > deadline {
+                break;
+            }
+            sleep(Duration::from_secs(1)).await;
+        }
+
+        warn!(
+            "Transaction {:?} did not appear within the deadline",
+            transaction_identifier
+        );
+
+        Ok(None)
     }
 
     /// Get All Mempool Transactions
@@ -560,7 +608,8 @@ impl RosettaRequestHandler {
                 "operation_types": [
                     "BURN",
                     "MINT",
-                    "TRANSACTION"
+                    "TRANSACTION",
+                    "FEE"
                ],
                 "errors": [
                     ApiError::InternalError(true, None),

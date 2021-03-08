@@ -101,7 +101,7 @@ impl TryFrom<PrincipalId> for CanisterId {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize)]
 pub enum CanisterIdBlobParseError {
     PrincipalIdBlobParseError(PrincipalIdBlobParseError),
     CanisterIdError(CanisterIdError),
@@ -135,6 +135,17 @@ impl TryFrom<Vec<u8>> for CanisterId {
         .map_err(CanisterIdBlobParseError::CanisterIdError)
     }
 }
+
+impl fmt::Display for CanisterIdBlobParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CanisterIdError(err) => write!(f, "CanisterIdError: {}", err.to_string()),
+            Self::PrincipalIdBlobParseError(err) => write!(f, "Could not parse principal: {}", err),
+        }
+    }
+}
+
+impl std::error::Error for CanisterIdBlobParseError {}
 
 // TODO(akhi): This exists as temporary scaffolding as there are various places
 // in the code currently, where we encode subnet ids as canister ids.

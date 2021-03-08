@@ -1,4 +1,4 @@
-use super::{CountBytes, RawHttpRequest, RawHttpRequestVal};
+use super::{CountBytes, RawHttpRequestVal};
 use crate::crypto::SignedBytesWithoutDomainSeparator;
 use ic_crypto_sha256::Sha256;
 use ic_protobuf::proxy::ProxyDecodeError;
@@ -190,15 +190,6 @@ pub(crate) fn hash_of_map<S: ToString>(map: &BTreeMap<S, RawHttpRequestVal>) -> 
     hasher.finish()
 }
 
-// TODO(akhi): Using reference here may make callers think that this is a cheap
-// operation.  We should instead be exposing the copying going on here to the
-// callers.
-impl From<&RawHttpRequest> for MessageId {
-    fn from(request: &RawHttpRequest) -> Self {
-        MessageId::from(hash_of_map(&request.0))
-    }
-}
-
 impl From<&MessageId> for u32 {
     fn from(message_id: &MessageId) -> u32 {
         (message_id.0[0] as u32)
@@ -252,8 +243,8 @@ impl From<MessageIdError> for ProxyDecodeError {
 #[cfg(test)]
 mod tests {
     use super::super::{
-        Blob, HttpCanisterUpdate, HttpRequestEnvelope, HttpSubmitContent, RawHttpRequestVal,
-        SignedIngress,
+        Blob, HttpCanisterUpdate, HttpRequest, HttpRequestEnvelope, HttpSubmitContent,
+        RawHttpRequestVal, SignedIngress,
     };
     use super::*;
     use crate::{time::current_time_and_expiry_time, CanisterId, PrincipalId, Time};
@@ -433,7 +424,6 @@ mod tests {
         receiver: CanisterId,
         method_name: String,
         method_payload: Vec<u8>,
-        current_time: Time,
         expiry_time: Time,
         sender_sig: Vec<u8>,
         sender_pubkey: Vec<u8>,
@@ -453,7 +443,7 @@ mod tests {
             sender_sig: Some(Blob(sender_sig)),
             sender_delegation: None,
         };
-        SignedIngress::try_from((envelope, current_time)).unwrap()
+        SignedIngress::from(HttpRequest::try_from(envelope).unwrap())
     }
 
     #[test]
@@ -462,13 +452,12 @@ mod tests {
     /// on two messages containing different public keys and signatures and
     /// asserts that the computed MessageIds should be the same.
     fn message_id_icf_reference() {
-        let (current_time, expiry_time) = current_time_and_expiry_time();
+        let expiry_time = current_time_and_expiry_time().1;
         let signed_ingress1 = signed_ingress(
             CanisterId::new(PrincipalId::try_from(&[0, 0, 0, 0, 0, 0, 4, 210][..]).unwrap())
                 .unwrap(),
             "hello".to_string(),
             b"DIDL\x00\xFD*".to_vec(),
-            current_time,
             expiry_time,
             vec![3; 32],
             vec![6; 32],
@@ -479,7 +468,6 @@ mod tests {
                 .unwrap(),
             "hello".to_string(),
             b"DIDL\x00\xFD*".to_vec(),
-            current_time,
             expiry_time,
             vec![1; 32],
             vec![5; 32],

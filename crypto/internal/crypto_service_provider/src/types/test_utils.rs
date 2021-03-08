@@ -1,4 +1,6 @@
 use super::*;
+use ic_crypto_internal_basic_sig_ecdsa_secp256k1::types as ecdsa_secp256k1_types;
+use ic_crypto_internal_basic_sig_ecdsa_secp256r1::types as ecdsa_secp256r1_types;
 use ic_crypto_internal_basic_sig_ed25519::types as ed25519_types;
 use ic_crypto_internal_multi_sig_bls12381::types as multi_sig_types;
 use ic_crypto_internal_test_vectors::unhex::{
@@ -70,12 +72,30 @@ impl CspPop {
 }
 
 #[allow(unused)]
-pub fn arbitrary_ecdsa_p256_signature() -> CspSignature {
-    let mut random_bytes = [0; 64];
+pub fn arbitrary_ecdsa_secp256r1_signature() -> CspSignature {
+    let mut random_bytes = [0; ecdsa_secp256r1_types::SignatureBytes::SIZE];
     for b in random_bytes.iter_mut() {
         *b = rand::random();
     }
     CspSignature::EcdsaP256(ecdsa_types::SignatureBytes(random_bytes))
+}
+
+#[allow(unused)]
+pub fn arbitrary_ecdsa_secp256k1_public_key() -> CspPublicKey {
+    let mut random_bytes = [0; ecdsa_secp256k1_types::PublicKeyBytes::SIZE];
+    for b in random_bytes.iter_mut() {
+        *b = rand::random();
+    }
+    CspPublicKey::Secp256k1(ecdsa_secp256k1_types::PublicKeyBytes(random_bytes.to_vec()))
+}
+
+#[allow(unused)]
+pub fn arbitrary_ecdsa_secp256r1_public_key() -> CspPublicKey {
+    let mut random_bytes = [0; ecdsa_secp256r1_types::PublicKeyBytes::SIZE];
+    for b in random_bytes.iter_mut() {
+        *b = rand::random();
+    }
+    CspPublicKey::EcdsaP256(ecdsa_secp256r1_types::PublicKeyBytes(random_bytes.to_vec()))
 }
 
 #[allow(unused)]
@@ -94,6 +114,15 @@ pub fn arbitrary_ed25519_secret_key() -> CspSecretKey {
         *b = rand::random();
     }
     CspSecretKey::Ed25519(ed25519_types::SecretKeyBytes(random_bytes))
+}
+
+#[allow(unused)]
+pub fn arbitrary_secp256k1_signature() -> CspSignature {
+    let mut random_bytes = [0; 64];
+    for b in random_bytes.iter_mut() {
+        *b = rand::random();
+    }
+    CspSignature::Secp256k1(secp256k1_types::SignatureBytes(random_bytes))
 }
 
 #[allow(unused)]

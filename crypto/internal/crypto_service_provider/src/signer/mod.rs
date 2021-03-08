@@ -1,9 +1,10 @@
 use super::api::CspSigner;
-use super::crypto_lib::basic_sig;
 use super::types::{CspPop, CspPublicKey, CspSignature};
 use super::Csp;
 use crate::secret_key_store::SecretKeyStore;
 use crate::types::{CspSecretKey, MultiBls12_381_Signature};
+use ic_crypto_internal_basic_sig_ecdsa_secp256k1 as ecdsa_secp256k1;
+use ic_crypto_internal_basic_sig_ecdsa_secp256r1 as ecdsa_secp256r1;
 use ic_crypto_internal_basic_sig_ed25519 as ed25519;
 use ic_crypto_internal_multi_sig_bls12381 as multi_sig;
 use ic_types::crypto::{AlgorithmId, CryptoError, CryptoResult, KeyId};
@@ -77,7 +78,18 @@ impl<R: Rng + CryptoRng, S: SecretKeyStore> CspSigner for Csp<R, S> {
                 // in ECDSA), so we do it here with SHA256, which is the only
                 // supported hash currently.
                 let msg_hash = sha256(msg);
-                basic_sig::ecdsa::verify(&signature, &msg_hash, &public_key)
+                ecdsa_secp256r1::verify(&signature, &msg_hash, &public_key)
+            }
+            (
+                AlgorithmId::EcdsaSecp256k1,
+                CspSignature::Secp256k1(signature),
+                CspPublicKey::Secp256k1(public_key),
+            ) => {
+                // ECDSA CLib impl. does not hash the message (as hash algorithm can vary
+                // in ECDSA), so we do it here with SHA256, which is the only
+                // supported hash currently.
+                let msg_hash = sha256(msg);
+                ecdsa_secp256k1::verify(&signature, &msg_hash, &public_key)
             }
             (
                 AlgorithmId::Ed25519,

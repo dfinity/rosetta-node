@@ -15,13 +15,13 @@ use ic_types::{
     consensus::catchup::CatchUpPackageParam,
     messages::{
         Blob, HttpReadContent, HttpRequestEnvelope, HttpStatusResponse, HttpSubmitContent,
-        MessageId, RawHttpRequest,
+        MessageId,
     },
-    CanisterId, PrincipalId, Time,
+    CanisterId, PrincipalId,
 };
 use prost::Message;
 use serde_cbor::value::Value as CBOR;
-use std::{convert::TryFrom, error::Error, fmt, sync::Arc, time::Duration};
+use std::{error::Error, fmt, sync::Arc, time::Duration};
 use tokio::time::delay_for;
 use url::Url;
 
@@ -691,18 +691,13 @@ pub fn ed25519_public_key_to_der(mut key: Vec<u8>) -> Vec<u8> {
 pub fn sign_submit(
     content: HttpSubmitContent,
     sender: &Sender,
-    current_time: Time,
 ) -> Result<(HttpRequestEnvelope<HttpSubmitContent>, MessageId), String> {
     // Open question: should this also set the `sender` field of the `content`? The
     // two are linked, but it's a bit weird for a function that presents itself
     // as 'wrapping a content into an envelope' to mess up with the content.
 
     let message_id = match &content {
-        HttpSubmitContent::Call { update } => {
-            let raw_http_request =
-                RawHttpRequest::try_from((update.clone(), current_time)).unwrap();
-            MessageId::from(&raw_http_request)
-        }
+        HttpSubmitContent::Call { update } => update.id(),
     };
 
     let pub_key_der = sender.sender_pubkey_der().map(Blob);
@@ -728,17 +723,8 @@ pub fn sign_submit(
 pub fn sign_read(
     content: HttpReadContent,
     sender: &Sender,
-    current_time: Time,
 ) -> Result<HttpRequestEnvelope<HttpReadContent>, Box<dyn Error>> {
-    let raw_http_request = match &content {
-        HttpReadContent::Query { query } => {
-            RawHttpRequest::try_from((query.clone(), current_time)).unwrap()
-        }
-        HttpReadContent::ReadState { read_state } => {
-            RawHttpRequest::try_from((read_state.clone(), current_time)).unwrap()
-        }
-    };
-    let message_id = MessageId::from(&raw_http_request);
+    let message_id = content.id();
     let pub_key_der = sender.sender_pubkey_der().map(Blob);
     let sender_sig = sender.sign_message_id(&message_id)?.map(Blob);
 
@@ -767,13 +753,12 @@ mod tests {
     use ic_test_utilities::{
         crypto::temp_crypto_component_with_fake_registry, FastForwardTimeSource,
     };
-    use ic_types::messages::{
-        HttpCanisterUpdate, HttpRequest, HttpUserQuery, ReadContent, SignedIngress,
-    };
+    use ic_types::messages::{HttpCanisterUpdate, HttpRequest, HttpUserQuery, ReadContent};
     use ic_types::{PrincipalId, Time, UserId};
-    use ic_validator::{validate_message, validate_request_auth};
+    use ic_validator::validate_request_auth;
     use rand_chacha::ChaChaRng;
     use rand_core::SeedableRng;
+    use std::convert::TryFrom;
     use tokio_test::assert_ok;
 
     // The node id of the node that validates message signatures
@@ -786,7 +771,7 @@ mod tests {
                 .expect("Time wrapped around")
     }
 
-    /// Create a SignedIngress message with a non-anonymous user and then verify
+    /// Create an HttpRequest with a non-anonymous user and then verify
     /// that `validate_message` manages to authenticate it.
     #[test]
     fn sign_and_verify_submit_content() {
@@ -815,29 +800,23 @@ mod tests {
             },
         };
         let sender = Sender::from_keypair(&keypair);
-        let (submit, id) = sign_submit(content.clone(), &sender, current_time).unwrap();
+        let (submit, id) = sign_submit(content.clone(), &sender).unwrap();
 
         // The wrapped content is content, without modification
         assert_eq!(submit.content, content);
 
         // The message id matches one that can be reconstructed from the output
-        let signed_ingress = SignedIngress::try_from((submit, current_time)).unwrap();
-        assert_eq!(id, signed_ingress.id());
+        let request = HttpRequest::try_from(submit).unwrap();
+        assert_eq!(id, request.id());
 
         // The envelope can be successfully authenticated
         let validator = temp_crypto_component_with_fake_registry(node_test_id(VALIDATOR_NODE_ID));
-        validate_message(
-            &validator,
-            &signed_ingress.canister_id(),
-            &signed_ingress.sender(),
-            &id,
-            &signed_ingress.signature,
-            time_now(),
-        )
-        .unwrap();
+        assert!(validate_request_auth(&request, &validator, time_now())
+            .unwrap()
+            .contains(&request.content().canister_id()));
     }
 
-    /// Create a SignedIngress message with an explicit anonymous user and then
+    /// Create an HttpRequest with an explicit anonymous user and then
     /// verify that `validate_message` manages to authenticate it.
     #[test]
     fn sign_and_verify_submit_content_explicit_anonymous() {
@@ -856,26 +835,20 @@ mod tests {
                 ingress_expiry: expiry_time.as_nanos_since_unix_epoch(),
             },
         };
-        let (submit, id) = sign_submit(content.clone(), &Sender::Anonymous, current_time).unwrap();
+        let (submit, id) = sign_submit(content.clone(), &Sender::Anonymous).unwrap();
 
         // The wrapped content is content, without modification
         assert_eq!(submit.content, content);
 
         // The message id matches one that can be reconstructed from the output
-        let signed_ingress = SignedIngress::try_from((submit, current_time)).unwrap();
-        assert_eq!(id, signed_ingress.id());
+        let request = HttpRequest::try_from(submit).unwrap();
+        assert_eq!(id, request.id());
 
         // The envelope can be successfully authenticated
         let validator = temp_crypto_component_with_fake_registry(node_test_id(VALIDATOR_NODE_ID));
-        validate_message(
-            &validator,
-            &signed_ingress.canister_id(),
-            &signed_ingress.sender(),
-            &id,
-            &signed_ingress.signature,
-            time_now(),
-        )
-        .unwrap();
+        assert!(validate_request_auth(&request, &validator, time_now())
+            .unwrap()
+            .contains(&request.content().canister_id()));
     }
 
     #[test]
@@ -907,7 +880,7 @@ mod tests {
         )
         .unwrap();
 
-        let read = sign_read(content, &Sender::from_keypair(&keypair), current_time).unwrap();
+        let read = sign_read(content, &Sender::from_keypair(&keypair)).unwrap();
 
         // The wrapped content is content, without modification
         assert_eq!(read.content, content_copy);

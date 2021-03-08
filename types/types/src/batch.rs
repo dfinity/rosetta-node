@@ -332,8 +332,8 @@ mod tests {
     use super::*;
     use crate::{
         messages::{
-            Blob, Delegation, HttpCanisterUpdate, HttpRequestEnvelope, HttpSubmitContent,
-            SignedDelegation, SignedIngress,
+            Blob, Delegation, HttpCanisterUpdate, HttpRequest, HttpRequestEnvelope,
+            HttpSubmitContent, SignedDelegation, SignedIngress,
         },
         time::current_time_and_expiry_time,
     };
@@ -342,7 +342,7 @@ mod tests {
     /// Vec<SignedIngress>.  Ensure that the two vectors are identical.
     #[test]
     fn into_ingress_payload_and_back() {
-        let (current_time, ingress_expiry) = current_time_and_expiry_time();
+        let ingress_expiry = current_time_and_expiry_time().1;
         let content = HttpSubmitContent::Call {
             update: HttpCanisterUpdate {
                 canister_id: Blob(vec![42; 8]),
@@ -378,7 +378,7 @@ mod tests {
         ];
         let signed_ingresses: Vec<SignedIngress> = update_messages
             .into_iter()
-            .map(|msg| SignedIngress::try_from((msg, current_time)).unwrap())
+            .map(|msg| SignedIngress::from(HttpRequest::try_from(msg).unwrap()))
             .collect();
         let ingress_payload = IngressPayload::from(signed_ingresses.clone());
         let signed_ingresses1 = Vec::<SignedIngress>::try_from(ingress_payload).unwrap();

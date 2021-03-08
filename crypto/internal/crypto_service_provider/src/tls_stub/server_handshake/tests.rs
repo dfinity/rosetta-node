@@ -8,7 +8,7 @@ use crate::tls_stub::test_utils::{
 use crate::types::CspSecretKey;
 use crate::Csp;
 use ic_crypto_internal_multi_sig_bls12381::types::SecretKeyBytes;
-use ic_crypto_test_utils::x509_certificates::{
+use ic_crypto_test_utils::tls::x509_certificates::{
     cert_to_der, generate_ed25519_cert, private_key_to_der, x509_public_key_cert,
 };
 use ic_crypto_tls_interfaces::TlsStream;

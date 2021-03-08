@@ -3,8 +3,9 @@
 // defined in another module). https://dfinity.atlassian.net/browse/DFN-467
 #![allow(clippy::unit_arg)]
 
-use super::crypto_lib::basic_sig::ecdsa::types as ecdsa_types;
 pub use conversions::CspSecretKeyConversionError;
+use ic_crypto_internal_basic_sig_ecdsa_secp256k1::types as secp256k1_types;
+use ic_crypto_internal_basic_sig_ecdsa_secp256r1::types as ecdsa_types;
 use ic_crypto_internal_basic_sig_ed25519::types as ed25519_types;
 use ic_crypto_internal_multi_sig_bls12381::types as multi_types;
 use ic_crypto_internal_threshold_sig_bls12381::dkg::secp256k1::types::{
@@ -31,10 +32,12 @@ use ic_crypto_internal_tls::keygen::TlsEd25519SecretKeyDerBytes;
 use std::collections::BTreeMap;
 #[cfg(test)]
 use test_utils::{
-    arbitrary_ecdsa_p256_signature, arbitrary_ed25519_public_key, arbitrary_ed25519_secret_key,
-    arbitrary_ed25519_signature, arbitrary_ephemeral_key_set, arbitrary_fs_encryption_key_set,
-    arbitrary_multi_bls12381_combined_signature, arbitrary_multi_bls12381_individual_signature,
-    arbitrary_multi_bls12381_public_key, arbitrary_multi_bls12381_secret_key,
+    arbitrary_ecdsa_secp256k1_public_key, arbitrary_ecdsa_secp256r1_public_key,
+    arbitrary_ecdsa_secp256r1_signature, arbitrary_ed25519_public_key,
+    arbitrary_ed25519_secret_key, arbitrary_ed25519_signature, arbitrary_ephemeral_key_set,
+    arbitrary_fs_encryption_key_set, arbitrary_multi_bls12381_combined_signature,
+    arbitrary_multi_bls12381_individual_signature, arbitrary_multi_bls12381_public_key,
+    arbitrary_multi_bls12381_secret_key, arbitrary_secp256k1_signature,
     arbitrary_threshold_bls12381_combined_signature,
     arbitrary_threshold_bls12381_individual_signature, arbitrary_threshold_bls12381_secret_key,
     arbitrary_tls_ed25519_secret_key,
@@ -106,7 +109,10 @@ pub enum CspEncryptedSecretKey {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(Arbitrary))]
 pub enum CspPublicKey {
+    #[cfg_attr(test, proptest(value(arbitrary_ecdsa_secp256r1_public_key)))]
     EcdsaP256(ecdsa_types::PublicKeyBytes),
+    #[cfg_attr(test, proptest(value(arbitrary_ecdsa_secp256k1_public_key)))]
+    Secp256k1(secp256k1_types::PublicKeyBytes),
     #[cfg_attr(test, proptest(value(arbitrary_ed25519_public_key)))]
     Ed25519(ed25519_types::PublicKeyBytes),
     #[cfg_attr(test, proptest(value(arbitrary_multi_bls12381_public_key)))]
@@ -137,6 +143,7 @@ impl CspPublicKey {
 
     pub fn algorithm_id(&self) -> AlgorithmId {
         match self {
+            CspPublicKey::Secp256k1(_) => AlgorithmId::EcdsaSecp256k1,
             CspPublicKey::EcdsaP256(_) => AlgorithmId::EcdsaP256,
             CspPublicKey::Ed25519(_) => AlgorithmId::Ed25519,
             CspPublicKey::MultiBls12_381(_) => AlgorithmId::MultiBls12_381,
@@ -145,6 +152,7 @@ impl CspPublicKey {
 
     pub fn pk_bytes(&self) -> &[u8] {
         match self {
+            CspPublicKey::Secp256k1(pk_bytes) => &pk_bytes.0,
             CspPublicKey::EcdsaP256(pk_bytes) => &pk_bytes.0,
             CspPublicKey::Ed25519(pk_bytes) => &pk_bytes.0,
             CspPublicKey::MultiBls12_381(pk_bytes) => &pk_bytes.0,
@@ -161,8 +169,10 @@ pub enum CspPop {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(Arbitrary))]
 pub enum CspSignature {
-    #[cfg_attr(test, proptest(value(arbitrary_ecdsa_p256_signature)))]
+    #[cfg_attr(test, proptest(value(arbitrary_ecdsa_secp256r1_signature)))]
     EcdsaP256(ecdsa_types::SignatureBytes),
+    #[cfg_attr(test, proptest(value(arbitrary_secp256k1_signature)))]
+    Secp256k1(secp256k1_types::SignatureBytes),
     #[cfg_attr(test, proptest(value(arbitrary_ed25519_signature)))]
     Ed25519(ed25519_types::SignatureBytes),
     MultiBls12_381(MultiBls12_381_Signature),
@@ -234,6 +244,7 @@ impl CspSignature {
     pub fn algorithm(&self) -> AlgorithmId {
         match self {
             CspSignature::EcdsaP256(_) => AlgorithmId::EcdsaP256,
+            CspSignature::Secp256k1(_) => AlgorithmId::EcdsaSecp256k1,
             CspSignature::Ed25519(_) => AlgorithmId::Ed25519,
             CspSignature::MultiBls12_381(_) => AlgorithmId::MultiBls12_381,
             CspSignature::ThresBls12_381(_) => AlgorithmId::ThresBls12_381,

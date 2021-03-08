@@ -84,7 +84,7 @@ mod verify_common {
 
 mod verify_ecdsa_p256 {
     use super::*;
-    use crate::crypto_lib::basic_sig::ecdsa::types::SignatureBytes;
+    use ic_crypto_internal_basic_sig_ecdsa_secp256r1::types::SignatureBytes;
     use ic_types::crypto::AlgorithmId::EcdsaP256;
     use std::convert::TryFrom;
 
@@ -178,6 +178,76 @@ mod verify_ecdsa_p256 {
         let csp_pk = CspPublicKey::try_from(&user_pk).unwrap();
         let sig_bytes = SignatureBytes::try_from(hex::decode(sig_hex).unwrap()).unwrap();
         let csp_sig = CspSignature::EcdsaP256(sig_bytes);
+        (csp_pk, csp_sig)
+    }
+}
+
+mod verify_secp256k1 {
+    use super::*;
+    use ic_crypto_internal_basic_sig_ecdsa_secp256k1::types::SignatureBytes;
+    use ic_types::crypto::AlgorithmId::EcdsaSecp256k1;
+    use std::convert::TryFrom;
+
+    // Thanks to Bjorn for generating this test case.
+    const PK: &[u8] = b"3056301006072a8648ce3d020106052b8104000a034200047060f720298ffa0f48d9606abdb013bc82f4ff269f9adc3e7226391af3fad8b30fd6a30deb81d5b4f9e142971085d0ae15b8e222d85af1e17438e630d09b7ef4";
+    const SIG: &[u8] = b"1a39066abe0da4d68a6a682e941c73b0f112b1f1e1766c2c4514591dd640793196c79e9e0d0e9678d72ba421fac9ddde86214d8fbe51e63f8b48f37471b69fbb";
+    const EMPTY_MSG: &[u8] = &[0; 0];
+
+    #[test]
+    fn should_correctly_verify_signature() {
+        let (csp_pk, csp_sig) = get_csp_pk_and_sig(PK, SIG);
+        let csp = Csp::of(csprng(), MockSecretKeyStore::new());
+        assert!(csp
+            .verify(&csp_sig, EMPTY_MSG, EcdsaSecp256k1, csp_pk)
+            .is_ok());
+    }
+
+    #[test]
+    fn should_fail_to_verify_under_wrong_signature() {
+        let (csp_pk, wrong_sig) =
+            get_csp_pk_and_sig(PK, test_data::FIREFOX_ECDSA_P256_SIG_RAW_HEX.as_ref());
+        let csp = Csp::of(csprng(), MockSecretKeyStore::new());
+        let result = csp.verify(&wrong_sig, EMPTY_MSG, EcdsaSecp256k1, csp_pk);
+        assert!(result.unwrap_err().is_signature_verification_error());
+    }
+
+    #[test]
+    fn should_fail_to_verify_under_wrong_message() {
+        let (csp_pk, csp_sig) = get_csp_pk_and_sig(PK, SIG);
+        let wrong_msg = b"wrong message";
+        assert_ne!(EMPTY_MSG, wrong_msg);
+
+        let csp = Csp::of(csprng(), MockSecretKeyStore::new());
+        let result = csp.verify(&csp_sig, wrong_msg, EcdsaSecp256k1, csp_pk);
+        assert!(result.unwrap_err().is_signature_verification_error());
+    }
+
+    #[test]
+    fn should_fail_to_verify_if_signature_has_wrong_type() {
+        let (csp_pk, _csp_sig) = get_csp_pk_and_sig(PK, SIG);
+        let sig_with_wrong_type =
+            CspSignature::multi_bls12381_individual_from_hex(TESTVEC_MULTI_BLS12_381_1_SIG);
+        let csp = Csp::of(csprng(), MockSecretKeyStore::new());
+        let result = csp.verify(&sig_with_wrong_type, EMPTY_MSG, EcdsaSecp256k1, csp_pk);
+        assert!(result.unwrap_err().is_signature_verification_error());
+    }
+
+    #[test]
+    fn should_fail_to_verify_if_signer_public_key_has_wrong_type() {
+        let (_csp_pk, csp_sig) = get_csp_pk_and_sig(PK, SIG);
+        let pk_with_wrong_type =
+            CspPublicKey::multi_bls12381_from_hex(TESTVEC_MULTI_BLS12_381_1_PK);
+        let csp = Csp::of(csprng(), MockSecretKeyStore::new());
+        let result = csp.verify(&csp_sig, EMPTY_MSG, EcdsaSecp256k1, pk_with_wrong_type);
+        assert!(result.unwrap_err().is_signature_verification_error());
+    }
+
+    fn get_csp_pk_and_sig(pk_hex: &[u8], sig_hex: &[u8]) -> (CspPublicKey, CspSignature) {
+        let der_pk = hex::decode(pk_hex).unwrap();
+        let (user_pk, _) = user_public_key_from_bytes(&der_pk).unwrap();
+        let csp_pk = CspPublicKey::try_from(&user_pk).unwrap();
+        let sig_bytes = SignatureBytes::try_from(hex::decode(sig_hex).unwrap()).unwrap();
+        let csp_sig = CspSignature::Secp256k1(sig_bytes);
         (csp_pk, csp_sig)
     }
 }

@@ -1,8 +1,9 @@
-use super::super::crypto_lib::basic_sig::ecdsa::types as ecdsa_types;
 use super::{
     CspDealing, CspDkgTranscript, CspPop, CspPublicCoefficients, CspPublicKey, CspSecretKey,
     CspSignature, MultiBls12_381_Signature, SigConverter, ThresBls12_381_Signature,
 };
+use ic_crypto_internal_basic_sig_ecdsa_secp256k1::types as secp256k1_types;
+use ic_crypto_internal_basic_sig_ecdsa_secp256r1::types as ecdsa_types;
 use ic_crypto_internal_basic_sig_ed25519::types as ed25519_types;
 use ic_crypto_internal_multi_sig_bls12381::types as multi_types;
 use ic_crypto_internal_threshold_sig_bls12381::api::dkg_errors;
@@ -43,6 +44,7 @@ impl From<&CspPublicKey> for AlgorithmId {
     fn from(public_key: &CspPublicKey) -> Self {
         match public_key {
             CspPublicKey::EcdsaP256(_) => AlgorithmId::EcdsaP256,
+            CspPublicKey::Secp256k1(_) => AlgorithmId::EcdsaSecp256k1,
             CspPublicKey::Ed25519(_) => AlgorithmId::Ed25519,
             CspPublicKey::MultiBls12_381(_) => AlgorithmId::MultiBls12_381,
         }
@@ -176,6 +178,7 @@ impl AsRef<[u8]> for CspPublicKey {
     fn as_ref(&self) -> &[u8] {
         match self {
             CspPublicKey::EcdsaP256(bytes) => &bytes.0,
+            CspPublicKey::Secp256k1(bytes) => &bytes.0,
             CspPublicKey::Ed25519(bytes) => &bytes.0,
             CspPublicKey::MultiBls12_381(public_key_bytes) => &public_key_bytes.0,
         }
@@ -205,6 +208,7 @@ impl AsRef<[u8]> for CspSignature {
     fn as_ref(&self) -> &[u8] {
         match self {
             CspSignature::EcdsaP256(bytes) => &bytes.0,
+            CspSignature::Secp256k1(bytes) => &bytes.0,
             CspSignature::Ed25519(bytes) => &bytes.0,
             CspSignature::MultiBls12_381(sig) => match sig {
                 MultiBls12_381_Signature::Individual(sig_bytes) => &sig_bytes.0,
@@ -244,6 +248,9 @@ impl TryFrom<&UserPublicKey> for CspPublicKey {
             AlgorithmId::EcdsaP256 => Ok(CspPublicKey::EcdsaP256(ecdsa_types::PublicKeyBytes(
                 user_public_key.key.to_owned(),
             ))),
+            AlgorithmId::EcdsaSecp256k1 => Ok(CspPublicKey::Secp256k1(
+                secp256k1_types::PublicKeyBytes(user_public_key.key.to_owned()),
+            )),
             algorithm => Err(CryptoError::AlgorithmNotSupported {
                 algorithm,
                 reason: "Expecting Ed25519 key".to_string(),

@@ -1,6 +1,7 @@
-use crate::crypto_lib::basic_sig::ecdsa;
 use crate::types::CspSignature;
 use ic_crypto_internal_basic_sig_der_utils as der_utils;
+use ic_crypto_internal_basic_sig_ecdsa_secp256k1 as ecdsa_secp256k1;
+use ic_crypto_internal_basic_sig_ecdsa_secp256r1 as ecdsa_secp256r1;
 use ic_crypto_internal_basic_sig_ed25519 as ed25519;
 use ic_crypto_internal_threshold_sig_bls12381 as bls12_381;
 use ic_crypto_internal_types::sign::threshold_sig::public_key::bls12_381::PublicKeyBytes as BlsPublicKeyBytes;
@@ -22,6 +23,7 @@ mod tests;
 pub enum KeyBytesContentType {
     Ed25519PublicKeyDer,
     EcdsaP256PublicKeyDer,
+    EcdsaSecp256k1PublicKeyDer,
     EcdsaP256PublicKeyDerWrappedCose,
 }
 
@@ -43,7 +45,7 @@ pub fn user_public_key_from_bytes(
         ));
     }
     // Try DER-encoded ECDSA-P256 public key.
-    if let Ok(ecdsa_pk) = ecdsa::api::public_key_from_der(bytes) {
+    if let Ok(ecdsa_pk) = ecdsa_secp256r1::api::public_key_from_der(bytes) {
         return Ok((
             UserPublicKey {
                 key: ecdsa_pk.0,
@@ -52,10 +54,20 @@ pub fn user_public_key_from_bytes(
             KeyBytesContentType::EcdsaP256PublicKeyDer,
         ));
     }
+    // Try DER-encoded ECDSA-SECP256K1 public key.
+    if let Ok(ecdsa_pk) = ecdsa_secp256k1::api::public_key_from_der(bytes) {
+        return Ok((
+            UserPublicKey {
+                key: ecdsa_pk.0,
+                algorithm_id: AlgorithmId::EcdsaSecp256k1,
+            },
+            KeyBytesContentType::EcdsaSecp256k1PublicKeyDer,
+        ));
+    }
 
     // Try DER-wrapped COSE ECDSA-P256 public key.
     if let Ok(pk_cose) = der_utils::public_key_bytes_from_der_wrapping(bytes) {
-        if let Ok(ecdsa_pk) = ecdsa::api::public_key_from_cose(&pk_cose) {
+        if let Ok(ecdsa_pk) = ecdsa_secp256r1::api::public_key_from_cose(&pk_cose) {
             return Ok((
                 UserPublicKey {
                     key: ecdsa_pk.0,
@@ -74,7 +86,7 @@ pub fn user_public_key_from_bytes(
 
 #[allow(unused)]
 pub fn ecdsa_p256_signature_from_der_bytes(bytes: &[u8]) -> CryptoResult<BasicSig> {
-    let ecdsa_sig = ecdsa::api::signature_from_der(bytes)?;
+    let ecdsa_sig = ecdsa_secp256r1::api::signature_from_der(bytes)?;
     Ok(BasicSig(ecdsa_sig.0.to_vec()))
 }
 

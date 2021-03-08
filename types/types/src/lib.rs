@@ -83,9 +83,9 @@ pub use crate::time::Time;
 pub use funds::icp::{ICPError, ICP};
 pub use funds::*;
 pub use ic_base_types::{
-    subnet_id_into_protobuf, subnet_id_try_from_protobuf, CanisterId, CanisterIdError,
-    CanisterStatusType, NodeId, NodeTag, NumBytes, PrincipalId, PrincipalIdBlobParseError,
-    PrincipalIdParseError, RegistryVersion, SubnetId,
+    subnet_id_into_protobuf, subnet_id_try_from_protobuf, CanisterId, CanisterIdBlobParseError,
+    CanisterIdError, CanisterStatusType, NodeId, NodeTag, NumBytes, PrincipalId,
+    PrincipalIdBlobParseError, PrincipalIdParseError, RegistryVersion, SubnetId,
 };
 pub use ic_crypto_internal_types::NodeIndex;
 use ic_error_types::{ErrorCode, UserError};

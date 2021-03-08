@@ -34,6 +34,7 @@ ledger-canister = {path = "canister"}
 rand = "0.7"
 structopt = "0.3.20"
 async-trait = "0.1.41"
+async-std = "1.8.0"
 tokio = { version = "0.2.22", features = ["full"] }
 shadow-rs = { version = "0.5", default-features = false, features = [] }
 
@@ -42,16 +43,3 @@ actix-rt = "*"
 
 [build-dependencies]
 shadow-rs = { version = "0.5", default-features = false, features = [] }
-
-[dev-dependencies]
-rand_distr = "0.3.0"
-tempfile = "3.1.0"
-thread_local = "1.0.1"
-# ic-scenario-tests = { path = "../scenario_tests" }
-# canister-test = { path = "../rust_canisters/canister_test" }
-ed25519-dalek = "1.0.0-pre.3"
-async-std = "1.8.0"
-
-[[test]]
-name = "rosetta-api-tests"
-path = "test/test_utils.rs"

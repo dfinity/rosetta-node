@@ -1,22 +1,13 @@
 //! Defines types that are useful when handling funds on the IC.
 
+mod cycles;
 pub mod icp;
 
-use icp::ICP;
-use phantom_newtype::AmountOf;
-
-use serde::{Deserialize, Serialize};
-
+pub use cycles::Cycles;
 use ic_protobuf::state::queues::*;
+use icp::ICP;
+use serde::{Deserialize, Serialize};
 use std::convert::From;
-
-pub struct CyclesTag;
-pub type Cycles = AmountOf<CyclesTag, u64>;
-
-// Add cycles1 and cycles2 and saturate at u64::MAX
-pub fn cycles_add_and_saturate(cycles1: Cycles, cycles2: Cycles) -> Cycles {
-    Cycles::from((cycles1.get() as u128 + cycles2.get() as u128).min(u64::MAX as u128) as u64)
-}
 
 /// A struct to hold various types of funds. Currently, only Cycles and ICP are
 /// supported.

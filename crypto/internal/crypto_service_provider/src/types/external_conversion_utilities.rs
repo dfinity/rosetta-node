@@ -6,8 +6,9 @@
 //! Generic types such as those that appear here MUST not be used in the CSP
 //! API.
 
-use super::super::crypto_lib::basic_sig::ecdsa::types as ecdsa_types;
 use super::{CspSignature, MultiBls12_381_Signature, SigConverter, ThresBls12_381_Signature};
+use ic_crypto_internal_basic_sig_ecdsa_secp256k1::types as secp256k1_types;
+use ic_crypto_internal_basic_sig_ecdsa_secp256r1::types as ecdsa_types;
 use ic_crypto_internal_basic_sig_ed25519::types as ed25519_types;
 use ic_crypto_internal_multi_sig_bls12381::types as multi_types;
 use ic_crypto_internal_threshold_sig_bls12381::types as threshold_types;
@@ -189,6 +190,27 @@ impl SigConverter {
                 let mut bytes: [u8; SIG_LEN] = [0; SIG_LEN];
                 bytes.copy_from_slice(&sig_bytes[0..SIG_LEN]);
                 Ok(CspSignature::EcdsaP256(ecdsa_types::SignatureBytes(bytes)))
+            }
+            AlgorithmId::EcdsaSecp256k1 => {
+                const SIG_LEN: usize = ecdsa_types::SignatureBytes::SIZE;
+                let sig_bytes = &signature.get_ref().0;
+
+                if sig_bytes.len() != SIG_LEN {
+                    return Err(CryptoError::MalformedSignature {
+                        algorithm: AlgorithmId::EcdsaSecp256k1,
+                        sig_bytes: sig_bytes.to_vec(),
+                        internal_error: format!(
+                            "Invalid length: Expected ECDSA-SECP256k1 signature with {} bytes but got {} bytes",
+                            SIG_LEN,
+                            sig_bytes.len()
+                        ),
+                    });
+                }
+                let mut bytes: [u8; SIG_LEN] = [0; SIG_LEN];
+                bytes.copy_from_slice(&sig_bytes[0..SIG_LEN]);
+                Ok(CspSignature::Secp256k1(secp256k1_types::SignatureBytes(
+                    bytes,
+                )))
             }
             algorithm => Err(CryptoError::AlgorithmNotSupported {
                 algorithm,

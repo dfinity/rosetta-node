@@ -11,6 +11,8 @@ use std::result::Result;
 use std::str::FromStr;
 use thiserror::Error;
 
+pub mod connection_endpoint;
+
 #[cfg(test)]
 use proptest::prelude::{any, Strategy};
 #[cfg(test)]

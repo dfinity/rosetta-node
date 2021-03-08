@@ -4,6 +4,7 @@ use crate::models::ApiError;
 
 use ic_types::PrincipalId;
 use ledger_canister::{Block, BlockHeight, HashOf, ICPTs, Serializable};
+use log::{debug, error};
 use serde::{Deserialize, Serialize};
 
 use std::collections::VecDeque;
@@ -163,15 +164,20 @@ impl OnDiskStore {
         let file = OpenOptions::new().read(true).open(file_name);
         match file.map_err(|e| e.kind()) {
             Ok(f) => {
-                let (hb, bal): (HashedBlock, Vec<(PrincipalId, ICPTs)>) =
+                debug!("Loading oldest block snapshot");
+                let (hb, bal, icpt_pool): (HashedBlock, Vec<(PrincipalId, ICPTs)>, ICPTs) =
                     serde_json::from_reader(f).map_err(|e| e.to_string())?;
                 let mut balances = Balances::default();
+                balances.icpt_pool = icpt_pool;
                 for (k, v) in bal {
-                    balances.inner.insert(k, v);
+                    balances.store.0.insert(k, v);
                 }
                 Ok(Some((hb, balances)))
             }
-            Err(std::io::ErrorKind::NotFound) => Ok(None),
+            Err(std::io::ErrorKind::NotFound) => {
+                debug!("No oldest block snapshot present");
+                Ok(None)
+            }
             Err(e) => Err(format!("Reading file failed: {:?}", e)),
         }
     }
@@ -181,6 +187,7 @@ impl OnDiskStore {
         hb: &HashedBlock,
         balances: &Balances,
     ) -> Result<(), String> {
+        debug!("Writing oldest block snapshot. Block height: {}", hb.index);
         let file_name = self.oldest_block_snapshot_file_name();
         let file = OpenOptions::new()
             .write(true)
@@ -189,9 +196,17 @@ impl OnDiskStore {
             .open(&file_name)
             .map_err(|e| e.to_string())?;
 
-        // TODO do some sane serialization of principal ids
-        let bal: Vec<_> = balances.inner.iter().collect(); //this is a vec of refs
-        serde_json::to_writer(&file, &(hb, bal)).map_err(|e| e.to_string())?;
+        // TODO implement Serialize for Balances
+        let bal: Vec<_> = balances.store.0.iter().collect(); //this is a vec of refs
+        serde_json::to_writer(&file, &(hb, bal, balances.icpt_pool)).map_err(|e| e.to_string())?;
+        file.sync_all().map_err(|e| {
+            let msg = format!(
+                "Syncing oldest block snapshot file after write failed: {:?}",
+                e
+            );
+            error!("{}", msg);
+            msg
+        })?;
 
         self.first_block_snapshot = Some((hb.clone(), balances.clone()));
         Ok(())
@@ -224,6 +239,7 @@ impl BlockStore for OnDiskStore {
     }
 
     fn push(&mut self, block: HashedBlock) -> Result<(), BlockStoreError> {
+        debug!("Writing block to the store. Block height: {}", block.index);
         let file_name = self.block_file_name(block.index);
         let file = OpenOptions::new()
             .write(true)
@@ -232,6 +248,11 @@ impl BlockStore for OnDiskStore {
             .map_err(|e| BlockStoreError::Other(e.to_string()))?;
 
         serde_json::to_writer(&file, &block).map_err(|e| BlockStoreError::Other(e.to_string()))?;
+        file.sync_all().map_err(|e| {
+            let msg = format!("Syncing file after write failed: {:?}", e);
+            error!("{}", msg);
+            BlockStoreError::Other(msg)
+        })?;
         Ok(())
     }
 
@@ -242,7 +263,7 @@ impl BlockStore for OnDiskStore {
             .map(|(first_block, _)| first_block.index)
             .unwrap_or(1);
 
-        log::debug!("Prune store from {} to {}", prune_start_idx, hb.index);
+        debug!("Prune store from {} to {}", prune_start_idx, hb.index);
         if prune_start_idx >= hb.index {
             return Ok(());
         }

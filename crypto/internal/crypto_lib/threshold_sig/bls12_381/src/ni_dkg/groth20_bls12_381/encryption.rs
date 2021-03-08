@@ -33,7 +33,8 @@ use lazy_static::lazy_static;
 use std::collections::BTreeMap;
 use std::convert::TryFrom;
 
-mod conversions;
+pub(crate) mod conversions;
+
 mod crypto {
     pub use ic_crypto_internal_fs_ni_dkg::forward_secure::{
         dec_chunks, enc_chunks, kgen, mk_sys_params, BTENode, Bit, PublicKey, SecretKey, SysParam,

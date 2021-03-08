@@ -3,7 +3,7 @@ use crate::secret_key_store::test_utils::TempSecretKeyStore;
 use crate::secret_key_store::SecretKeyStore;
 use crate::types::CspSecretKey;
 use ic_crypto_internal_tls::keygen::{TlsEd25519CertificateDerBytes, TlsEd25519SecretKeyDerBytes};
-use ic_crypto_test_utils::x509_certificates::{cert_to_der, private_key_to_der};
+use ic_crypto_test_utils::tls::x509_certificates::{cert_to_der, private_key_to_der};
 use ic_protobuf::registry::crypto::v1::X509PublicKeyCert;
 use ic_types::crypto::KeyId;
 use openssl::pkey::{PKey, Private};

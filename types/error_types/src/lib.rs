@@ -87,6 +87,7 @@ impl From<ErrorCode> for RejectCode {
             InsufficientMemoryAllocation => CanisterReject,
             SubnetNotFound => CanisterReject,
             CanisterRejectedMessage => CanisterReject,
+            InterCanisterQueryLoopDetected => CanisterError,
         }
     }
 }
@@ -127,6 +128,7 @@ pub enum ErrorCode {
     CanisterNonEmpty = 514,
     CertifiedStateUnavailable = 515,
     CanisterRejectedMessage = 516,
+    InterCanisterQueryLoopDetected = 517,
 }
 
 impl From<candid::Error> for UserError {
@@ -170,6 +172,7 @@ impl TryFrom<u64> for ErrorCode {
             514 => Ok(ErrorCode::CanisterNonEmpty),
             515 => Ok(ErrorCode::CertifiedStateUnavailable),
             516 => Ok(ErrorCode::CanisterRejectedMessage),
+            517 => Ok(ErrorCode::InterCanisterQueryLoopDetected),
             _ => Err(ProxyDecodeError::ValueOutOfRange {
                 typ: "ErrorCode",
                 err: err.to_string(),

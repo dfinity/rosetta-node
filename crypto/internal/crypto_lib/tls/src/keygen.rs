@@ -38,6 +38,24 @@ pub struct TlsEd25519SecretKeyDerBytes {
     pub bytes: Vec<u8>,
 }
 
+/// Generate a key pair and return the certificate and private key in DER
+/// format.
+///
+/// Note that the certificate serial number must be at most 20 octets according
+/// to https://tools.ietf.org/html/rfc5280 Section 4.1.2.2. The 19 bytes serial
+/// number argument is interpreted as an unsigned integer and thus fits in 20
+/// bytes, encoded as a signed ASN1 integer.
+pub fn generate_tls_key_pair_der(
+    common_name: &str,
+    serial: [u8; 19],
+    not_after: &Asn1Time,
+) -> (TlsEd25519CertificateDerBytes, TlsEd25519SecretKeyDerBytes) {
+    let (x509_certificate, key_pair) = generate_tls_key_pair(common_name, serial, not_after);
+    der_encode_cert_and_secret_key(&key_pair, x509_certificate)
+}
+
+/// Generate a key pair and return the certificate and private key.
+///
 /// Note that the certificate serial number must be at most 20 octets according
 /// to https://tools.ietf.org/html/rfc5280 Section 4.1.2.2. The 19 bytes serial
 /// number argument is interpreted as an unsigned integer and thus fits in 20
@@ -46,7 +64,7 @@ pub fn generate_tls_key_pair(
     common_name: &str,
     serial: [u8; 19],
     not_after: &Asn1Time,
-) -> (TlsEd25519CertificateDerBytes, TlsEd25519SecretKeyDerBytes) {
+) -> (X509, PKey<Private>) {
     let key_pair = ed25519_key_pair();
     let x509_certificate = x509_v3_certificate(
         common_name,
@@ -56,8 +74,7 @@ pub fn generate_tls_key_pair(
         // Digest must be null for Ed25519 (see https://www.openssl.org/docs/man1.1.1/man7/Ed25519.html)
         MessageDigest::null(),
     );
-
-    der_encode_cert_and_secret_key(&key_pair, x509_certificate)
+    (x509_certificate, key_pair)
 }
 
 fn ed25519_key_pair() -> PKey<Private> {

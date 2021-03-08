@@ -109,6 +109,7 @@ pub enum AlgorithmId {
     Groth20_Bls12_381 = 9,
     NiDkg_Groth20_Bls12_381 = 10,
     EcdsaP256 = 11,
+    EcdsaSecp256k1 = 12,
 }
 
 impl From<CspThresholdSigPublicKey> for AlgorithmId {
@@ -141,6 +142,7 @@ impl From<i32> for AlgorithmId {
             9 => AlgorithmId::Groth20_Bls12_381,
             10 => AlgorithmId::NiDkg_Groth20_Bls12_381,
             11 => AlgorithmId::EcdsaP256,
+            12 => AlgorithmId::EcdsaSecp256k1,
             _ => AlgorithmId::Placeholder,
         }
     }

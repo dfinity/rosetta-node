@@ -7,41 +7,20 @@ use super::{Blob, HttpHandlerError};
 use crate::messages::{MessageId, UserSignature};
 use crate::{
     crypto::SignedBytesWithoutDomainSeparator, ingress::MAX_INGRESS_TTL,
-    messages::message_id::hash_of_map, messages::ReadState, messages::UserQuery, CountBytes, Time,
-    UserId,
+    messages::ingress_messages::SignedIngressContent, messages::message_id::hash_of_map,
+    messages::ReadState, messages::UserQuery, CountBytes, Time, UserId,
 };
 use ic_base_types::{CanisterId, PrincipalId};
 use ic_crypto_tree_hash::{MixedHashTree, Path};
-use ic_protobuf::types::v1 as pb;
 use maplit::btreemap;
 #[cfg(test)]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    convert::TryFrom,
-};
-
-/// Check if ingress_expiry has not expired with respect to the given time,
-/// i.e., it is greater than or equal to current_time.
-pub fn validate_ingress_expiry(
-    ingress_expiry: u64,
-    current_time: Time,
-) -> Result<(), HttpHandlerError> {
-    let min_allowed_expiry = current_time.as_nanos_since_unix_epoch();
-    if ingress_expiry < min_allowed_expiry {
-        let msg = format!(
-            "Specified ingress_expiry {}ns is less than allowed expiry time {}ns",
-            ingress_expiry, min_allowed_expiry,
-        );
-        return Err(HttpHandlerError::InvalidIngressExpiry(msg));
-    }
-    Ok(())
-}
+use std::{collections::BTreeSet, convert::TryFrom};
 
 /// Check if ingress_expiry is within a proper range with respect to the given
 /// time, i.e., it is not expired yet and is not too far in the future.
-fn validate_ingress_expiry_range(
+pub fn validate_ingress_expiry(
     ingress_expiry: u64,
     current_time: Time,
 ) -> Result<(), HttpHandlerError> {
@@ -85,10 +64,6 @@ pub struct HttpCanisterUpdate {
 impl HttpCanisterUpdate {
     /// Returns the representation-independent hash.
     pub fn representation_independent_hash(&self) -> [u8; 32] {
-        hash_of_map(&self.representation_independent_map())
-    }
-
-    fn representation_independent_map(&self) -> BTreeMap<String, RawHttpRequestVal> {
         use RawHttpRequestVal::*;
         let mut map = btreemap! {
             "request_type".to_string() => String("call".to_string()),
@@ -101,7 +76,11 @@ impl HttpCanisterUpdate {
         if let Some(nonce) = &self.nonce {
             map.insert("nonce".to_string(), Bytes(nonce.0.clone()));
         }
-        map
+        hash_of_map(&map)
+    }
+
+    pub fn id(&self) -> MessageId {
+        MessageId::from(self.representation_independent_hash())
     }
 }
 
@@ -136,6 +115,12 @@ impl HttpSubmitContent {
     pub fn representation_independent_hash(&self) -> [u8; 32] {
         match self {
             Self::Call { update } => update.representation_independent_hash(),
+        }
+    }
+
+    pub fn ingress_expiry(&self) -> u64 {
+        match self {
+            Self::Call { update } => update.ingress_expiry,
         }
     }
 }
@@ -189,15 +174,15 @@ impl HttpReadContent {
             Self::ReadState { read_state } => read_state.representation_independent_hash(),
         }
     }
+
+    pub fn id(&self) -> MessageId {
+        MessageId::from(self.representation_independent_hash())
+    }
 }
 
 impl HttpUserQuery {
     /// Returns the representation-independent hash.
     pub fn representation_independent_hash(&self) -> [u8; 32] {
-        hash_of_map(&self.representation_independent_map())
-    }
-
-    fn representation_independent_map(&self) -> BTreeMap<String, RawHttpRequestVal> {
         use RawHttpRequestVal::*;
         let mut map = btreemap! {
             "request_type".to_string() => String("query".to_string()),
@@ -210,17 +195,13 @@ impl HttpUserQuery {
         if let Some(nonce) = &self.nonce {
             map.insert("nonce".to_string(), Bytes(nonce.0.clone()));
         }
-        map
+        hash_of_map(&map)
     }
 }
 
 impl HttpReadState {
     /// Returns the representation-independent hash.
     pub fn representation_independent_hash(&self) -> [u8; 32] {
-        hash_of_map(&self.representation_independent_map())
-    }
-
-    fn representation_independent_map(&self) -> BTreeMap<String, RawHttpRequestVal> {
         use RawHttpRequestVal::*;
         let mut map = btreemap! {
             "request_type".to_string() => String("read_state".to_string()),
@@ -241,7 +222,7 @@ impl HttpReadState {
         if let Some(nonce) = &self.nonce {
             map.insert("nonce".to_string(), Bytes(nonce.0.clone()));
         }
-        map
+        hash_of_map(&map)
     }
 }
 
@@ -270,6 +251,27 @@ pub struct HttpRequest<C> {
 pub enum Authentication {
     Authenticated(UserSignature),
     Anonymous,
+}
+
+impl<C> TryFrom<&HttpRequestEnvelope<C>> for Authentication {
+    type Error = HttpHandlerError;
+
+    fn try_from(env: &HttpRequestEnvelope<C>) -> Result<Self, Self::Error> {
+        match (&env.sender_pubkey, &env.sender_sig, &env.sender_delegation) {
+            (Some(pubkey), Some(signature), delegation) => {
+                Ok(Authentication::Authenticated(UserSignature {
+                    signature: signature.0.clone(),
+                    signer_pubkey: pubkey.0.clone(),
+                    sender_delegation: delegation.clone(),
+                }))
+            }
+            (None, None, None) => Ok(Authentication::Anonymous),
+            rest => Err(Self::Error::MissingPubkeyOrSignature(format!(
+                "Got {:?}",
+                rest
+            ))),
+        }
+    }
 }
 
 /// Common attributes that all HTTP request contents should have.
@@ -342,25 +344,7 @@ impl TryFrom<HttpRequestEnvelope<HttpReadContent>> for HttpRequest<ReadContent> 
     type Error = HttpHandlerError;
 
     fn try_from(envelope: HttpRequestEnvelope<HttpReadContent>) -> Result<Self, Self::Error> {
-        let auth = match (
-            envelope.sender_pubkey,
-            envelope.sender_sig,
-            envelope.sender_delegation,
-        ) {
-            (Some(pubkey), Some(signature), delegation) => {
-                Ok(Authentication::Authenticated(UserSignature {
-                    signature: signature.0,
-                    signer_pubkey: pubkey.0,
-                    sender_delegation: delegation,
-                }))
-            }
-            (None, None, None) => Ok(Authentication::Anonymous),
-            rest => Err(Self::Error::MissingPubkeyOrSignature(format!(
-                "Got {:?}",
-                rest
-            ))),
-        }?;
-
+        let auth = Authentication::try_from(&envelope)?;
         match envelope.content {
             HttpReadContent::Query { query } => {
                 let id = MessageId::from(query.representation_independent_hash());
@@ -375,6 +359,24 @@ impl TryFrom<HttpRequestEnvelope<HttpReadContent>> for HttpRequest<ReadContent> 
                 let id = MessageId::from(read_state.representation_independent_hash());
                 Ok(HttpRequest {
                     content: ReadContent::ReadState(ReadState::try_from(read_state)?),
+                    auth,
+                    id,
+                })
+            }
+        }
+    }
+}
+
+impl TryFrom<HttpRequestEnvelope<HttpSubmitContent>> for HttpRequest<SignedIngressContent> {
+    type Error = HttpHandlerError;
+
+    fn try_from(envelope: HttpRequestEnvelope<HttpSubmitContent>) -> Result<Self, Self::Error> {
+        let auth = Authentication::try_from(&envelope)?;
+        match envelope.content {
+            HttpSubmitContent::Call { update } => {
+                let id = update.id();
+                Ok(HttpRequest {
+                    content: SignedIngressContent::try_from(update)?,
                     auth,
                     id,
                 })
@@ -504,128 +506,6 @@ impl CountBytes for RawHttpRequestVal {
             Self::U64(_) => 8,
             Self::Array(elements) => elements.iter().map(|e| e.count_bytes()).sum(),
         }
-    }
-}
-
-impl From<&RawHttpRequestVal> for pb::HttpRequestVal {
-    fn from(val: &RawHttpRequestVal) -> Self {
-        Self {
-            val: Some(match val {
-                RawHttpRequestVal::Bytes(bytes) => {
-                    pb::http_request_val::Val::RawBytes(bytes.to_vec())
-                }
-                RawHttpRequestVal::String(string) => {
-                    pb::http_request_val::Val::Str(string.to_string())
-                }
-                RawHttpRequestVal::U64(v) => pb::http_request_val::Val::U64(*v),
-                RawHttpRequestVal::Array(arr) => {
-                    pb::http_request_val::Val::Array(pb::HttpRequestArr {
-                        values: arr.iter().map(Self::from).collect(),
-                    })
-                }
-            }),
-        }
-    }
-}
-
-/// A map of all the relevant information needed to compute a `MessageId`.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub struct RawHttpRequest(pub BTreeMap<String, RawHttpRequestVal>);
-
-impl RawHttpRequest {
-    pub(crate) fn take_bytes(&mut self, key: &str) -> Vec<u8> {
-        match self.0.remove(key).unwrap() {
-            RawHttpRequestVal::Bytes(raw) => raw,
-            val => unreachable!("Expected `{}` to be a blob, got {:?}", key, val),
-        }
-    }
-
-    pub(crate) fn take_string(&mut self, key: &str) -> String {
-        match self.0.remove(key).unwrap() {
-            RawHttpRequestVal::String(raw) => raw,
-            val => unreachable!("Expected `{}` to be a String, got {:?}", key, val),
-        }
-    }
-
-    pub(crate) fn take_u64(&mut self, key: &str) -> u64 {
-        match self.0.remove(key).unwrap() {
-            RawHttpRequestVal::U64(raw) => raw,
-            val => unreachable!("Expected `{}` to be an int, got {:?}", key, val),
-        }
-    }
-
-    pub(crate) fn take_sender(&mut self) -> UserId {
-        let sender_field = "sender".to_string();
-        UserId::from(match self.0.remove(&sender_field).unwrap() {
-            RawHttpRequestVal::Bytes(raw) => {
-                PrincipalId::try_from(&raw[..]).expect("Failed to parse source")
-            }
-            val => unreachable!("Expected `{}` to be a blob, got {:?}", sender_field, val),
-        })
-    }
-}
-
-impl CountBytes for RawHttpRequest {
-    fn count_bytes(&self) -> usize {
-        self.0
-            .iter()
-            .map(|(key, val)| key.len() + val.count_bytes())
-            .sum()
-    }
-}
-
-// TODO(akhi): Perhaps introduce a method to check if valid PrincipalId without
-// building one.
-fn validate_principal_id(field: &str, bytes: &[u8]) -> Result<(), HttpHandlerError> {
-    match PrincipalId::try_from(bytes) {
-        Ok(_) => Ok(()),
-        Err(err) => Err(HttpHandlerError::InvalidPrincipalId(format!(
-            "Converting {} to PrincipalId failed with {}",
-            field, err,
-        ))),
-    }
-}
-
-// This is the first time this http request is parsed.  Perform all the validity
-// checks here so that any further conversions do not need to do error checking.
-impl TryFrom<(HttpCanisterUpdate, Time)> for RawHttpRequest {
-    type Error = HttpHandlerError;
-
-    fn try_from(input: (HttpCanisterUpdate, Time)) -> Result<Self, Self::Error> {
-        let (update, current_time) = input;
-        let canister_id_field = "canister_id".to_string();
-        validate_principal_id(&canister_id_field, &update.canister_id.0)?;
-        validate_ingress_expiry_range(update.ingress_expiry, current_time)?;
-
-        Ok(Self(update.representation_independent_map()))
-    }
-}
-
-// This is the first time this http request is parsed.  Perform all the validity
-// checks here so that any further conversions do not need to do error checking.
-impl TryFrom<(HttpUserQuery, Time)> for RawHttpRequest {
-    type Error = HttpHandlerError;
-
-    fn try_from(input: (HttpUserQuery, Time)) -> Result<Self, Self::Error> {
-        let (query, current_time) = input;
-        let canister_id_field = "canister_id".to_string();
-        validate_principal_id(&canister_id_field, &query.canister_id.0)?;
-        validate_ingress_expiry(query.ingress_expiry, current_time)?;
-
-        Ok(Self(query.representation_independent_map()))
-    }
-}
-
-// This is the first time this http request is parsed.  Perform all the validity
-// checks (but not expiry check) here so that any further conversions do not
-// need to do error checking.
-impl TryFrom<(HttpReadState, Time)> for RawHttpRequest {
-    type Error = HttpHandlerError;
-
-    fn try_from(input: (HttpReadState, Time)) -> Result<Self, Self::Error> {
-        let (read_state, current_time) = input;
-        validate_ingress_expiry(read_state.ingress_expiry, current_time)?;
-        Ok(Self(read_state.representation_independent_map()))
     }
 }
 

@@ -1,5 +1,5 @@
 use ic_types::CanisterId;
-use ledger_canister::{get_chain_prefix, RawBlock};
+use ledger_canister::{get_chain_prefix, ArchiveCanisterInitPayload, RawBlock};
 use std::collections::VecDeque;
 
 use std::sync::RwLock;
@@ -185,9 +185,10 @@ fn init(node_max_memory_size_bytes: Option<usize>, max_message_size_bytes: Optio
 #[export_name = "canister_init"]
 fn main() {
     dfn_core::over_init(
-        |dfn_candid::Candid((opt_node_max_memory_size_bytes, opt_max_message_size_bytes))| {
-            init(opt_node_max_memory_size_bytes, opt_max_message_size_bytes)
-        },
+        |dfn_candid::CandidOne(ArchiveCanisterInitPayload {
+             node_max_memory_size_bytes,
+             max_message_size_bytes,
+         })| { init(node_max_memory_size_bytes, max_message_size_bytes) },
     )
 }
 

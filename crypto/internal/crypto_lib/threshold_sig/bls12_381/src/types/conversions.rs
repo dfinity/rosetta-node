@@ -186,15 +186,23 @@ impl TryFrom<&str> for CombinedSignatureBytes {
             sig_bytes: string.as_bytes().to_vec(),
             internal_error: format!("Signature is not a valid base64 encoded string: {}", e),
         })?;
-        if signature.len() != CombinedSignatureBytes::SIZE {
+        Self::try_from(&signature)
+    }
+}
+
+impl TryFrom<&Vec<u8>> for CombinedSignatureBytes {
+    type Error = CryptoError;
+
+    fn try_from(sig_bytes: &Vec<u8>) -> Result<Self, CryptoError> {
+        if sig_bytes.len() != CombinedSignatureBytes::SIZE {
             return Err(CryptoError::MalformedSignature {
                 algorithm: AlgorithmId::ThresBls12_381,
-                sig_bytes: string.as_bytes().to_vec(),
+                sig_bytes: sig_bytes.to_owned(),
                 internal_error: "Signature length is incorrect".to_string(),
             });
         }
         let mut buffer = [0u8; CombinedSignatureBytes::SIZE];
-        buffer.copy_from_slice(&signature);
+        buffer.copy_from_slice(sig_bytes);
         Ok(CombinedSignatureBytes(buffer))
     }
 }

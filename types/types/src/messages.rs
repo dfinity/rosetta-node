@@ -15,8 +15,8 @@ pub use http::{
     validate_ingress_expiry, Authentication, Certificate, CertificateDelegation, Delegation,
     HttpCanisterUpdate, HttpQueryResponse, HttpQueryResponseReply, HttpReadContent, HttpReadState,
     HttpReadStateResponse, HttpReply, HttpRequest, HttpRequestContent, HttpRequestEnvelope,
-    HttpResponseStatus, HttpStatusResponse, HttpSubmitContent, HttpUserQuery, RawHttpRequest,
-    RawHttpRequestVal, ReadContent, SignedDelegation,
+    HttpResponseStatus, HttpStatusResponse, HttpSubmitContent, HttpUserQuery, RawHttpRequestVal,
+    ReadContent, SignedDelegation,
 };
 pub use ic_base_types::CanisterInstallMode;
 use ic_base_types::{CanisterId, CanisterIdError, PrincipalId};
@@ -205,7 +205,7 @@ impl From<CanisterIdError> for HttpHandlerError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{time::current_time_and_expiry_time, Time};
+    use crate::time::current_time_and_expiry_time;
     use maplit::btreemap;
     use proptest::prelude::*;
     use serde_cbor::Value;
@@ -287,14 +287,13 @@ mod tests {
 
     proptest! {
         #[test]
-        // The conversion from Submit to SignedIngress is not total so we proptest
+        // The conversion from Submit to HttpRequest is not total so we proptest
         // the hell out of it to make sure no enum constructors are added which are
         // not handled by the conversion.
         fn request_id_conversion_does_not_panic(
-            submit: HttpRequestEnvelope::<HttpSubmitContent>,
-            current_time: Time)
+            submit: HttpRequestEnvelope::<HttpSubmitContent>)
         {
-            let _ = SignedIngress::try_from((submit, current_time));
+            let _ = HttpRequest::try_from(submit);
         }
     }
 
@@ -403,7 +402,7 @@ mod tests {
 
     #[test]
     fn serialize_via_bincode() {
-        let (current_time, expiry_time) = current_time_and_expiry_time();
+        let expiry_time = current_time_and_expiry_time().1;
         let update = HttpRequestEnvelope::<HttpSubmitContent> {
             content: HttpSubmitContent::Call {
                 update: HttpCanisterUpdate {
@@ -419,7 +418,7 @@ mod tests {
             sender_sig: Some(Blob(vec![1; 32])),
             sender_delegation: None,
         };
-        let signed_ingress = SignedIngress::try_from((update, current_time)).unwrap();
+        let signed_ingress = SignedIngress::from(HttpRequest::try_from(update).unwrap());
         let bytes = bincode::serialize(&signed_ingress).unwrap();
         let signed_ingress1 = bincode::deserialize::<SignedIngress>(&bytes);
         assert!(signed_ingress1.is_ok());
@@ -427,7 +426,7 @@ mod tests {
 
     #[test]
     fn serialize_via_bincode_without_signature() {
-        let (current_time, expiry_time) = current_time_and_expiry_time();
+        let expiry_time = current_time_and_expiry_time().1;
         let update = HttpRequestEnvelope::<HttpSubmitContent> {
             content: HttpSubmitContent::Call {
                 update: HttpCanisterUpdate {
@@ -443,7 +442,7 @@ mod tests {
             sender_sig: None,
             sender_delegation: None,
         };
-        let signed_ingress = SignedIngress::try_from((update, current_time)).unwrap();
+        let signed_ingress = SignedIngress::from(HttpRequest::try_from(update).unwrap());
         let bytes = bincode::serialize(&signed_ingress).unwrap();
         let mut buffer = Cursor::new(&bytes);
         let signed_ingress1: SignedIngress = bincode::deserialize_from(&mut buffer).unwrap();

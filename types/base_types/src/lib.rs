@@ -2,7 +2,7 @@ mod canister_id;
 mod principal_id;
 
 use candid::CandidType;
-pub use canister_id::{CanisterId, CanisterIdError};
+pub use canister_id::{CanisterId, CanisterIdBlobParseError, CanisterIdError};
 use ic_protobuf::proxy::ProxyDecodeError;
 use ic_protobuf::types::v1 as pb;
 use phantom_newtype::{AmountOf, DisplayerOf, Id};

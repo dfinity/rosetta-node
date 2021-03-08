@@ -105,9 +105,8 @@ transfer(10){
       transfer.network = {{transfer_dry_run.network}};
       transfer.confirmation_depth = {{transfer_dry_run.confirmation_depth}};
 
-      sender_amount_with_fee = {{sender_amount}} - {{suggested_fee.value}};
+      fee_amount = 0 - {{suggested_fee.value}};
       print_message({"suggested fee":{{suggested_fee.value}}});
-      print_message({"sender_amount (with fee)":{{sender_amount_with_fee}}});
 
       transfer.operations = [
         {
@@ -115,7 +114,7 @@ transfer(10){
           "type":"TRANSACTION",
           "account":{{sender.account_identifier}},
           "amount":{
-            "value":{{sender_amount_with_fee}},
+            "value":{{sender_amount}},
             "currency":{{currency}}
           }
         },
@@ -128,6 +127,15 @@ transfer(10){
             "currency":{{currency}}
           },
           "related_operations": [ { "index": 0 } ]
+        },
+        {
+          "operation_identifier":{"index":2},
+          "type":"FEE",
+          "account":{{sender.account_identifier}},
+          "amount":{
+            "value":{{fee_amount}},
+            "currency":{{currency}}
+          }
         }
       ];
     }
