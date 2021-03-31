@@ -17,21 +17,31 @@ pub enum ArtifactAcceptance<T> {
     AcceptedForProcessing(T),
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 /// An error type that combines 'NotProcessed' status with an actual
 /// error that might be returned by artifact pools. It is used as
 /// the return type for the `on_artifact` function of `ArtifactManager`.
 pub enum OnArtifactError<T> {
     NotProcessed(T),
+    AdvertMismatch(AdvertMismatchError),
     ArtifactPoolError(artifact_pool::ArtifactPoolError),
+    MessageConversionfailed(p2p::GossipAdvert),
+}
+
+#[derive(Debug)]
+pub struct AdvertMismatchError {
+    pub received: p2p::GossipAdvert,
+    pub expected: p2p::GossipAdvert,
 }
 
 /// An abstraction of artifact processing for a sub-type of the overall
 /// 'Artifact' type.
 pub trait ArtifactClient<Artifact: artifact::ArtifactKind>: Send + Sync {
     /// When a new artifact is received, `check_artifact_acceptance` function is
-    /// called to perform basic pre-processing. Note that it should not
-    /// modify the artifact pool.
+    /// called to perform basic pre-processing and check if the artifact matches
+    /// the advert used to request it if one is passed along.
+    /// Note that this function should not modify the artifact pool.
     ///
     /// If it passes the pre-processing, the same artifact should be
     /// returned, which will then be passed on to the corresponding
@@ -41,10 +51,8 @@ pub trait ArtifactClient<Artifact: artifact::ArtifactKind>: Send + Sync {
     fn check_artifact_acceptance(
         &self,
         msg: Artifact::Message,
-        _peer_id: &NodeId,
-    ) -> Result<ArtifactAcceptance<Artifact::Message>, artifact_pool::ArtifactPoolError> {
-        Ok(ArtifactAcceptance::AcceptedForProcessing(msg))
-    }
+        peer_id: &NodeId,
+    ) -> Result<ArtifactAcceptance<Artifact::Message>, artifact_pool::ArtifactPoolError>;
 
     /// Checks if the node already has the artifact in the pool by its
     /// identifier.
@@ -114,7 +122,7 @@ pub trait ArtifactClient<Artifact: artifact::ArtifactKind>: Send + Sync {
 
     /// Return the priority function used by this client.
     #[allow(clippy::type_complexity)]
-    fn get_priority_function(&self) -> Option<PriorityFn<Artifact>>;
+    fn get_priority_function(&self) -> Option<PriorityFn<Artifact::Id, Artifact::Attribute>>;
 
     /// Get Chunk tracker for an advert.  Download/Chunk trackers for
     /// Semi-structured/multi-chunk artifacts need to be operated by
@@ -164,15 +172,17 @@ pub trait ArtifactProcessor<Artifact: artifact::ArtifactKind>: Send {
 // tag::artifact_manager[]
 pub trait ArtifactManager: Send + Sync {
     /// When a new artifact is received by Gossip, it is forwarded to
-    /// ArtifactManager via the on_artifact call, which then forwards them
-    /// to be process by the corresponding ArtifactClient/ArtifactProcessor
-    /// based on the artifact type. Return `OnArtifactError` if no clients
-    /// were able to process it or an error has occurred.
+    /// the ArtifactManager together with its advert via the on_artifact call.
+    /// This then forwards them to be processed by the corresponding
+    /// ArtifactClient/ArtifactProcessor based on the artifact type.
+    /// Returns `OnArtifactError` if no clients were able to process it or
+    /// an error has occurred.
     ///
     /// See `ArtifactClient::on_artifact` for more details.
     fn on_artifact(
         &self,
         msg: artifact::Artifact,
+        advert: p2p::GossipAdvert,
         peer_id: &NodeId,
     ) -> Result<(), OnArtifactError<artifact::Artifact>>;
 

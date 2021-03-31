@@ -2,14 +2,14 @@
 name = "ic-crypto-internal-csp"
 description = "Secret key store and services"
 version = "0.1.0"
-authors = ["Max <max@dfinity.org>"]
+authors = ["The Internet Computer Project Developers"]
 edition = "2018"
 
 [dependencies]
 arrayvec = "0.5.1"
 async-trait = "0.1.41"
 base64 = "0.11.0"
-ed25519-dalek = "1.0.0-pre.3"
+ed25519-dalek = "1.0.1"
 ff = "0.5.0"
 group = "0.2.0"
 hex = "0.4.2"
@@ -36,12 +36,12 @@ ic-types = { path = "../../../types/types" }
 ic-utils = { path = "../../../utils" }
 lazy_static = "1.4.0"
 libsecp256k1 = "0.3.5"
-miracl_core = { path = "../crypto_lib/fs_ni_dkg/miracl_core" }
+miracl_core = { version = "4.1.0", package = "miracl_core_bls12381" }
 openssl = "0.10.29"
 pairing = "0.15.0"
 parking_lot = "0.11.1"
-prost = "0.6"
-prost-types = "0.6"
+prost = "0.7.0"
+prost-types = "0.7.0"
 rand = "0.7.3"
 rand_chacha = "0.2.2"
 rand_core = "0.5.1"
@@ -58,7 +58,7 @@ tokio-openssl = "0.4.0"
 zeroize = { version = "1.1.0", features = ["zeroize_derive"] }
 
 [build-dependencies]
-prost-build = "0.6"
+prost-build = "0.7.0"
 
 [dev-dependencies]
 hex = "0.4.2"

@@ -1,11 +1,12 @@
-use ledger_canister::RawBlock;
+use ledger_canister::{EncodedBlock, GetBlocksArgs, GetBlocksRes};
 
+use dfn_protobuf::protobuf;
 use std::sync::RwLock;
 
 lazy_static::lazy_static! {
     // FIXME: use a single RwLock?
     pub static ref MAX_MEMORY_SIZE_BYTES: RwLock<usize> = RwLock::new(256);
-    pub static ref BLOCKS: RwLock<Vec<RawBlock>> = RwLock::new(Vec::new());
+    pub static ref BLOCKS: RwLock<Vec<EncodedBlock>> = RwLock::new(Vec::new());
     pub static ref TOTAL_BLOCK_SIZE: RwLock<usize> = RwLock::new(0);
 }
 
@@ -18,7 +19,7 @@ where
 }
 
 // Append the Blocks to the internal Vec
-fn append_blocks(mut blocks: Vec<RawBlock>) {
+fn append_blocks(mut blocks: Vec<EncodedBlock>) {
     let mut archive = BLOCKS.write().unwrap();
     print(format!(
         "[archive node] append_blocks(): capacity: {}, archive size: {}, appending {} blocks",
@@ -29,7 +30,7 @@ fn append_blocks(mut blocks: Vec<RawBlock>) {
     // FIXME: race with other append_blocks calls?
     let mut total_block_size = *TOTAL_BLOCK_SIZE.read().unwrap();
     for block in &blocks {
-        total_block_size += block.len();
+        total_block_size += block.size_bytes();
     }
     assert!(total_block_size < *MAX_MEMORY_SIZE_BYTES.read().unwrap());
     *TOTAL_BLOCK_SIZE.write().unwrap() = total_block_size;
@@ -41,7 +42,7 @@ fn append_blocks(mut blocks: Vec<RawBlock>) {
 }
 
 // Return all Blocks
-fn get_blocks(offset: usize, length: usize) -> Vec<RawBlock> {
+fn get_blocks(offset: usize, length: usize) -> GetBlocksRes {
     let blocks = BLOCKS.read().unwrap();
     let start = std::cmp::min(offset, blocks.len());
     let end = std::cmp::min(start + length, blocks.len());
@@ -52,7 +53,7 @@ fn get_blocks(offset: usize, length: usize) -> Vec<RawBlock> {
         length,
         blocks.len()
     ));
-    blocks
+    GetBlocksRes(blocks)
 }
 
 // Return the number of bytes the canister can still accommodate
@@ -105,14 +106,16 @@ fn append_blocks_() {
 
 #[export_name = "canister_query get_blocks"]
 fn get_blocks_() {
-    dfn_core::over(dfn_candid::candid, |(offset, len)| get_blocks(offset, len));
+    dfn_core::over(protobuf, |GetBlocksArgs { start, length }| {
+        get_blocks(start, length)
+    });
 }
 
 #[export_name = "canister_post_upgrade"]
 fn post_upgrade() {
     dfn_core::over_init(|_: dfn_core::BytesS| {
         let bytes = dfn_core::stable::get();
-        let mut blocks: Vec<RawBlock> =
+        let mut blocks: Vec<EncodedBlock> =
             candid::decode_one(&bytes).expect("Decoding stable memory failed");
         let mut state = BLOCKS.write().unwrap();
         state.append(&mut blocks)
@@ -125,7 +128,7 @@ fn pre_upgrade() {
         dfn_core::printer::hook();
     });
 
-    let chain: &[RawBlock] = &BLOCKS
+    let chain: &[EncodedBlock] = &BLOCKS
         .read()
         // This should never happen, but it's better to be safe than sorry
         .unwrap_or_else(|poisoned| poisoned.into_inner());

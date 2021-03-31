@@ -1,11 +1,12 @@
 //! External API for the multisignature library
 use super::crypto;
 use super::types::{
-    CombinedSignatureBytes, IndividualSignature, IndividualSignatureBytes, PopBytes, PublicKey,
-    PublicKeyBytes, SecretKeyBytes,
+    CombinedSignatureBytes, IndividualSignature, IndividualSignatureBytes, Pop, PopBytes,
+    PublicKey, PublicKeyBytes, SecretKeyBytes,
 };
 use ic_types::crypto::{AlgorithmId, CryptoError};
 use rand::{CryptoRng, Rng};
+use std::convert::TryFrom;
 use std::convert::TryInto;
 
 #[cfg(test)]
@@ -42,8 +43,8 @@ pub fn verify_pop(
     pop_bytes: PopBytes,
     public_key_bytes: PublicKeyBytes,
 ) -> Result<(), CryptoError> {
-    let pop = pop_bytes.try_into()?;
-    let public_key = public_key_bytes.try_into()?;
+    let pop = Pop::try_from(pop_bytes)?;
+    let public_key = PublicKey::try_from(public_key_bytes)?;
     if crypto::verify_pop(pop, public_key) {
         Ok(())
     } else {

@@ -1,3 +1,4 @@
+use crate::pb_internal::v1::PrincipalId as PrincipalIdProto;
 use candid::types::{Type, TypeId};
 use ic_crypto_sha256::Sha224;
 use ic_protobuf::types::v1 as pb;
@@ -13,7 +14,7 @@ use std::{convert::TryFrom, fmt};
 /// Principals have variable length, bounded by 29 bytes. Since we
 /// want PrincipalId to implement the Copy trait, we encode them as
 /// a fixed-size array and a length.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct PrincipalId {
     len: usize,
     data: [u8; Self::MAX_LENGTH_IN_BYTES],
@@ -308,6 +309,78 @@ impl candid::CandidType for PrincipalId {
         S: candid::types::Serializer,
     {
         serializer.serialize_principal(self.as_slice())
+    }
+}
+
+impl From<&PrincipalId> for PrincipalIdProto {
+    fn from(id: &PrincipalId) -> Self {
+        PrincipalIdProto {
+            serialized_id: id.as_slice().to_vec(),
+        }
+    }
+}
+
+impl From<&mut PrincipalId> for PrincipalIdProto {
+    fn from(id: &mut PrincipalId) -> Self {
+        PrincipalIdProto {
+            serialized_id: id.as_slice().to_vec(),
+        }
+    }
+}
+
+impl From<PrincipalId> for PrincipalIdProto {
+    fn from(id: PrincipalId) -> Self {
+        PrincipalIdProto {
+            serialized_id: id.as_slice().to_vec(),
+        }
+    }
+}
+
+impl From<PrincipalIdProto> for PrincipalId {
+    fn from(pb: PrincipalIdProto) -> Self {
+        PrincipalId::try_from(pb.serialized_id).unwrap()
+    }
+}
+
+/// Encode/Decode a PrincipalId from/to protobuf.
+///
+/// This acts as a wrapper around the actual (prost generated)
+/// protobuf type, which defines the pb on-wire format for
+/// PrincipalId. Prost generated types can map this type instead
+/// of the generated type and use it seamlessly, which is particularly
+/// useful when those types are also candid types.
+impl prost::Message for PrincipalId {
+    fn encode_raw<B>(&self, buf: &mut B)
+    where
+        B: bytes::buf::BufMut,
+    {
+        let pid_proto = PrincipalIdProto::from(self);
+        pid_proto.encode_raw(buf)
+    }
+
+    fn merge_field<B>(
+        &mut self,
+        tag: u32,
+        wire_type: prost::encoding::WireType,
+        buf: &mut B,
+        ctx: prost::encoding::DecodeContext,
+    ) -> std::result::Result<(), prost::DecodeError>
+    where
+        B: bytes::buf::Buf,
+    {
+        let mut pid_proto = PrincipalIdProto::from(*self);
+        pid_proto.merge_field(tag, wire_type, buf, ctx)?;
+        *self = Self::from(pid_proto);
+        Ok(())
+    }
+    fn encoded_len(&self) -> usize {
+        PrincipalIdProto::from(self).encoded_len()
+    }
+
+    fn clear(&mut self) {
+        let mut pid_proto = PrincipalIdProto::from(*self);
+        pid_proto.clear();
+        *self = Self::from(pid_proto);
     }
 }
 

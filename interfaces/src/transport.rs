@@ -7,7 +7,7 @@ use ic_types::transport::{
     TransportStateChange,
 };
 use ic_types::{NodeId, RegistryVersion};
-use std::{error::Error, sync::Arc};
+use std::{fmt::Debug, sync::Arc};
 
 /// Transport layer APIs.
 pub trait Transport: Send + Sync {
@@ -18,7 +18,7 @@ pub trait Transport: Send + Sync {
     fn register_client(
         &self,
         client_type: TransportClientType,
-        event_handler: Arc<dyn TransportEventHandler>,
+        async_event_handler: Arc<dyn AsyncTransportEventHandler>,
     ) -> Result<(), TransportErrorCode>;
 
     /// Mark the peer as valid neighbor, and set up the transport layer to
@@ -58,12 +58,23 @@ pub trait Transport: Send + Sync {
     ) -> Result<(), TransportErrorCode>;
 
     /// Clear any unsent messages in all the send queues for the peer.
-    /// TODO: add a per-flow equivalent
-    fn clear_send_queues(
+    fn clear_send_queues(&self, client_type: TransportClientType, peer_id: &NodeId);
+
+    /// Clear any unsent messages in the send queue for the given peer and flow
+    /// tag.
+    fn clear_send_queue(
         &self,
         client_type: TransportClientType,
         peer_id: &NodeId,
-    ) -> Result<(), TransportErrorCode>;
+        flow_tag: FlowTag,
+    );
+}
+
+#[derive(Debug)]
+pub enum SendError {
+    DeserializationFailed,
+    EndpointClosed,
+    EndpointNotFound,
 }
 
 pub trait TransportEventHandler: Send + Sync {
@@ -73,6 +84,8 @@ pub trait TransportEventHandler: Send + Sync {
     /// Returns the message back if it was not accepted.
     fn on_message(&self, flow: FlowId, message: TransportPayload) -> Option<TransportPayload>;
 
+    fn on_error(&self, flow: FlowId, error: TransportErrorCode);
+
     /// Invoked by the transport layer to notify of any changes in the state.
     fn on_state_change(&self, state_change: TransportStateChange);
 }
@@ -80,10 +93,8 @@ pub trait TransportEventHandler: Send + Sync {
 // Async version of the transport event handler
 #[async_trait]
 pub trait AsyncTransportEventHandler: Send + Sync {
-    async fn send_message(
-        &mut self,
-        flow: FlowId,
-        message: TransportPayload,
-    ) -> Result<(), Box<dyn Error>>;
+    async fn send_message(&self, flow: FlowId, message: TransportPayload) -> Result<(), SendError>;
     async fn state_changed(&self, state_change: TransportStateChange);
+
+    async fn error(&self, flow: FlowId, error: TransportErrorCode);
 }

@@ -24,4 +24,5 @@
 pub mod forward_secure;
 pub mod nizk_chunking;
 pub mod nizk_sharing;
+pub mod random_oracles;
 pub mod utils;

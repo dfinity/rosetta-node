@@ -57,7 +57,6 @@ pub mod ic0 {
         pub fn msg_reject_msg_copy(dst: u32, offset: u32, size: u32);
         pub fn msg_reject_msg_size() -> u32;
         pub fn msg_reply();
-        pub fn msg_funds_accept(unit_src: u32, unit_size: u32, amount: u64) -> ();
         pub fn msg_reply_data_append(offset: u32, size: u32);
         pub fn trap(offset: u32, size: u32);
         pub fn call_simple(
@@ -93,8 +92,6 @@ pub mod ic0 {
         pub fn time() -> u64;
         pub fn canister_balance(unit_src: u32, unit_size: u32) -> u64;
         pub fn canister_cycle_balance() -> u64;
-        pub fn msg_funds_available(unit_src: u32, unit_size: u32) -> u64;
-        pub fn msg_funds_refunded(unit_src: u32, unit_size: u32) -> u64;
         pub fn msg_cycles_available() -> u64;
         pub fn msg_cycles_refunded() -> u64;
         pub fn msg_cycles_accept(amount: u64) -> u64;
@@ -245,10 +242,6 @@ pub mod ic0 {
 
     pub unsafe fn canister_cycle_balance() -> u64 {
         wrong_arch("canister_cycle_balance")
-    }
-
-    pub unsafe fn msg_funds_refunded(_unit_src: u32, _unit_size: u32) -> u64 {
-        wrong_arch("msg_funds_refunded")
     }
 
     pub unsafe fn msg_cycles_available() -> u64 {
@@ -617,12 +610,6 @@ pub fn canister_balance(unit: TokenUnit) -> u64 {
 /// Returns the amount of cycles in the canister's account.
 pub fn canister_cycle_balance() -> u64 {
     unsafe { ic0::canister_cycle_balance() }
-}
-
-/// Returns the amount of funds refunded with a response.
-pub fn msg_funds_refunded(unit: TokenUnit) -> u64 {
-    let unit_blob: Vec<u8> = unit.into();
-    unsafe { ic0::msg_funds_refunded(unit_blob.as_ptr() as u32, unit_blob.len() as u32) }
 }
 
 /// Returns the cycles available in this current message.

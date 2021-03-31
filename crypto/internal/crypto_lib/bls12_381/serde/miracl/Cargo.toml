@@ -1,11 +1,11 @@
 [package]
 name = "ic-crypto-internal-bls12381-serde-miracl"
 version = "0.1.0"
-authors = ["Max <max@dfinity.org>"]
+authors = ["The Internet Computer Project Developers"]
 edition = "2018"
 
 [dependencies]
-miracl_core = { path = "../../../fs_ni_dkg/miracl_core"}
+miracl_core = { version = "4.1.0", package = "miracl_core_bls12381" }
 ic-crypto-internal-types = { path = "../../../types" }
 
 [dev-dependencies]

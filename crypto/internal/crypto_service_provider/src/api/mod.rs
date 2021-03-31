@@ -3,7 +3,7 @@ mod sign;
 mod threshold;
 mod tls_stub;
 
-pub use keygen::{CspKeyGenerator, CspNodePublicKeys, CspSecretKeyStoreChecker};
+pub use keygen::{CspKeyGenerator, CspSecretKeyStoreChecker, NodePublicKeyData};
 pub use sign::CspSigner;
 pub use threshold::{
     threshold_sign_error::CspThresholdSignError, CspSecretKeyInjector,

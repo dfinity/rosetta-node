@@ -49,7 +49,6 @@ pub fn new_keypair() -> CryptoResult<(types::SecretKeyBytes, types::PublicKeyByt
     Ok((sk, pk))
 }
 
-// TODO(CRP-555): remove this function, as DER parsing should happen at CSP.
 pub fn public_key_from_der(pk_der: &[u8]) -> CryptoResult<types::PublicKeyBytes> {
     let pkey = PKey::public_key_from_der(pk_der).map_err(|e| CryptoError::MalformedPublicKey {
         algorithm: AlgorithmId::EcdsaP256,

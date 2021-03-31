@@ -5,9 +5,9 @@ use std::fmt;
 
 pub mod create_dealing_error;
 pub mod create_transcript_error;
-pub mod current_and_next_transcripts_validation_error;
 pub mod key_removal_error;
 pub mod load_transcript_error;
+pub mod transcripts_to_retain_validation_error;
 pub mod verify_dealing_error;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

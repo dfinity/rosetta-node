@@ -5,12 +5,14 @@ use crate::models::{
 };
 use crate::store::HashedBlock;
 use core::fmt::Display;
-use dfn_candid::CandidOne;
-use ic_types::messages::{HttpRequestEnvelope, HttpSubmitContent};
+use dfn_protobuf::ProtoBuf;
+use ic_crypto_tree_hash::Path;
+use ic_types::messages::{
+    HttpCanisterUpdate, HttpReadState, HttpRequestEnvelope, HttpSubmitContent,
+};
 use ic_types::PrincipalId;
 use ledger_canister::{
-    BlockHeight, HashOf, ICPTs, SendArgs, Serializable, Transaction, Transfer, DECIMAL_PLACES,
-    TRANSACTION_FEE,
+    BlockHeight, HashOf, ICPTs, SendArgs, Transaction, Transfer, DECIMAL_PLACES, TRANSACTION_FEE,
 };
 use on_wire::{FromWire, IntoWire};
 use serde_json::map::Map;
@@ -64,8 +66,8 @@ pub fn operations(transaction: &Transfer, completed: bool) -> Result<Vec<Operati
             amount,
             fee,
         } => {
-            let from_account = Some(account_identifier(from));
-            let to_account = Some(account_identifier(to));
+            let from_account = Some(to_model_account_identifier(from));
+            let to_account = Some(to_model_account_identifier(to));
             let amount = i128::try_from(amount.get_doms())
                 .map_err(|_| ApiError::InternalError(true, None))?;
             let db = Operation::new(
@@ -95,7 +97,7 @@ pub fn operations(transaction: &Transfer, completed: bool) -> Result<Vec<Operati
         }
         // TODO include the destination in the metadata
         Transfer::Mint { to, amount, .. } => {
-            let account = Some(account_identifier(to));
+            let account = Some(to_model_account_identifier(to));
             let amount = Some(amount_(*amount)?);
             let op = Operation::new(0, MINT.to_string(), status, account, amount);
             vec![op]
@@ -103,7 +105,7 @@ pub fn operations(transaction: &Transfer, completed: bool) -> Result<Vec<Operati
         Transfer::Burn { from, amount, .. } => {
             let amount = i128::try_from(amount.get_doms())
                 .map_err(|_| ApiError::InternalError(true, None))?;
-            let account = Some(account_identifier(from));
+            let account = Some(to_model_account_identifier(from));
             let amount = Some(signed_amount(-amount));
             let op = Operation::new(0, BURN.to_string(), status, account, amount);
             vec![op]
@@ -112,7 +114,10 @@ pub fn operations(transaction: &Transfer, completed: bool) -> Result<Vec<Operati
     Ok(ops)
 }
 
-pub fn from_operations(ops: Vec<Operation>) -> Result<Vec<Transfer>, ApiError> {
+pub fn from_operations(
+    ops: Vec<Operation>,
+    preprocessing: bool,
+) -> Result<Vec<Transfer>, ApiError> {
     let trans_err = |msg| {
         let msg = format!("Bad transaction in {:?}: {}", &ops, msg);
         let err = ApiError::InvalidTransaction(false, into_error(msg));
@@ -124,15 +129,19 @@ pub fn from_operations(ops: Vec<Operation>) -> Result<Vec<Transfer>, ApiError> {
         ApiError::InvalidTransaction(false, into_error(msg))
     };
 
-    if ops.len() != 3 {
-        return trans_err(
-            "Operations do not combine to make a recognizable transaction".to_string(),
-        );
-    }
-
     let mut cr = None;
     let mut db = None;
     let mut fee = None;
+
+    // Requests to preprocess often doesn't have a fee, but there's nothing stopping
+    // someone from putting one there so we are flexible
+    if ops.len() != 3 && !preprocessing {
+        return trans_err(
+            "Operations do not combine to make a recognizable
+    transaction"
+                .to_string(),
+        );
+    }
 
     for o in &ops {
         if o.amount.is_none() || o.account.is_none() {
@@ -142,7 +151,8 @@ pub fn from_operations(ops: Vec<Operation>) -> Result<Vec<Transfer>, ApiError> {
             return Err(op_error(&o, "Coin changes are not permitted".into()));
         }
         let amount = from_amount(o.amount.as_ref().unwrap()).map_err(|e| op_error(&o, e))?;
-        let account = principal_id(o.account.as_ref().unwrap()).map_err(|e| op_error(&o, e))?;
+        let account = from_model_account_identifier(o.account.as_ref().unwrap())
+            .map_err(|e| op_error(&o, e))?;
 
         match o._type.as_str() {
             TRANSACTION => {
@@ -167,6 +177,11 @@ pub fn from_operations(ops: Vec<Operation>) -> Result<Vec<Transfer>, ApiError> {
                 return Err(op_error(&o, msg));
             }
         }
+    }
+
+    // If you're preprocessing just continue with the default fee
+    if preprocessing && fee.is_none() {
+        fee = Some((TRANSACTION_FEE, db.unwrap().1))
     }
 
     if cr.is_none() || db.is_none() || fee.is_none() {
@@ -246,18 +261,14 @@ pub fn transaction_identifier(hash: &HashOf<Transaction>) -> TransactionIdentifi
     TransactionIdentifier::new(format!("{}", hash))
 }
 
-pub fn account_identifier(uid: &PrincipalId) -> AccountIdentifier {
-    AccountIdentifier::new(hex::encode(&uid.into_vec()))
+pub fn to_model_account_identifier(aid: &ledger_canister::AccountIdentifier) -> AccountIdentifier {
+    AccountIdentifier::new(aid.to_hex())
 }
 
-pub fn principal_id(aid: &AccountIdentifier) -> Result<PrincipalId, String> {
-    match hex::decode(aid.address.clone()) {
-        Ok(vec) => Ok(PrincipalId::try_from(&vec).map_err(|e| e.to_string())?),
-        Err(e) => Err(format!(
-            "Account Identifer {} is not hex encoded: {}",
-            aid.address, e
-        )),
-    }
+pub fn from_model_account_identifier(
+    aid: &AccountIdentifier,
+) -> Result<ledger_canister::AccountIdentifier, String> {
+    ledger_canister::AccountIdentifier::from_hex(&aid.address).map_err(|e| e)
 }
 
 const LAST_HEIGHT: &str = "last_height";
@@ -312,16 +323,13 @@ pub fn transaction_id(
         fee,
         from_subaccount,
         to,
-        to_subaccount,
         block_height,
     } = from_arg(update.arg.0)?;
     let created_at = block_height.ok_or_else(|| internal_error(
         "A transaction ID cannot be generated from a constructed transaction without an explicit block height"
     ))?;
 
-    let from =
-        ledger_canister::account_identifier(from, from_subaccount).map_err(internal_error)?;
-    let to = ledger_canister::account_identifier(to, to_subaccount).map_err(internal_error)?;
+    let from = ledger_canister::AccountIdentifier::new(from, from_subaccount);
 
     let hash = Transaction::new(from, to, amount, fee, memo, created_at).hash();
 
@@ -343,20 +351,31 @@ pub fn invalid_block_id<D: Display>(msg: D) -> ApiError {
     ApiError::InvalidBlockId(false, into_error(format!("{}", msg)))
 }
 
+pub fn invalid_account_id<D: Display>(msg: D) -> ApiError {
+    ApiError::InvalidAccountId(false, into_error(format!("{}", msg)))
+}
+
 pub fn account_from_public_key(pk: models::PublicKey) -> Result<AccountIdentifier, ApiError> {
-    let pid = PrincipalId::new_self_authenticating(&from_hex(&pk.hex_bytes)?);
-    Ok(account_identifier(&pid))
+    let pid = principal_id_from_public_key(pk)?;
+    Ok(to_model_account_identifier(&pid.into()))
+}
+
+pub fn principal_id_from_public_key(pk: models::PublicKey) -> Result<PrincipalId, ApiError> {
+    let pid = PrincipalId::new_self_authenticating(&ic_canister_client::ed25519_public_key_to_der(
+        from_hex(&pk.hex_bytes)?,
+    ));
+    Ok(pid)
 }
 
 // This is so I can keep track of where this conversion is done
 pub fn from_arg(encoded: Vec<u8>) -> Result<SendArgs, ApiError> {
-    CandidOne::from_bytes(encoded)
+    ProtoBuf::from_bytes(encoded)
         .map_err(internal_error)
-        .map(|CandidOne(c)| c)
+        .map(|ProtoBuf(c)| c)
 }
 
 pub fn to_arg(args: SendArgs) -> Vec<u8> {
-    CandidOne(args).into_bytes().expect("Serialization failed")
+    ProtoBuf(args).into_bytes().expect("Serialization failed")
 }
 
 pub fn from_hash<T>(hash: &HashOf<T>) -> String {
@@ -365,4 +384,15 @@ pub fn from_hash<T>(hash: &HashOf<T>) -> String {
 
 pub fn to_hash<T>(s: &str) -> Result<HashOf<T>, ApiError> {
     s.parse().map_err(|_| ApiError::InternalError(false, None))
+}
+
+pub fn make_read_state_from_update(update: &HttpCanisterUpdate) -> HttpReadState {
+    let path = Path::new(vec!["request_status".into(), update.id().into()]);
+
+    HttpReadState {
+        sender: update.sender.clone(),
+        paths: vec![path],
+        nonce: None,
+        ingress_expiry: update.ingress_expiry,
+    }
 }

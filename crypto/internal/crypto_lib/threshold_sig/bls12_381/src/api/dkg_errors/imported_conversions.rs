@@ -1,4 +1,4 @@
-// TODO: Import tests for all the below.
+// TODO (CRP-817): Import tests for all the below.
 
 // From: crypto/src/sign/threshold_sig/dkg/dealing.rs
 mod dkg_dealing {
@@ -87,7 +87,7 @@ mod dkg_encryption_keys_verify {
 }
 
 // From: crypto/src/sign/threshold_sig/dkg/response.rs
-// TODo: Import tests
+// TODO (CRP-817): Import tests
 mod dkg_response_verify {
     use crate::api::dkg_errors::DkgCreateResponseError;
     use crate::api::dkg_errors::DkgVerifyResponseError;
@@ -166,7 +166,7 @@ mod dkg_response_verify {
 }
 
 // From: crypto/src/sign/threshold_sig/dkg/transcript.rs
-// TODO: import tests
+// TODO (CRP-817): import tests
 mod create_transcript {
     use crate::api::dkg_errors::{DkgCreateReshareTranscriptError, DkgCreateTranscriptError};
     use ic_types::crypto::CryptoError;
@@ -245,7 +245,7 @@ mod create_transcript {
 }
 
 // From: crypto/src/sign/threshold_sig/dkg/transcript.rs
-// TODO: Import tests
+// TODO (CRP-817): Import tests
 mod load_transcript {
     use crate::api::dkg_errors::DkgLoadPrivateKeyError;
     use ic_types::crypto::CryptoError;
@@ -276,9 +276,9 @@ mod load_transcript {
 }
 
 // From: ../crypto/src/sign/threshold_sig/ni_dkg/dealing/error_conversions.rs
-// TODO: Get the tests from there.
+// TODO (CRP-817): Get the tests from there.
 mod create_dealing_error_conversions_v2 {
-    // TODO: Remove the v2 and merge.
+    // TODO (CRP-818): Remove the v2 and merge.
     use crate::api::ni_dkg_errors::{CspDkgCreateDealingError, CspDkgCreateReshareDealingError};
     use ic_types::crypto::threshold_sig::ni_dkg::errors::create_dealing_error::DkgCreateDealingError;
     use ic_types::crypto::threshold_sig::ni_dkg::errors::MalformedFsEncryptionPublicKeyError;

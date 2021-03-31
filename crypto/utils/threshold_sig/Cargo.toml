@@ -1,0 +1,16 @@
+[package]
+name = "ic-crypto-utils-threshold-sig"
+version = "0.1.0"
+edition = "2018"
+description = "Utils for threshold signatures"
+
+[dependencies]
+ic-crypto-internal-threshold-sig-bls12381 = { path = "../../internal/crypto_lib/threshold_sig/bls12_381" }
+ic-crypto-internal-types = { path = "../../internal/crypto_lib/types" }
+ic-interfaces = { path = "../../../interfaces"}
+ic-types = { path = "../../../types/types"}
+
+[dev-dependencies]
+base64 = "0.11.0"
+ic-crypto-internal-csp = { path = "../../internal/crypto_service_provider" }
+

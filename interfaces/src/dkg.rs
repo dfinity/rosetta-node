@@ -1,6 +1,6 @@
 use crate::artifact_pool::UnvalidatedArtifact;
 use ic_types::{
-    artifact::{DkgArtifact, PriorityFn},
+    artifact::{DkgMessageAttribute, DkgMessageId, PriorityFn},
     consensus::dkg,
     crypto::CryptoHashOf,
     Height,
@@ -12,7 +12,10 @@ pub trait Dkg: Send {
 }
 
 pub trait DkgGossip: Send + Sync {
-    fn get_priority_function(&self, dkg_pool: &dyn DkgPool) -> PriorityFn<DkgArtifact>;
+    fn get_priority_function(
+        &self,
+        dkg_pool: &dyn DkgPool,
+    ) -> PriorityFn<DkgMessageId, DkgMessageAttribute>;
 }
 
 /// The DkgPool is used to store messages that are exchanged between nodes in

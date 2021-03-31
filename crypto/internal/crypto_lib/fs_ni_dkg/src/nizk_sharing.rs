@@ -1,3 +1,4 @@
+use crate::random_oracles::*;
 use crate::utils::*;
 use miracl_core::bls12381::big::BIG;
 use miracl_core::bls12381::ecp::ECP;
@@ -6,10 +7,12 @@ use miracl_core::rand::RAND;
 use std::vec::Vec;
 
 /// Domain separators for the zk proof of sharing
-pub const DOMAIN_PROOF_OF_SHARING_INSTANCE: &[u8; 0x20] = b"\x1fic-zk-proof-of-sharing-instance";
-pub const DOMAIN_PROOF_OF_SHARING_CHALLENGE: &[u8; 0x21] = b"\x20ic-zk-proof-of-sharing-challenge";
+pub const DOMAIN_PROOF_OF_SHARING_INSTANCE: &str = "ic-zk-proof-of-sharing-instance";
+pub const DOMAIN_PROOF_OF_SHARING_CHALLENGE: &str = "ic-zk-proof-of-sharing-challenge";
 
-/// Section 8.4 of paper.
+/// Instance for a sharing relation.
+///
+/// From Section 6.4 of the NIDKG paper:
 ///   instance = (g_1,g_2,[y_1..y_n], [A_0..A_{t-1}], R, [C_1..C_n])
 ///   g_1 is the generator of G1
 ///   g_2 is the generator of G2
@@ -22,12 +25,15 @@ pub struct SharingInstance {
     pub combined_ciphertexts: Vec<ECP>,
 }
 
+/// Witness for the validity of a sharing instance.
+///
 ///   Witness = (r, s= [s_1..s_n])
 pub struct SharingWitness {
     pub rand_r: BIG,
     pub rand_s: Vec<BIG>,
 }
 
+/// Zero-knowledge proof of sharing.
 pub struct ProofSharing {
     pub ff: ECP,
     pub aa: ECP2,
@@ -36,31 +42,36 @@ pub struct ProofSharing {
     pub z_alpha: BIG,
 }
 
+/// First move of the prover in the zero-knowledge proof of sharing
+struct FirstMoveSharing {
+    pub blinder_g1: ECP,
+    pub blinder_g2: ECP2,
+    pub blinded_instance: ECP,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ZkProofSharingError {
     InvalidProof,
     InvalidInstance,
 }
 
+impl UniqueHash for SharingInstance {
+    fn unique_hash(&self) -> [u8; 32] {
+        let mut map = HashedMap::new();
+        map.insert_hashed("g1-generator", &self.g1_gen);
+        map.insert_hashed("g2-enerator", &self.g2_gen);
+        map.insert_hashed("public-keys", &self.public_keys);
+        map.insert_hashed("public-coefficients", &self.public_coefficients);
+        map.insert_hashed("combined-randomness", &self.combined_rand);
+        map.insert_hashed("combined-ciphertext", &self.combined_ciphertexts);
+        map.unique_hash()
+    }
+}
+
 impl SharingInstance {
     // Computes the hash of the instance.
-    pub fn instance_oracle(&self) -> BIG {
-        let mut oracle = miracl_core::hash256::HASH256::new();
-        oracle.process_array(DOMAIN_PROOF_OF_SHARING_INSTANCE);
-        process_ecp(&mut oracle, &self.g1_gen);
-        process_ecp2(&mut oracle, &self.g2_gen);
-        self.public_keys
-            .iter()
-            .for_each(|point| process_ecp(&mut oracle, point));
-        self.public_coefficients
-            .iter()
-            .for_each(|point| process_ecp2(&mut oracle, point));
-        process_ecp(&mut oracle, &self.combined_rand);
-        self.combined_ciphertexts
-            .iter()
-            .for_each(|point| process_ecp(&mut oracle, point));
-        let rng = &mut RAND_ChaCha20::new(oracle.hash());
-        BIG::randomnum(&curve_order(), rng)
+    pub fn hash_to_scalar(&self) -> BIG {
+        random_oracle_to_scalar(DOMAIN_PROOF_OF_SHARING_INSTANCE, self)
     }
     pub fn check_instance(&self) -> Result<(), ZkProofSharingError> {
         if self.public_keys.is_empty() || self.public_coefficients.is_empty() {
@@ -72,16 +83,31 @@ impl SharingInstance {
         Ok(())
     }
 }
+impl From<&ProofSharing> for FirstMoveSharing {
+    fn from(proof: &ProofSharing) -> Self {
+        Self {
+            blinder_g1: proof.ff.to_owned(),
+            blinder_g2: proof.aa.to_owned(),
+            blinded_instance: proof.yy.to_owned(),
+        }
+    }
+}
 
-fn challenge_oracle(hashed_instance: &BIG, ff: &ECP, aa: &ECP2, yy: &ECP) -> BIG {
-    let mut oracle = miracl_core::hash256::HASH256::new();
-    oracle.process_array(DOMAIN_PROOF_OF_SHARING_CHALLENGE);
-    process_fr(&mut oracle, &hashed_instance);
-    process_ecp(&mut oracle, ff);
-    process_ecp2(&mut oracle, aa);
-    process_ecp(&mut oracle, yy);
-    let rng = &mut RAND_ChaCha20::new(oracle.hash());
-    BIG::randomnum(&curve_order(), rng)
+impl UniqueHash for FirstMoveSharing {
+    fn unique_hash(&self) -> [u8; 32] {
+        let mut map = HashedMap::new();
+        map.insert_hashed("blinder-g1", &self.blinder_g1);
+        map.insert_hashed("blinder-g2", &self.blinder_g2);
+        map.insert_hashed("blinded-instance", &self.blinded_instance);
+        map.unique_hash()
+    }
+}
+
+fn sharing_proof_challenge(hashed_instance: &BIG, first_move: &FirstMoveSharing) -> BIG {
+    let mut map = HashedMap::new();
+    map.insert_hashed("instance-hash", hashed_instance);
+    map.insert_hashed("first-move", first_move);
+    random_oracle_to_scalar(DOMAIN_PROOF_OF_SHARING_CHALLENGE, &map)
 }
 
 // Section 8.4 of paper.
@@ -96,7 +122,7 @@ pub fn prove_sharing(
         .check_instance()
         .expect("The sharing proof instance is invalid");
     // Hash of instance: x = oracle(instance)
-    let x = instance.instance_oracle();
+    let x = instance.hash_to_scalar();
 
     // First move (prover)
     // alpha, rho <- random Z_p
@@ -118,9 +144,15 @@ pub fn prove_sharing(
 
     yy = yy.mul2(&rho, &instance.g1_gen, &alpha);
 
+    let first_move = FirstMoveSharing {
+        blinder_g1: ff,
+        blinder_g2: aa,
+        blinded_instance: yy,
+    };
+
     // Second move (verifier's challenge)
     // x' = oracle(x, F, A, Y)
-    let x_challenge: BIG = challenge_oracle(&x, &ff, &aa, &yy);
+    let x_challenge: BIG = sharing_proof_challenge(&x, &first_move);
 
     // Third move (prover)
     // z_r = r * x' + rho mod p
@@ -140,9 +172,9 @@ pub fn prove_sharing(
     z_alpha = field_mul(&z_alpha, &x_challenge);
     z_alpha = field_add(&z_alpha, &alpha);
     ProofSharing {
-        ff,
-        aa,
-        yy,
+        ff: first_move.blinder_g1,
+        aa: first_move.blinder_g2,
+        yy: first_move.blinded_instance,
         z_r,
         z_alpha,
     }
@@ -155,16 +187,17 @@ pub fn verify_sharing(
     instance.check_instance()?;
     // Hash of Instance
     // x = oracle(instance)
-    let x: BIG = instance.instance_oracle();
+    let x: BIG = instance.hash_to_scalar();
 
+    let first_move = FirstMoveSharing::from(nizk);
     // Verifier's challenge
     // x' = oracle(x, F, A, Y)
-    let x_challenge: BIG = challenge_oracle(&x, &nizk.ff, &nizk.aa, &nizk.yy);
+    let x_challenge: BIG = sharing_proof_challenge(&x, &first_move);
 
     // First verification equation
     // R^x' * F == g_1^z_r
     let mut lhs: ECP = instance.combined_rand.mul(&x_challenge);
-    lhs.add(&nizk.ff);
+    lhs.add(&first_move.blinder_g1);
     let rhs = instance.g1_gen.mul(&nizk.z_r);
     if !lhs.equals(&rhs) {
         return Err(ZkProofSharingError::InvalidProof);

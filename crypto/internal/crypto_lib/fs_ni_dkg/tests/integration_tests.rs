@@ -68,9 +68,13 @@ fn potpourri() {
 
     verify_ciphertext_integrity(&crsz, &epoch10, sys).expect("ciphertext integrity check failed");
 
-    let out = dec_chunks(&dk, 1, &crsz, &epoch10);
+    let out = dec_chunks(&dk, 1, &crsz, &epoch10).unwrap();
     println!("decrypted: {:?}", out);
-    assert!(out.unwrap() == sij[1], "decrypt . encrypt == id");
+    let mut last3 = vec![0; 3];
+    last3[0] = out[13];
+    last3[1] = out[14];
+    last3[2] = out[15];
+    assert!(last3 == sij[1], "decrypt . encrypt == id");
 
     for _i in 0..8 {
         println!("upgrading private key...");
@@ -330,4 +334,4 @@ fn encrypted_chunks_should_validate_01() {
     encrypted_chunks_should_validate(1)
 }
 
-// TODO: Evil encryptions should not validate.
+// TODO (CRP-831): Evil encryptions should not validate.

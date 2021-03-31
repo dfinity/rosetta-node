@@ -17,7 +17,7 @@ pub enum CspNiDkgDealing {
 }
 impl CspNiDkgDealing {
     /// Generates an instance of a dealing, for use in stub implementations.
-    /// TODO: Delete when stub implementations are complete.
+    /// TODO (CRP-824): Delete when stub implementations are complete.
     pub fn placeholder_to_delete(seed: u8) -> Self {
         use ni_dkg_groth20_bls12_381 as scheme;
         fn fr(seed: u8) -> scheme::Fr {
@@ -74,7 +74,7 @@ pub enum CspNiDkgTranscript {
 }
 impl CspNiDkgTranscript {
     /// Generates an instance of a transcript, for use in stub implementations.
-    /// TODO: Delete when stub implementations are complete.
+    /// TODO (CRP-824): Delete when stub implementations are complete.
     pub fn placeholder_to_delete() -> Self {
         use crate::sign::threshold_sig::public_key::bls12_381::PublicKeyBytes;
         CspNiDkgTranscript::Groth20_Bls12_381(ni_dkg_groth20_bls12_381::Transcript {
@@ -134,7 +134,7 @@ pub mod ni_dkg_groth20_bls12_381 {
     /// Threshold signature key material.
     pub use FsEncryptionCiphertext as EncryptedShares;
 
-    pub const NUM_ZK_REPETITIONS: usize = 40;
+    pub const NUM_ZK_REPETITIONS: usize = 32;
 
     /// A zero knowledge proof that the encrypted shares can be decrypted by the
     /// corresponding receivers.
@@ -173,7 +173,6 @@ pub mod ni_dkg_groth20_bls12_381 {
         pub response_z_b: Fr,
     }
 
-    // TODO: Use pointers to save a bunch of copying
     impl From<&ZKProofDec> for ZKProofDecHelper {
         fn from(item: &ZKProofDec) -> ZKProofDecHelper {
             ZKProofDecHelper {

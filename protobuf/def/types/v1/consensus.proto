@@ -5,7 +5,6 @@ package types.v1;
 
 import "types/v1/types.proto";
 import "types/v1/dkg.proto";
-import "types/v1/ingress.proto";
 import "messaging/xnet/v1/certified_stream_slice.proto";
 
 message CatchUpPackage {
@@ -38,12 +37,42 @@ message Block {
 	bytes payload_hash = 11;
 }
 
+message BlockProposal {
+	bytes hash = 1;
+	Block value = 2;
+	bytes signature = 3;
+	bytes signer = 4;
+}
+
 message RandomBeacon {
 	string version = 1;
 	uint64 height = 2;
 	bytes parent = 3;
 	bytes signature = 4;
 	NiDkgId signer = 5;
+}
+
+message RandomTape {
+	string version = 1;
+	uint64 height = 2;
+	bytes signature = 3;
+	NiDkgId signer = 4;
+}
+
+message Finalization {
+	string version = 1;
+	uint64 height = 2;
+	bytes block = 3;
+	bytes signature = 4;
+	repeated bytes signers = 5;
+}
+
+message Notarization {
+	string version = 1;
+	uint64 height = 2;
+	bytes block = 3;
+	bytes signature = 4;
+	repeated bytes signers = 5;
 }
 
 message SubnetStreamSlice {

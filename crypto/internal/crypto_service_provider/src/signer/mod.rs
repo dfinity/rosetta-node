@@ -82,8 +82,8 @@ impl<R: Rng + CryptoRng, S: SecretKeyStore> CspSigner for Csp<R, S> {
             }
             (
                 AlgorithmId::EcdsaSecp256k1,
-                CspSignature::Secp256k1(signature),
-                CspPublicKey::Secp256k1(public_key),
+                CspSignature::EcdsaSecp256k1(signature),
+                CspPublicKey::EcdsaSecp256k1(public_key),
             ) => {
                 // ECDSA CLib impl. does not hash the message (as hash algorithm can vary
                 // in ECDSA), so we do it here with SHA256, which is the only

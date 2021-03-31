@@ -3,7 +3,7 @@ stages:
   - docker
 
 build:
-  image: rust:1.47.0
+  image: rust:buster
   stage: build
   before_script:
     - apt-get update

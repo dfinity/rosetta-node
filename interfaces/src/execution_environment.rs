@@ -3,17 +3,18 @@ mod errors;
 use crate::{messages::CanisterInputMessage, state_manager::StateManagerError};
 pub use errors::{CanisterHeartbeatError, MessageAcceptanceError};
 pub use errors::{HypervisorError, TrapCode};
+use ic_base_types::NumBytes;
 use ic_registry_provisional_whitelist::ProvisionalWhitelist;
 use ic_registry_routing_table::RoutingTable;
 use ic_types::{
     ingress::{IngressStatus, WasmResult},
-    messages::{MessageId, SignedIngress, UserQuery},
+    messages::{MessageId, SignedIngressContent, UserQuery},
     user_error::UserError,
     Height, NumInstructions, Time,
 };
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 /// Instance execution statistics. The stats are cumulative and
 /// contain measurements from the point in time when the instance was
@@ -28,6 +29,44 @@ pub struct InstanceStats {
     /// By definition a page that has been dirtied has also been accessed,
     /// hence this dirtied_pages <= accessed_pages
     pub dirty_pages: usize,
+}
+
+pub enum SubnetAvailableMemoryError {
+    InsufficientMemory {
+        requested: NumBytes,
+        available: NumBytes,
+    },
+}
+
+/// This struct is used to manage the view of the current amount of memory
+/// available on the subnet between multiple canisters executing in parallel.
+///
+/// The problem is that when canisters with no memory reservations want to
+/// expand their memory consumption, we need to ensure that they do not go over
+/// subnet's capacity. As we execute canisters in parallel, we need to
+/// provide them with a way to view the latest state of memory availble in a
+/// thread safe way. Hence, we use `Arc<RwLock<>>` here.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct SubnetAvailableMemory(Arc<RwLock<NumBytes>>);
+
+impl SubnetAvailableMemory {
+    pub fn new(amount: NumBytes) -> Self {
+        Self(Arc::new(RwLock::new(amount)))
+    }
+
+    /// Try to use some memory capacity and fail if not enough is available
+    pub fn try_decrement(&self, requested: NumBytes) -> Result<(), SubnetAvailableMemoryError> {
+        let mut available = self.0.write().unwrap();
+        if requested <= *available {
+            *available -= requested;
+            Ok(())
+        } else {
+            Err(SubnetAvailableMemoryError::InsufficientMemory {
+                requested,
+                available: *available,
+            })
+        }
+    }
 }
 
 // Note [Unit]
@@ -70,6 +109,7 @@ pub trait ExecutionEnvironment: Sync + Send {
         instructions_limit: NumInstructions,
         rng: &mut (dyn RngCore + 'static),
         provisional_whitelist: &ProvisionalWhitelist,
+        subnet_available_memory: SubnetAvailableMemory,
     ) -> Self::State;
 
     /// Executes a message sent to a canister.
@@ -80,6 +120,7 @@ pub trait ExecutionEnvironment: Sync + Send {
         msg: CanisterInputMessage,
         time: Time,
         routing_table: Arc<RoutingTable>,
+        subnet_available_memory: SubnetAvailableMemory,
     ) -> ExecResult<ExecuteMessageResult<Self::CanisterState>>;
 
     /// Asks the canister if it is willing to accept the provided ingress
@@ -87,7 +128,7 @@ pub trait ExecutionEnvironment: Sync + Send {
     fn should_accept_ingress_message(
         &self,
         state: Arc<Self::State>,
-        signed_ingress: &SignedIngress,
+        ingress: &SignedIngressContent,
     ) -> Result<(), MessageAcceptanceError>;
 
     /// Executes a heartbeat of a given canister.
@@ -97,11 +138,20 @@ pub trait ExecutionEnvironment: Sync + Send {
         instructions_limit: NumInstructions,
         routing_table: Arc<RoutingTable>,
         time: Time,
+        subnet_available_memory: SubnetAvailableMemory,
     ) -> ExecResult<(
         Self::CanisterState,
         NumInstructions,
-        Result<(), CanisterHeartbeatError>,
+        Result<NumBytes, CanisterHeartbeatError>,
     )>;
+
+    /// Look up the current amount of memory available on the subnet.
+    ///
+    /// TODO(EXC-185): This is [hopefully] temporary scaffolding that is only
+    /// needed because the scheduler and execution_environment are in two
+    /// different crates. Once we move them into a single crate with combined
+    /// configurations, this should no longer be needed.
+    fn subnet_available_memory(&self, state: &Self::State) -> NumBytes;
 }
 
 /// The data structure returned by
@@ -109,12 +159,14 @@ pub trait ExecutionEnvironment: Sync + Send {
 pub struct ExecuteMessageResult<CanisterState> {
     /// The `CanisterState` after message execution
     pub canister: CanisterState,
-    /// The amount of cycles left after message execution.  This must be <= to
-    /// the instructions_limit that `execute_canister_message()` was called
+    /// The amount of instructions left after message execution. This must be <=
+    /// to the instructions_limit that `execute_canister_message()` was called
     /// with.
     pub num_instructions_left: NumInstructions,
     /// Optional status for an Ingress message if available.
     pub ingress_status: Option<(MessageId, IngressStatus)>,
+    /// The size of the state change delta the canister produced
+    pub state_change_delta: NumBytes,
 }
 
 /// An underlying struct/helper for implementing select() on multiple
@@ -430,19 +482,6 @@ pub trait SystemApi {
     /// `msg_reply_data_append`.
     fn ic0_msg_reply(&mut self) -> HypervisorResult<()>;
 
-    /// Accepts the requested amount of funds of the specified unit and
-    /// transfers them to the canister's balance.
-    ///
-    /// This traps if the amount of funds requested exceeds the amount available
-    /// in the call context.
-    fn ic0_msg_funds_accept(
-        &mut self,
-        unit_src: u32,
-        unit_size: u32,
-        amount: u64,
-        heap: &[u8],
-    ) -> HypervisorResult<()>;
-
     /// Returns the reject code, if the current function is invoked as a
     /// reject callback.
     ///
@@ -662,29 +701,6 @@ pub trait SystemApi {
     /// Returns the current balance in cycles.
     fn ic0_canister_cycle_balance(&self) -> HypervisorResult<u64>;
 
-    /// Returns the amount of funds available for the specified unit that was
-    /// transferred by the caller of the current call and is still available in
-    /// this message.
-    ///
-    /// Note [Unit]
-    fn ic0_msg_funds_available(
-        &self,
-        unit_src: u32,
-        unit_size: u32,
-        heap: &[u8],
-    ) -> HypervisorResult<u64>;
-
-    /// Indicates the amount of specified unit that came back with the response
-    /// as a refund.
-    ///
-    /// Note [Unit]
-    fn ic0_msg_funds_refunded(
-        &self,
-        unit_src: u32,
-        unit_size: u32,
-        heap: &[u8],
-    ) -> HypervisorResult<u64>;
-
     /// Cycles sent in the current call and still available.
     fn ic0_msg_cycles_available(&self) -> HypervisorResult<u64>;
 
@@ -701,10 +717,10 @@ pub trait SystemApi {
     /// `ic0.msg_cycles_available`, and
     ///
     /// The canister balance afterwards does not exceed
-    /// `CYCLES_LIMIT_PER_CANISTER` (public spec refers to this constant
-    /// as MAX_CANISTER_BALANCE) minus any possible outstanding balances.
-    /// However, this does not apply to NNS canisters. Their balance can
-    /// exceed `CYCLES_LIMIT_PER_CANISTER`.
+    /// maximum amount of cycles it can hold (public spec refers to this
+    /// constant as MAX_CANISTER_BALANCE) minus any possible outstanding
+    /// balances. However, canisters on system subnets have no balance
+    /// limit.
     ///
     /// EXE-117: the last point is not properly handled yet.  In particular, a
     /// refund can come back to the canister after this call finishes which
@@ -747,9 +763,8 @@ pub trait SystemApi {
     /// Adds no more cycles than `amount`.
     ///
     /// The canister balance afterwards does not exceed
-    /// `CYCLES_LIMIT_PER_CANISTER`.
-    /// However, this does not apply to NNS canisters. Their balance can
-    /// exceed `CYCLES_LIMIT_PER_CANISTER`.
+    /// maximum amount of cycles it can hold.
+    /// However, canisters on system subnets have no balance limit.
     ///
     /// Returns the amount of cycles added to the canister's balance.
     fn ic0_mint_cycles(&mut self, amount: u64) -> HypervisorResult<u64>;

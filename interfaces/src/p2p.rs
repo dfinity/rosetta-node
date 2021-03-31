@@ -1,7 +1,7 @@
 use async_trait::async_trait;
-use ic_types::messages::SignedIngress;
+use ic_types::{artifact::Artifact, messages::SignedIngress};
 
-pub type IngressError = String;
+use crate::artifact_manager::OnArtifactError;
 
 /// This is an event handler that can be used to submit an
 /// Ingress Message to P2P events channel for processing. It encapsulates the
@@ -9,17 +9,11 @@ pub type IngressError = String;
 /// channel. It is mainly to be used by HttpHandler to submit ingress messages.
 /// TODO: Make it such that it does not need to wrapped into a GossipArtifact
 pub trait IngressEventHandler: Send + Sync {
-    fn on_ingress_message(&self, message: SignedIngress) -> Result<(), IngressError>;
+    fn on_ingress_message(&self, message: SignedIngress) -> Result<(), OnArtifactError<Artifact>>;
 
     /// Checks if the user message can be accepted for processing or if it
     /// should rejected/throttled
     fn can_accept_user_request(&self) -> bool;
-}
-
-// Async version of the ingress event handler
-#[async_trait]
-pub trait AsyncIngressEventHandler: Send + Sync {
-    async fn send_ingress_message(&mut self, message: SignedIngress) -> Result<(), IngressError>;
 }
 
 /// P2P exposes channels which are used to hold artifacts sent by

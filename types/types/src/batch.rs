@@ -378,7 +378,7 @@ mod tests {
         ];
         let signed_ingresses: Vec<SignedIngress> = update_messages
             .into_iter()
-            .map(|msg| SignedIngress::from(HttpRequest::try_from(msg).unwrap()))
+            .map(|msg| HttpRequest::try_from(msg).unwrap())
             .collect();
         let ingress_payload = IngressPayload::from(signed_ingresses.clone());
         let signed_ingresses1 = Vec::<SignedIngress>::try_from(ingress_payload).unwrap();

@@ -306,6 +306,7 @@ fn zk_proofs_should_verify() {
         .collect::<BTreeMap<ic_types::NodeIndex, FsEncryptionPublicKey>>();
 
     verify_zk_proofs(
+        epoch,
         &public_keys,
         &public_coefficients,
         &ciphertext,
@@ -313,4 +314,53 @@ fn zk_proofs_should_verify() {
         &sharing_proof,
     )
     .expect("Verification failed");
+}
+
+#[test]
+fn zk_proofs_should_not_verify_with_wrong_epoch() {
+    const NUM_RECEIVERS: u8 = 3;
+    let threshold = NumberOfNodes::from(2);
+
+    let (public_coefficients, threshold_keys) = generate_threshold_keys(
+        NUM_RECEIVERS as usize,
+        threshold,
+        Randomness::from([99u8; 32]),
+    );
+
+    let forward_secure_keys: Vec<FsEncryptionKeySet> = (0..NUM_RECEIVERS)
+        .map(|receiver_index| {
+            create_forward_secure_key_pair(Randomness::from([receiver_index | 0x10; 32]))
+        })
+        .collect();
+
+    let key_message_pairs = fs_key_message_pairs(&threshold_keys, &forward_secure_keys);
+
+    let epoch = Epoch::from(5); // Small epoch as forward-stepping is slow
+    let seed = Randomness::from([0x69; 32]);
+    let (ciphertext, chunking_proof, sharing_proof) =
+        encrypt_and_prove(seed, &key_message_pairs, epoch, &public_coefficients)
+            .expect("Test failure: Failed to encrypt");
+
+    let public_keys = &(0..)
+        .zip(&forward_secure_keys)
+        .map(|(index, key)| (index, key.public_key))
+        .collect::<BTreeMap<ic_types::NodeIndex, FsEncryptionPublicKey>>();
+
+    let epoch = Epoch::from(6); // Wrong epoch.
+    let zk_result = verify_zk_proofs(
+        epoch,
+        &public_keys,
+        &public_coefficients,
+        &ciphertext,
+        &chunking_proof,
+        &sharing_proof,
+    );
+    assert_eq!(
+        zk_result,
+        Err(CspDkgVerifyDealingError::InvalidDealingError(
+            InvalidArgumentError {
+                message: "Ciphertext integrity check failed".to_string(),
+            }
+        ))
+    );
 }

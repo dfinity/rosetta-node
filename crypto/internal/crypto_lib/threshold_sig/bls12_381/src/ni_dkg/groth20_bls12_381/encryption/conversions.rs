@@ -281,7 +281,7 @@ pub fn plaintext_from_bytes(bytes: &[Chunk; NUM_CHUNKS]) -> Vec<isize> {
 pub fn public_coefficients_to_miracl(
     public_coefficients: &PublicCoefficientsBytes,
 ) -> Result<Vec<ECP2>, ()> {
-    // TODO: Return malformed public key
+    // TODO (CRP-816): Return malformed public key
     public_coefficients
         .coefficients
         .iter()
@@ -313,9 +313,9 @@ pub fn chunking_proof_from_miracl(chunking_proof: &ProofChunking) -> ZKProofDec 
             .collect::<ArrayVec<_>>()
             .into_inner()
             .expect("Wrong size of first_move_c==cc in chunking proof"),
-        second_move_d: chunking_proof.dd.iter().map(miracl_g1_to_bytes).collect(), /* Has length #receivers+1 - TODO: Verify this when parsing */
+        second_move_d: chunking_proof.dd.iter().map(miracl_g1_to_bytes).collect(),
         second_move_y: miracl_g1_to_bytes(&chunking_proof.yy),
-        response_z_r: chunking_proof.z_r.iter().map(miracl_fr_to_bytes).collect(), /* Has length #receivers  - TODO: verify this when parsing */
+        response_z_r: chunking_proof.z_r.iter().map(miracl_fr_to_bytes).collect(),
         response_z_s: chunking_proof
             .z_s
             .iter()

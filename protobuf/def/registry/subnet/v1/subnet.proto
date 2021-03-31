@@ -48,6 +48,9 @@ message SubnetRecord {
 
   // The upper bound for the number of dealings we allow in a block.
   uint64 dkg_dealings_per_block = 16;
+
+  // If `true`, the subnet will be halted: it will no longer create or execute blocks.
+  bool is_halted = 17;
 }
 
 // Contains the initial DKG transcripts for the subnet and materials to construct a base CUP (i.e.

@@ -296,6 +296,39 @@ pub type HashedBlock = Hashed<CryptoHashOf<Block>, Block>;
 /// We store the hash of block in block proposal too.
 pub type BlockProposal = Signed<HashedBlock, BasicSignature<Block>>;
 
+impl From<&BlockProposal> for pb::BlockProposal {
+    fn from(block_proposal: &BlockProposal) -> Self {
+        Self {
+            hash: block_proposal.content.hash.clone().get().0,
+            value: Some((&block_proposal.content.value).into()),
+            signature: block_proposal.signature.signature.clone().get().0,
+            signer: block_proposal.signature.signer.get().into_vec(),
+        }
+    }
+}
+
+impl TryFrom<pb::BlockProposal> for BlockProposal {
+    type Error = String;
+    fn try_from(block_proposal: pb::BlockProposal) -> Result<Self, Self::Error> {
+        Ok(Signed {
+            content: Hashed {
+                value: Block::try_from(
+                    block_proposal.value.expect("No block serialization found."),
+                )
+                .expect("Could not deserialize block."),
+                hash: CryptoHashOf::from(CryptoHash(block_proposal.hash)),
+            },
+            signature: BasicSignature {
+                signature: BasicSigOf::from(BasicSig(block_proposal.signature)),
+                signer: NodeId::from(
+                    PrincipalId::try_from(block_proposal.signer)
+                        .expect("Couldn't parse principal id."),
+                ),
+            },
+        })
+    }
+}
+
 impl From<BlockProposal> for Block {
     fn from(proposal: BlockProposal) -> Block {
         proposal.content.value
@@ -333,6 +366,50 @@ impl SignedBytesWithoutDomainSeparator for NotarizationContent {
 
 pub type Notarization = Signed<NotarizationContent, MultiSignature<NotarizationContent>>;
 
+impl From<&Notarization> for pb::Notarization {
+    fn from(notarization: &Notarization) -> Self {
+        Self {
+            version: notarization.content.version.to_string(),
+            height: notarization.content.height.get(),
+            block: notarization.content.block.clone().get().0,
+            signature: notarization.signature.signature.clone().get().0,
+            signers: notarization
+                .signature
+                .signers
+                .iter()
+                .map(|node_id| node_id.clone().get().into_vec())
+                .collect(),
+        }
+    }
+}
+
+impl TryFrom<pb::Notarization> for Notarization {
+    type Error = String;
+    fn try_from(notarization: pb::Notarization) -> Result<Self, Self::Error> {
+        Ok(Signed {
+            content: NotarizationContent {
+                version: ReplicaVersion::try_from(notarization.version.as_str())
+                    .map_err(|e| format!("Notarization replica version failed to parse {:?}", e))?,
+                height: Height::from(notarization.height),
+                block: CryptoHashOf::from(CryptoHash(notarization.block)),
+            },
+            signature: MultiSignature {
+                signature: CombinedMultiSigOf::from(CombinedMultiSig(notarization.signature)),
+                signers: notarization
+                    .signers
+                    .iter()
+                    .map(|n| {
+                        NodeId::from(
+                            PrincipalId::try_from(&n[..])
+                                .expect("Could not deserialize principal id."),
+                        )
+                    })
+                    .collect(),
+            },
+        })
+    }
+}
+
 pub type NotarizationShare = Signed<NotarizationContent, MultiSignatureShare<NotarizationContent>>;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -359,6 +436,45 @@ impl SignedBytesWithoutDomainSeparator for FinalizationContent {
 }
 
 pub type Finalization = Signed<FinalizationContent, MultiSignature<FinalizationContent>>;
+
+impl From<&Finalization> for pb::Finalization {
+    fn from(finalization: &Finalization) -> Self {
+        Self {
+            version: finalization.content.version.to_string(),
+            height: finalization.content.height.get(),
+            block: finalization.content.block.clone().get().0,
+            signature: finalization.signature.signature.clone().get().0,
+            signers: finalization
+                .signature
+                .signers
+                .iter()
+                .map(|node_id| node_id.clone().get().into_vec())
+                .collect(),
+        }
+    }
+}
+
+impl TryFrom<pb::Finalization> for Finalization {
+    type Error = String;
+    fn try_from(finalization: pb::Finalization) -> Result<Self, Self::Error> {
+        Ok(Signed {
+            content: FinalizationContent {
+                version: ReplicaVersion::try_from(finalization.version.as_str())
+                    .map_err(|e| format!("Finalization replica version failed to parse {:?}", e))?,
+                height: Height::from(finalization.height),
+                block: CryptoHashOf::from(CryptoHash(finalization.block)),
+            },
+            signature: MultiSignature {
+                signature: CombinedMultiSigOf::from(CombinedMultiSig(finalization.signature)),
+                signers: finalization
+                    .signers
+                    .iter()
+                    .map(|n| NodeId::from(PrincipalId::try_from(&n[..]).unwrap()))
+                    .collect(),
+            },
+        })
+    }
+}
 
 pub type FinalizationShare = Signed<FinalizationContent, MultiSignatureShare<FinalizationContent>>;
 
@@ -449,6 +565,38 @@ impl RandomTapeContent {
 }
 
 pub type RandomTape = Signed<RandomTapeContent, ThresholdSignature<RandomTapeContent>>;
+
+impl From<&RandomTape> for pb::RandomTape {
+    fn from(random_tape: &RandomTape) -> Self {
+        Self {
+            version: random_tape.content.version.to_string(),
+            height: random_tape.content.height.get(),
+            signature: random_tape.signature.signature.clone().get().0,
+            signer: Some(pb::NiDkgId::from(random_tape.signature.signer)),
+        }
+    }
+}
+
+impl TryFrom<pb::RandomTape> for RandomTape {
+    type Error = String;
+    fn try_from(tape: pb::RandomTape) -> Result<Self, Self::Error> {
+        Ok(Signed {
+            content: RandomTapeContent {
+                version: ReplicaVersion::try_from(tape.version.as_str())
+                    .map_err(|e| format!("RandomTape replica version failed to parse {:?}", e))?,
+                height: Height::from(tape.height),
+            },
+            signature: ThresholdSignature {
+                signature: CombinedThresholdSigOf::new(CombinedThresholdSig(tape.signature)),
+                signer: NiDkgId::try_from(
+                    tape.signer
+                        .ok_or_else(|| String::from("Error: RandomTape signer not present"))?,
+                )
+                .map_err(|e| format!("Unable to decode RandomTape signer {:?}", e))?,
+            },
+        })
+    }
+}
 
 pub type RandomTapeShare = Signed<RandomTapeContent, ThresholdSignatureShare<RandomTapeContent>>;
 

@@ -69,14 +69,14 @@ async fn rosetta_cli_construction_create_account_test() {
     let addr = "127.0.0.1:8092".to_string();
 
     let mut scribe = Scribe::new();
-    let num_transactions = 10;
+    let num_transactions: u32 = 10;
 
     scribe.add_account(
-        "536b6209f79889378cafe5f0342cac176f261cca3d182da95c3bfd6302",
+        "42a3eb61d549dc9fe6429ce2361ec60a569b8befe43eb15a3fc5c88516711bc5",
         1_000_000_001,
     );
     scribe.add_account(
-        "fe82b6784eb4a61a1261941f3010066f3df813154cc3e6ced3d3b63202",
+        "35548ec29e9d85305850e87a2d2642fe7214ff4bb36334070deafc3345c3b127",
         1_000_000_001,
     );
     for _i in 0..num_transactions {
@@ -140,31 +140,31 @@ async fn rosetta_cli_construction_test() {
     scribe.gen_accounts(num_accounts, 1_000 * 100_000_000);
 
     scribe.add_account(
-        "fe82b6784eb4a61a1261941f3010066f3df813154cc3e6ced3d3b63202",
+        "35548ec29e9d85305850e87a2d2642fe7214ff4bb36334070deafc3345c3b127",
         100_000_000_001,
     );
     scribe.add_account(
-        "536b6209f79889378cafe5f0342cac176f261cca3d182da95c3bfd6302",
+        "42a3eb61d549dc9fe6429ce2361ec60a569b8befe43eb15a3fc5c88516711bc5",
         100_000_000_002,
     );
     scribe.add_account(
-        "df86247a1456860419c51c432faffc05fc6d0e405c21cb31b36a772d02",
+        "eaf407f7fa3770edb621ce920f6c83cefb63df333044d1cdcd2a300ceb85cb1c",
         100_000_000_003,
     );
     scribe.add_account(
-        "5360a4ac7ecf4495b764cfe9ca9ef050d3686d43fd5ae0ec7517de8c02",
+        "ba5b33d11f93033ba45b0a0136d4f7f6310ee482cfb1cfebdb4cea55f4aeda17",
         100_000_000_004,
     );
     scribe.add_account(
-        "edcfc2ed66a7cfbd688f064afe6d3d9dfb1155b66e8de062ab13ef0202",
+        "776ab0ef12a63f5b1bd605f202b1b5cefeaf5791c0241c773fc8e76a6c4a8b40",
         100_000_000_005,
     );
     scribe.add_account(
-        "1a513246f54ea1e2374187222ffb84624896961f513353811d468c7802",
+        "88bf52d6380bf2ed7b5fd4010afd145dc351cbf386def9b9be017bbeb640a919",
         100_000_000_006,
     );
     scribe.add_account(
-        "47dc99f3bc06aeaa3f175f3dd0941c09d9ff018b40822a0c8e10bb8f02",
+        "92c9c807da64528240f65ec29b58c839bf2374e9c1c38b7661da65fd8710124e",
         100_000_000_007,
     );
 

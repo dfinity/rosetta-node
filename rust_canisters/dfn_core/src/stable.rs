@@ -1,3 +1,5 @@
+use std::convert::TryFrom;
+
 use crate::api::ic0;
 
 /// The wasm page size is 64KiB
@@ -21,6 +23,40 @@ pub fn set(content: &[u8]) {
     set_length(len);
 }
 
+/// Writes `content` to the given offset in the stable memory
+pub fn write(content: &[u8], offset: u32) {
+    let min_len = u32::try_from(content.len() + usize::try_from(offset).unwrap())
+        .expect("stable::write: content size + offset is too large");
+
+    let current_pages = unsafe { ic0::stable_size() };
+
+    let old_len = if current_pages == 0 { 0 } else { length() };
+    let new_len = std::cmp::max(old_len, min_len);
+
+    if new_len > old_len {
+        ensure_capacity(new_len);
+    }
+
+    // Don't call stable_write unless we have data to write. This also avoids an
+    // error when offset=0 and content is empty: in this case we don't allocate
+    // any pages so write fails.
+    if content.is_empty() {
+        return;
+    }
+
+    unsafe {
+        ic0::stable_write(
+            LENGTH_BYTES + offset,
+            content.as_ptr() as u32,
+            content.len() as u32,
+        );
+    }
+
+    if new_len > old_len {
+        set_length(new_len);
+    }
+}
+
 /// Gets the contents of the stable memory
 pub fn get() -> Vec<u8> {
     let len = length();
@@ -31,7 +67,16 @@ pub fn get() -> Vec<u8> {
     out
 }
 
-fn length() -> u32 {
+/// Reads `len` bytes from `offset` in stable memory
+pub fn read(offset: u32, len: u32) -> Vec<u8> {
+    let mut out: Vec<u8> = vec![0; len as usize];
+    unsafe {
+        ic0::stable_read(out.as_mut_ptr() as u32, LENGTH_BYTES + offset, len);
+    }
+    out
+}
+
+pub fn length() -> u32 {
     let mut len_bytes: [u8; 4] = [0; 4];
     unsafe {
         ic0::stable_read(len_bytes.as_mut_ptr() as u32, 0, LENGTH_BYTES);

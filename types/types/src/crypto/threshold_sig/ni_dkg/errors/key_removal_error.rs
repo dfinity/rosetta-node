@@ -1,6 +1,6 @@
 use crate::crypto::error::KeyNotFoundError;
+use crate::crypto::threshold_sig::ni_dkg::errors::transcripts_to_retain_validation_error::TranscriptsToRetainValidationError;
 use crate::crypto::threshold_sig::ni_dkg::errors::{
-    current_and_next_transcripts_validation_error::CurrentAndNextTranscriptsValidationError,
     FsEncryptionPublicKeyNotInRegistryError, MalformedFsEncryptionPublicKeyError,
 };
 use crate::registry::RegistryClientError;
@@ -9,7 +9,7 @@ use std::fmt::Formatter;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum DkgKeyRemovalError {
-    InputValidationError(CurrentAndNextTranscriptsValidationError),
+    InputValidationError(TranscriptsToRetainValidationError),
     FsEncryptionPublicKeyNotInRegistry(FsEncryptionPublicKeyNotInRegistryError),
     MalformedFsEncryptionPublicKey(MalformedFsEncryptionPublicKeyError),
     Registry(RegistryClientError),

@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package ic_base_types.pb.v1;
+
+// A PB container for a PrincipalId, which uniquely identifies
+// a principal.
+message PrincipalId {
+  bytes serialized_id = 1;
+}

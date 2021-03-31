@@ -4,7 +4,18 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 #[derive(
-    Serialize, Deserialize, CandidType, Clone, Copy, Hash, Debug, PartialEq, Eq, PartialOrd, Ord,
+    Serialize,
+    Deserialize,
+    CandidType,
+    Clone,
+    Copy,
+    Hash,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Default,
 )]
 pub struct ICPTs {
     /// Number of 10^-8 ICPs.
@@ -62,7 +73,7 @@ impl ICPTs {
     /// let icpt = ICPTs::from_doms(1200000200);
     /// assert_eq!(icpt.unpack(), (12, 200))
     /// ```
-    pub fn from_doms(doms: u64) -> Self {
+    pub const fn from_doms(doms: u64) -> Self {
         ICPTs { doms }
     }
 

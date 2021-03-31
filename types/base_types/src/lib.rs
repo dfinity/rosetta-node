@@ -1,4 +1,5 @@
 mod canister_id;
+mod pb_internal;
 mod principal_id;
 
 use candid::CandidType;

@@ -1,5 +1,5 @@
 use ic_types::CanisterId;
-use ledger_canister::{get_chain_prefix, ArchiveCanisterInitPayload, RawBlock};
+use ledger_canister::{get_chain_prefix, ArchiveCanisterInitPayload, EncodedBlock};
 use std::collections::VecDeque;
 
 use std::sync::RwLock;
@@ -38,7 +38,8 @@ async fn create_and_initialize_node_canister() -> (CanisterId, usize) {
         // node + 32 MiB of "scratch" space
         Some(*NODE_MAX_MEMORY_SIZE_BYTES.read().unwrap() + 32 * 1024 * 1024),
     )
-    .await;
+    .await
+    .unwrap_err();
     NODES.write().unwrap().push(node_canister_id);
 
     let remaining_capacity: usize = dfn_core::call(
@@ -95,7 +96,7 @@ async fn node_and_capacity(needed: usize) -> (CanisterId, usize) {
     }
 }
 
-async fn archive_blocks(blocks: Vec<RawBlock>) {
+async fn archive_blocks(blocks: Vec<EncodedBlock>) {
     print("[archive] archive_blocks(): start");
 
     let mut blocks = VecDeque::from(blocks);
@@ -108,7 +109,8 @@ async fn archive_blocks(blocks: Vec<RawBlock>) {
 
         // Get the CanisterId and remaining capacity of the node that can
         // accept at least the first block
-        let (node_canister_id, remaining_capacity) = node_and_capacity(blocks[0].len()).await;
+        let (node_canister_id, remaining_capacity) =
+            node_and_capacity(blocks[0].size_bytes()).await;
 
         // Take as many blocks as can be sent and send those in
         let mut first_blocks: VecDeque<_> =

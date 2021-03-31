@@ -443,7 +443,7 @@ mod tests {
             sender_sig: Some(Blob(sender_sig)),
             sender_delegation: None,
         };
-        SignedIngress::from(HttpRequest::try_from(envelope).unwrap())
+        HttpRequest::try_from(envelope).unwrap()
     }
 
     #[test]

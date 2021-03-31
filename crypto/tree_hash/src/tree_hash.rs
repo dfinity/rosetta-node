@@ -288,7 +288,6 @@ fn prune_witness_impl(
 /// block.
 ///
 /// Does not panic.
-#[allow(dead_code)]
 pub fn prune_witness(
     witness: &Witness,
     partial_tree: &LabeledTree<Vec<u8>>,
@@ -341,7 +340,6 @@ fn path_to_first_known(witness: &Witness) -> Option<Vec<Label>> {
 /// digest-computation, an error is returned.
 ///
 /// Does not `panic!`.
-#[allow(dead_code)]
 pub fn recompute_digest(
     partial_tree: &LabeledTree<Vec<u8>>,
     witness: &Witness,

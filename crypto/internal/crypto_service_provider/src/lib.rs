@@ -12,20 +12,26 @@ pub mod types;
 pub use crypto_lib::hash;
 
 use crate::api::{
-    CspKeyGenerator, CspNodePublicKeys, CspSecretKeyInjector, CspSecretKeyStoreChecker, CspSigner,
+    CspKeyGenerator, CspSecretKeyInjector, CspSecretKeyStoreChecker, CspSigner,
     CspTlsClientHandshake, CspTlsServerHandshake, DistributedKeyGenerationCspClient,
-    NiDkgCspClient, ThresholdSignatureCspClient,
+    NiDkgCspClient, NodePublicKeyData, ThresholdSignatureCspClient,
 };
+use crate::keygen::{forward_secure_key_id, public_key_hash_as_key_id};
 use crate::public_key_store::read_node_public_keys;
+use crate::secret_key_store::volatile_store::VolatileSecretKeyStore;
 use crate::secret_key_store::SecretKeyStore;
+use crate::types::CspPublicKey;
 use ic_config::crypto::CryptoConfig;
 use ic_crypto_internal_logmon::metrics::Metrics;
+use ic_crypto_internal_types::encrypt::forward_secure::CspFsEncryptionPublicKey;
 use ic_logger::{new_logger, replica_logger::no_op_logger, ReplicaLogger};
 use ic_protobuf::crypto::v1::NodePublicKeys;
+use ic_types::crypto::KeyId;
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use rand::rngs::OsRng;
 use rand::{CryptoRng, Rng};
 use secret_key_store::proto_store::ProtoSecretKeyStore;
+use std::convert::TryFrom;
 use std::sync::Arc;
 use std::time;
 use std::time::Instant;
@@ -42,7 +48,7 @@ pub trait CryptoServiceProvider:
     + CspSecretKeyStoreChecker
     + CspTlsServerHandshake
     + CspTlsClientHandshake
-    + CspNodePublicKeys
+    + NodePublicKeyData
 {
 }
 
@@ -56,8 +62,51 @@ impl<T> CryptoServiceProvider for T where
         + CspSecretKeyStoreChecker
         + CspTlsServerHandshake
         + CspTlsClientHandshake
-        + CspNodePublicKeys
+        + NodePublicKeyData
 {
+}
+
+struct SksKeyIds {
+    node_signing_key_id: Option<KeyId>,
+    dkg_dealing_encryption_key_id: Option<KeyId>,
+}
+
+struct PublicKeyData {
+    node_public_keys: NodePublicKeys,
+    sks_key_ids: SksKeyIds,
+}
+
+impl PublicKeyData {
+    fn new(node_public_keys: NodePublicKeys) -> Self {
+        let node_signing_key_id = match node_public_keys.node_signing_pk.to_owned() {
+            None => None,
+            Some(node_signing_pk) => {
+                let csp_pk = CspPublicKey::try_from(node_signing_pk)
+                    .expect("Unsupported public key proto as node signing public key.");
+                Some(public_key_hash_as_key_id(&csp_pk))
+            }
+        };
+
+        let dkg_dealing_encryption_key_id = match node_public_keys
+            .dkg_dealing_encryption_pk
+            .to_owned()
+        {
+            None => None,
+            Some(dkg_dealing_encryption_pk) => {
+                let csp_pk = CspFsEncryptionPublicKey::try_from(dkg_dealing_encryption_pk)
+                    .expect("Unsupported public key proto as dkg dealing encryption public key.");
+                Some(forward_secure_key_id(&csp_pk))
+            }
+        };
+        let sks_key_ids = SksKeyIds {
+            node_signing_key_id,
+            dkg_dealing_encryption_key_id,
+        };
+        PublicKeyData {
+            node_public_keys,
+            sks_key_ids,
+        }
+    }
 }
 
 /// Implements the CryptoServiceProvider for an RNG and a SecretKeyStore.
@@ -65,7 +114,7 @@ pub struct Csp<R: Rng + CryptoRng, S: SecretKeyStore> {
     // CSPRNG stands for cryptographically secure random number generator.
     csprng: CspRwLock<R>,
     secret_key_store: CspRwLock<S>,
-    node_public_keys: NodePublicKeys,
+    public_key_data: PublicKeyData,
     logger: ReplicaLogger,
 }
 
@@ -156,11 +205,12 @@ impl Csp<OsRng, ProtoSecretKeyStore> {
             Ok(node_pks) => node_pks,
             Err(_) => Default::default(),
         };
+        let public_key_data = PublicKeyData::new(node_public_keys);
 
         let metrics_arc = metrics.map(Arc::new);
         Csp {
             csprng: CspRwLock::new_for_rng(OsRng::default(), metrics_arc.as_ref().map(Arc::clone)),
-            node_public_keys,
+            public_key_data,
             secret_key_store: CspRwLock::new_for_sks(secret_key_store, metrics_arc),
             logger,
         }
@@ -177,9 +227,10 @@ impl<R: Rng + CryptoRng> Csp<R, ProtoSecretKeyStore> {
             Ok(node_pks) => node_pks,
             Err(_) => Default::default(),
         };
+        let public_key_data = PublicKeyData::new(node_public_keys);
         Csp {
             csprng: CspRwLock::new_for_rng(csprng, None),
-            node_public_keys,
+            public_key_data,
             secret_key_store: CspRwLock::new_for_sks(
                 ProtoSecretKeyStore::open(&config.crypto_root, None),
                 None,
@@ -189,9 +240,34 @@ impl<R: Rng + CryptoRng> Csp<R, ProtoSecretKeyStore> {
     }
 }
 
-impl<R: Rng + CryptoRng, S: SecretKeyStore> CspNodePublicKeys for Csp<R, S> {
+impl<R: Rng + CryptoRng> Csp<R, VolatileSecretKeyStore> {
+    /// Resets public key data according to the given `NodePublicKeys`.
+    ///
+    /// Note: This is for testing only and MUST NOT be used in production.
+    pub fn reset_public_key_data(&mut self, node_public_keys: NodePublicKeys) {
+        self.public_key_data = PublicKeyData::new(node_public_keys);
+    }
+}
+
+impl<R: Rng + CryptoRng, S: SecretKeyStore> NodePublicKeyData for Csp<R, S> {
     fn node_public_keys(&self) -> NodePublicKeys {
-        self.node_public_keys.clone()
+        self.public_key_data.node_public_keys.clone()
+    }
+
+    fn node_signing_key_id(&self) -> KeyId {
+        self.public_key_data
+            .sks_key_ids
+            .node_signing_key_id
+            .to_owned()
+            .expect("Missing node signing key id")
+    }
+
+    fn dkg_dealing_encryption_key_id(&self) -> KeyId {
+        self.public_key_data
+            .sks_key_ids
+            .dkg_dealing_encryption_key_id
+            .to_owned()
+            .expect("Missing dkg dealing encryption key id")
     }
 }
 
@@ -201,9 +277,11 @@ impl<R: Rng + CryptoRng, S: SecretKeyStore> Csp<R, S> {
     /// Note: This MUST NOT be used in production as the secrecy of the secret
     /// key store is not guaranteed.
     pub fn of(csprng: R, secret_key_store: S) -> Self {
+        let node_public_keys = Default::default();
+        let public_key_data = PublicKeyData::new(node_public_keys);
         Csp {
             csprng: CspRwLock::new_for_rng(csprng, None),
-            node_public_keys: Default::default(),
+            public_key_data,
             secret_key_store: CspRwLock::new_for_sks(secret_key_store, None),
             logger: no_op_logger(),
         }

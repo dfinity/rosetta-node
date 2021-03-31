@@ -11,7 +11,7 @@ use ic_types::{
     },
     CanisterId,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_cbor::value::Value as CBOR;
 use std::convert::TryFrom;
 use std::error::Error;
@@ -50,7 +50,7 @@ pub struct CanisterCallResponse {
 
 /// Given a CBOR response from a `read_state` and a `request_id` extracts
 /// the `RequestStatus` if available.
-pub(crate) fn parse_read_state_response(
+pub fn parse_read_state_response(
     request_id: &MessageId,
     message: CBOR,
 ) -> Result<RequestStatus, String> {
@@ -142,6 +142,14 @@ pub(crate) fn parse_canister_query_response(message: &CBOR) -> Result<RequestSta
     })
 }
 
+pub fn to_self_describing_cbor<T: Serialize>(e: &T) -> serde_cbor::Result<Vec<u8>> {
+    let mut serialized_bytes = Vec::new();
+    let mut serializer = serde_cbor::Serializer::new(&mut serialized_bytes);
+    serializer.self_describe()?;
+    e.serialize(&mut serializer)?;
+    Ok(serialized_bytes)
+}
+
 impl Agent {
     /// Prepares and serailizes a CBOR update request.
     pub fn prepare_update<S: ToString>(
@@ -163,7 +171,7 @@ impl Agent {
         };
 
         let (submit_request, request_id) = sign_submit(content, &self.sender)?;
-        let http_body = serde_cbor::to_vec(&submit_request).map_err(|e| {
+        let http_body = to_self_describing_cbor(&submit_request).map_err(|e| {
             format!(
                 "Cannot serialize the submit request in CBOR format because of: {}",
                 e
@@ -193,7 +201,7 @@ impl Agent {
         let request = sign_read(content, &self.sender)?;
         let cbor: CBOR = serde_cbor::value::to_value(request).unwrap();
 
-        Ok(serde_cbor::to_vec(&cbor).unwrap())
+        Ok(to_self_describing_cbor(&cbor).unwrap())
     }
 
     /// Prepares and serializes a CBOR read_state request, with the given paths
@@ -210,7 +218,7 @@ impl Agent {
         let request = sign_read(content, &self.sender)?;
         let cbor: CBOR = serde_cbor::value::to_value(request).unwrap();
 
-        Ok(serde_cbor::to_vec(&cbor).unwrap())
+        Ok(to_self_describing_cbor(&cbor).unwrap())
     }
 
     fn expiry_time(&self) -> Time {
@@ -232,13 +240,13 @@ mod tests {
             delegation: None,
         };
 
-        let certificate_cbor: Vec<u8> = serde_cbor::to_vec(&certificate).unwrap();
+        let certificate_cbor: Vec<u8> = to_self_describing_cbor(&certificate).unwrap();
 
         let response = HttpReadStateResponse {
             certificate: Blob(certificate_cbor),
         };
 
-        let response_cbor: Vec<u8> = serde_cbor::to_vec(&response).unwrap();
+        let response_cbor: Vec<u8> = to_self_describing_cbor(&response).unwrap();
 
         let response: CBOR = serde_cbor::from_slice(response_cbor.as_slice()).unwrap();
 
@@ -282,13 +290,13 @@ mod tests {
             delegation: None,
         };
 
-        let certificate_cbor: Vec<u8> = serde_cbor::to_vec(&certificate).unwrap();
+        let certificate_cbor: Vec<u8> = to_self_describing_cbor(&certificate).unwrap();
 
         let response = HttpReadStateResponse {
             certificate: Blob(certificate_cbor),
         };
 
-        let response_cbor: Vec<u8> = serde_cbor::to_vec(&response).unwrap();
+        let response_cbor: Vec<u8> = to_self_describing_cbor(&response).unwrap();
 
         let response: CBOR = serde_cbor::from_slice(response_cbor.as_slice()).unwrap();
 

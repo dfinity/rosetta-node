@@ -175,7 +175,7 @@ proptest! {
         // Setup:
         let transcript = fixture.transcript()
             .expect("Could not generate transcript");
-        // TODO: The threshold test still uses the old assumption that all receivers
+        // TODO(CRP-812): The threshold test still uses the old assumption that all receivers
         // have keys.  It needs to be updated.  Once that is the case, we can update
         // this code:
         let threshold_secret_keys: Vec<ThresholdSecretKey> = fixture.threshold_secret_keys(&transcript).iter().map(|maybe| maybe

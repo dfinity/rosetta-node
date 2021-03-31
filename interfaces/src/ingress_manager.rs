@@ -10,6 +10,7 @@ use ic_types::{
     crypto::CryptoError,
     messages::MessageId,
     time::{Time, UNIX_EPOCH},
+    CanisterId,
 };
 use std::collections::HashSet;
 
@@ -51,6 +52,8 @@ pub enum IngressPermanentError {
     IngressMessageTooBig(usize, usize),
     IngressPayloadTooBig(usize, usize),
     DuplicatedIngressMessage(MessageId),
+    InsufficientCycles(CanisterId),
+    CanisterNotFound(CanisterId),
 }
 
 #[derive(Debug)]

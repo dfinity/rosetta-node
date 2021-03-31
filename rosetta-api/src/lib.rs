@@ -7,8 +7,8 @@ pub mod store;
 use crate::convert::account_from_public_key;
 use crate::convert::operations;
 use crate::convert::{
-    account_identifier, from_arg, from_hex, from_public_key, internal_error, into_error, to_hex,
-    transaction_id,
+    from_arg, from_hex, from_public_key, internal_error, into_error, make_read_state_from_update,
+    to_model_account_identifier, transaction_id,
 };
 use crate::ledger_client::LedgerAccess;
 
@@ -16,20 +16,22 @@ use crate::store::HashedBlock;
 
 use convert::{from_metadata, into_metadata, to_arg};
 use ic_interfaces::crypto::DOMAIN_IC_REQUEST;
-use ic_types::messages::{Blob, HttpCanisterUpdate, HttpRequestEnvelope, HttpSubmitContent};
+use ic_types::messages::{
+    Blob, HttpCanisterUpdate, HttpReadContent, HttpRequestEnvelope, HttpSubmitContent,
+};
 use ic_types::time::current_time_and_expiry_time;
-use ic_types::{CanisterId, PrincipalId};
+use ic_types::{messages::MessageId, CanisterId, PrincipalId};
 
 use models::*;
 use rand::Rng;
 
-use ledger_canister::{BlockHeight, Memo, SendArgs, Serializable, Transfer, TRANSACTION_FEE};
+use ledger_canister::{BlockHeight, Memo, SendArgs, Transfer, TRANSACTION_FEE};
 use serde_json::{json, map::Map};
 use std::convert::TryFrom;
 
-use async_std::task::sleep;
+use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant};
 
 use log::{debug, warn};
 
@@ -79,7 +81,7 @@ fn get_block(
             index: Some(block_height),
             hash: Some(block_hash),
         }) => {
-            let hash: ledger_canister::HashOf<ledger_canister::Block> =
+            let hash: ledger_canister::HashOf<ledger_canister::EncodedBlock> =
                 convert::to_hash(&block_hash)?;
             if block_height < 0 {
                 return Err(ApiError::InvalidBlockId(false, None));
@@ -106,7 +108,7 @@ fn get_block(
             index: None,
             hash: Some(block_hash),
         }) => {
-            let hash: ledger_canister::HashOf<ledger_canister::Block> =
+            let hash: ledger_canister::HashOf<ledger_canister::EncodedBlock> =
                 convert::to_hash(&block_hash)?;
             blocks.get(hash)?
         }
@@ -127,6 +129,17 @@ pub struct RosettaRequestHandler {
     ledger: Arc<dyn LedgerAccess + Send + Sync>,
 }
 
+/// The type (encoded as CBOR) returned by /construction/combine, containing the
+/// IC calls to submit the transaction and to check the result.
+type Envelopes = (
+    HttpRequestEnvelope<HttpSubmitContent>,
+    HttpRequestEnvelope<HttpReadContent>,
+);
+
+fn decode_hex(s: &str) -> Result<Vec<u8>, ApiError> {
+    hex::decode(s).map_err(|err| internal_error(format!("Could not hex-decode string: {}", err)))
+}
+
 impl RosettaRequestHandler {
     pub fn new<T: 'static + LedgerAccess + Send + Sync>(ledger: Arc<T>) -> Self {
         Self { ledger }
@@ -145,18 +158,21 @@ impl RosettaRequestHandler {
     ) -> Result<AccountBalanceResponse, ApiError> {
         verify_network_id(self.ledger.ledger_canister_id(), &msg.network_identifier)?;
 
-        let canister_id = hex::decode(&msg.account_identifier.address)
-            .ok()
-            .and_then(|x| PrincipalId::try_from(x.as_slice()).ok())
-            .and_then(|x| CanisterId::try_from(x).ok())
-            .ok_or(ApiError::InvalidAccountId(false, None))?;
-
+        let account_id = ledger_canister::AccountIdentifier::from_hex(
+            &msg.account_identifier.address,
+        )
+        .map_err(|e| {
+            convert::invalid_account_id(format!(
+                "Account {} is not valid address, {}",
+                &msg.account_identifier.address, e,
+            ))
+        })?;
         let blocks = self.ledger.read_blocks().await;
         let block = get_block(&blocks, msg.block_identifier)?;
 
         let icp = blocks
             .get_balances(block.hash)?
-            .account_balance(&canister_id.get());
+            .account_balance(&account_id);
         let amount = convert::amount_(icp)?;
         let b = convert::block_id(&block)?;
         Ok(AccountBalanceResponse::new(b, vec![amount]))
@@ -167,17 +183,21 @@ impl RosettaRequestHandler {
         verify_network_id(self.ledger.ledger_canister_id(), &msg.network_identifier)?;
 
         let blocks = self.ledger.read_blocks().await;
-        let b = get_block(&blocks, Some(msg.block_identifier))?;
-        let b_id = convert::block_id(&b)?;
-        let parent_id = create_parent_block_id(&blocks, &b)?;
+        let hb = get_block(&blocks, Some(msg.block_identifier))?;
+        let block = hb
+            .block
+            .decode()
+            .map_err(|err| internal_error(format!("Cannot decode block: {}", err)))?;
+        let b_id = convert::block_id(&hb)?;
+        let parent_id = create_parent_block_id(&blocks, &hb)?;
 
-        let txn = b.block.transaction();
+        let txn = block.transaction;
         let t_id = convert::transaction_identifier(&txn.hash());
         let transactions = vec![convert::transaction(&txn.transfer, t_id)?];
         let block = Some(models::Block::new(
             b_id,
             parent_id,
-            convert::timestamp(b.block.timestamp().into())?,
+            convert::timestamp(block.timestamp.into())?,
             transactions,
         ));
 
@@ -198,9 +218,13 @@ impl RosettaRequestHandler {
             index: Some(msg.block_identifier.index),
             hash: Some(msg.block_identifier.hash),
         });
-        let b = get_block(&blocks, b_id)?;
+        let hb = get_block(&blocks, b_id)?;
+        let b = hb
+            .block
+            .decode()
+            .map_err(|err| internal_error(format!("Cannot decode block: {}", err)))?;
 
-        let txn = b.block.transaction();
+        let txn = b.transaction;
         let t_id = convert::transaction_identifier(&txn.hash());
         let transaction = convert::transaction(&txn.transfer, t_id)?;
 
@@ -208,7 +232,7 @@ impl RosettaRequestHandler {
     }
 
     /// Create Network Transfer from Signatures
-    // This returns HttpRequestEnvelope<HttpSubmitContent> encoded in a JSON string
+    // This returns Envelopes encoded in a CBOR string
     pub async fn construction_combine(
         &self,
         msg: models::ConstructionCombineRequest,
@@ -217,51 +241,65 @@ impl RosettaRequestHandler {
 
         let ConstructionCombineRequest {
             unsigned_transaction,
-            mut signatures,
+            signatures,
             ..
         } = msg;
 
-        let signature = if signatures.len() == 1 {
-            signatures.pop().unwrap()
-        } else {
-            return
-                Err(ApiError::InvalidTransaction(
-                    false,
-                    into_error(format!(
-                        "Currently exactly a single signed transaction can be combined at a time: found {:?}",
-                        &signatures
-                    )),
-                ));
-        };
+        let mut signatures_by_sig_data: HashMap<Vec<u8>, _> = HashMap::new();
 
-        let update = serde_json::from_str(&unsigned_transaction).map_err(|_| {
-            ApiError::InternalError(
-                false,
-                into_error("Could not deserialize unsigned transaction".to_string()),
-            )
+        for sig in &signatures {
+            let sig_data = decode_hex(&sig.signing_payload.hex_bytes)?;
+            signatures_by_sig_data.insert(sig_data, sig);
+        }
+
+        let unsigned_transaction = decode_hex(&unsigned_transaction)?;
+
+        let update = serde_cbor::from_slice(&unsigned_transaction).map_err(|_| {
+            internal_error("Could not deserialize unsigned transaction".to_string())
         })?;
 
-        let content = HttpSubmitContent::Call { update };
+        let read_state = make_read_state_from_update(&update);
 
-        let sender_sig = Some(Blob(from_hex(&signature.hex_bytes)?));
-        assert_eq!(signature.signature_type, SignatureType::ED25519);
-        let sender_pubkey = Some(Blob(ic_canister_client::ed25519_public_key_to_der(
-            from_public_key(&signature.public_key)?,
-        )));
+        let transaction_signature = signatures_by_sig_data
+            .get(&make_sig_data(&update.id()))
+            .ok_or_else(|| {
+                internal_error("Could not find signature for transaction".to_string())
+            })?;
+        let read_state_signature = signatures_by_sig_data
+            .get(&make_sig_data(&MessageId::from(
+                read_state.representation_independent_hash(),
+            )))
+            .ok_or_else(|| internal_error("Could not find signature for read-state".to_string()))?;
+
+        assert_eq!(transaction_signature.signature_type, SignatureType::ED25519);
+        assert_eq!(read_state_signature.signature_type, SignatureType::ED25519);
 
         let envelope = HttpRequestEnvelope::<HttpSubmitContent> {
-            content,
-            sender_pubkey,
-            sender_sig,
+            content: HttpSubmitContent::Call { update },
+            sender_pubkey: Some(Blob(ic_canister_client::ed25519_public_key_to_der(
+                from_public_key(&transaction_signature.public_key)?,
+            ))),
+            sender_sig: Some(Blob(from_hex(&transaction_signature.hex_bytes)?)),
             sender_delegation: None,
         };
 
-        let signed_transaction = serde_json::to_string(&envelope).map_err(|_| {
+        let read_state_envelope = HttpRequestEnvelope::<HttpReadContent> {
+            content: HttpReadContent::ReadState { read_state },
+            sender_pubkey: Some(Blob(ic_canister_client::ed25519_public_key_to_der(
+                from_public_key(&read_state_signature.public_key)?,
+            ))),
+            sender_sig: Some(Blob(from_hex(&read_state_signature.hex_bytes)?)),
+            sender_delegation: None,
+        };
+
+        let envelopes: Envelopes = (envelope, read_state_envelope);
+
+        let signed_transaction = hex::encode(serde_cbor::to_vec(&envelopes).map_err(|_| {
             ApiError::InternalError(
                 false,
                 into_error("Serialization of envelope failed".to_string()),
             )
-        })?;
+        })?);
 
         Ok(ConstructionCombineResponse { signed_transaction })
     }
@@ -275,14 +313,8 @@ impl RosettaRequestHandler {
 
         let pk = msg.public_key;
 
-        let pk_der = PublicKey::new(
-            to_hex(&ic_canister_client::ed25519_public_key_to_der(
-                from_public_key(&pk)?,
-            )),
-            pk.curve_type,
-        );
         // Do we need the curve?
-        let account_identifier = Some(account_from_public_key(pk_der)?);
+        let account_identifier = Some(account_from_public_key(pk)?);
         Ok(ConstructionDeriveResponse {
             account_identifier,
             address: None,
@@ -296,11 +328,11 @@ impl RosettaRequestHandler {
         msg: models::ConstructionHashRequest,
     ) -> Result<ConstructionHashResponse, ApiError> {
         verify_network_id(self.ledger.ledger_canister_id(), &msg.network_identifier)?;
-        let envelope: HttpRequestEnvelope<HttpSubmitContent> =
-            serde_json::from_str(&msg.signed_transaction).map_err(internal_error)?;
+        let envelopes: Envelopes = serde_cbor::from_slice(&decode_hex(&msg.signed_transaction)?)
+            .map_err(internal_error)?;
 
         Ok(ConstructionHashResponse {
-            transaction_identifier: transaction_id(envelope)?,
+            transaction_identifier: transaction_id(envelopes.0)?,
             metadata: Map::new(),
         })
     }
@@ -335,19 +367,20 @@ impl RosettaRequestHandler {
         } = msg;
 
         let update: HttpCanisterUpdate = if signed {
-            let parsed: HttpRequestEnvelope<HttpSubmitContent> =
-                serde_json::from_str(&transaction).map_err(internal_error)?;
-            match parsed.content {
+            let parsed: Envelopes =
+                serde_cbor::from_slice(&decode_hex(&transaction)?).map_err(internal_error)?;
+            match parsed.0.content {
                 HttpSubmitContent::Call { update } => update,
             }
         } else {
-            serde_json::from_str(&transaction).map_err(internal_error)?
+            serde_cbor::from_slice(&decode_hex(&transaction)?).map_err(internal_error)?
         };
 
-        let from =
-            PrincipalId::try_from(update.sender.0).map_err(|e| internal_error(e.to_string()))?;
+        let from = PrincipalId::try_from(update.sender.0)
+            .map_err(|e| internal_error(e.to_string()))?
+            .into();
         let from_ai = if signed {
-            vec![account_identifier(&from)]
+            vec![to_model_account_identifier(&from)]
         } else {
             Vec::new()
         };
@@ -376,7 +409,7 @@ impl RosettaRequestHandler {
     }
 
     /// Generate an Unsigned Transfer and Signing Payloads
-    /// The unsigned_transaction returned from this function is a JSON
+    /// The unsigned_transaction returned from this function is a CBOR
     /// serialized HttpCanisterUpdate The data to be signed is a single hex
     /// encoded MessageId
     // Currently we insist that there is only one transaction encoded in these
@@ -390,10 +423,25 @@ impl RosettaRequestHandler {
         verify_network_id(self.ledger.ledger_canister_id(), &msg.network_identifier)?;
 
         let ops = msg.operations.clone();
-        let transactions = convert::from_operations(ops)?;
+
+        let pks = msg
+            .public_keys
+            .clone()
+            .ok_or_else(|| internal_error("Expected field 'public_keys' to be populated"))?;
+        let transactions = convert::from_operations(ops, false)?;
+        let tl = transactions.len();
+        let pl = pks.len();
+        if tl != pl {
+            return Err(internal_error(format!(
+                "Expected {} public keys in 'public_keys' but found {} keys",
+                tl, pl
+            )));
+        }
+
         let mut payloads: Vec<_> = transactions
             .into_iter()
-            .map(|t| match t {
+            .zip(pks.into_iter())
+            .map(|(t, pk)| match t {
                 Transfer::Send {
                     from,
                     to,
@@ -402,9 +450,17 @@ impl RosettaRequestHandler {
                 } => {
                     let mut rng = rand::thread_rng();
                     let memo: Memo = Memo(rng.gen());
-                    let metadata = msg
+                    let pid: PrincipalId = convert::principal_id_from_public_key(pk.clone())?;
+                    let expected_from: ledger_canister::AccountIdentifier = pid.into();
+                    if expected_from != from {
+                        return Err(internal_error(format!(
+                            "Public key {:?} expected a transaction send by account identifier {} but found account identifier {}",
+                            pk, expected_from, from,
+                        )));
+                    }
+                    let metadata = msg.clone()
                         .metadata
-                        .clone()
+
                         .ok_or_else(|| internal_error("missing metadata"))?;
                     let height = from_metadata(metadata)?;
 
@@ -415,7 +471,6 @@ impl RosettaRequestHandler {
                         fee,
                         from_subaccount: None,
                         to,
-                        to_subaccount: None,
                         block_height: Some(height),
                     });
 
@@ -430,27 +485,42 @@ impl RosettaRequestHandler {
                         // doesn't show it's face until you try to do two
                         // identical transactions at the same time
                         nonce: None,
-                        sender: Blob(from.into_vec()),
+                        sender: Blob(pid.into_vec()),
+                        // sender: Blob(from.into_vec()),
                         ingress_expiry: expiry.as_nanos_since_unix_epoch(),
                     };
 
-                    let unsigned_transaction: String = serde_json::to_string(&update).unwrap();
+                    let unsigned_transaction: String =
+                        hex::encode(serde_cbor::to_vec(&update).unwrap());
 
                     let message_id = update.id();
 
-                    // Lifted from canister_client::agent::sign_message_id
-                    let mut sig_data = vec![];
-                    sig_data.extend_from_slice(DOMAIN_IC_REQUEST);
-                    sig_data.extend_from_slice(message_id.as_bytes());
+                    let account_identifier = to_model_account_identifier(&from);
 
-                    let payload = SigningPayload {
+                    let transaction_payload = SigningPayload {
                         address: None,
-                        account_identifier: Some(account_identifier(&from)),
-                        hex_bytes: hex::encode(sig_data),
+                        account_identifier: Some(account_identifier.clone()),
+                        hex_bytes: hex::encode(make_sig_data(&message_id)),
                         signature_type: Some(SignatureType::ED25519),
                     };
 
-                    Ok((unsigned_transaction, payload))
+                    let read_state = make_read_state_from_update(&update);
+
+                    let read_state_message_id =
+                        MessageId::from(read_state.representation_independent_hash());
+
+                    let read_state_payload = SigningPayload {
+                        address: None,
+                        account_identifier: Some(account_identifier),
+                        hex_bytes: hex::encode(make_sig_data(&read_state_message_id)),
+                        signature_type: Some(SignatureType::ED25519),
+                    };
+
+                    Ok((
+                        unsigned_transaction,
+                        transaction_payload,
+                        read_state_payload,
+                    ))
                 }
                 _ => panic!("This should be impossible"),
             })
@@ -458,10 +528,11 @@ impl RosettaRequestHandler {
 
         // TODO remove this restriction
         if payloads.len() == 1 {
-            let (unsigned_transaction, payload) = payloads.pop().unwrap();
+            let (unsigned_transaction, transaction_payload, read_state_payload) =
+                payloads.pop().unwrap();
 
             Ok(models::ConstructionPayloadsResponse {
-                payloads: vec![payload],
+                payloads: vec![transaction_payload, read_state_payload],
                 unsigned_transaction,
             })
         } else {
@@ -481,7 +552,20 @@ impl RosettaRequestHandler {
         msg: models::ConstructionPreprocessRequest,
     ) -> Result<ConstructionPreprocessResponse, ApiError> {
         verify_network_id(self.ledger.ledger_canister_id(), &msg.network_identifier)?;
-        Ok(ConstructionPreprocessResponse::new())
+        let transfers = convert::from_operations(msg.operations, true)?;
+        let required_public_keys: Result<Vec<models::AccountIdentifier>, ApiError> = transfers
+            .into_iter()
+            .map(|transfer| match transfer {
+                Transfer::Send { from, .. } => Ok(to_model_account_identifier(&from)),
+                _ => Err(internal_error(
+                    "Mint/Burn operations are not supported through rosetta",
+                )),
+            })
+            .collect();
+        Ok(ConstructionPreprocessResponse {
+            required_public_keys: Some(required_public_keys?),
+            options: None,
+        })
     }
 
     /// Submit a Signed Transfer
@@ -494,18 +578,19 @@ impl RosettaRequestHandler {
     ) -> Result<ConstructionSubmitResponse, ApiError> {
         verify_network_id(self.ledger.ledger_canister_id(), &msg.network_identifier)?;
 
-        let request: HttpRequestEnvelope<HttpSubmitContent> =
-            serde_json::from_str(&msg.signed_transaction).map_err(|e| {
+        let (request, read_state): Envelopes =
+            serde_cbor::from_slice(&decode_hex(&msg.signed_transaction)?).map_err(|e| {
                 internal_error(format!(
-                    "Cannot deserialize the submit request in JSON format because of: {}",
+                    "Cannot deserialize the submit request in CBOR format because of: {}",
                     e
                 ))
             })?;
 
-        let transaction_identifier = self.ledger.submit(request).await?;
+        let (transaction_identifier, block_index) = self.ledger.submit(request, read_state).await?;
 
         Ok(ConstructionSubmitResponse {
             transaction_identifier,
+            block_index,
             metadata: Map::new(),
         })
     }
@@ -516,7 +601,7 @@ impl RosettaRequestHandler {
         &self,
         transaction_identifier: &TransactionIdentifier,
         mut prev_chain_length: BlockHeight,
-        deadline: std::time::SystemTime,
+        deadline: std::time::Instant,
     ) -> Result<Option<BlockHeight>, ApiError> {
         debug!(
             "Waiting for transaction {:?} to appear...",
@@ -529,14 +614,18 @@ impl RosettaRequestHandler {
             for idx in prev_chain_length..cur_chain_length {
                 debug!("Looking at block {}", idx);
                 let blocks = self.ledger.read_blocks().await;
-                let block = get_block(
+                let hb = get_block(
                     &blocks,
                     Some(PartialBlockIdentifier {
                         index: Some(idx as i64),
                         hash: None,
                     }),
                 )?;
-                let hash = block.block.transaction().hash();
+                let block = hb
+                    .block
+                    .decode()
+                    .map_err(|err| internal_error(format!("Cannot decode block: {}", err)))?;
+                let hash = block.transaction.hash();
                 if convert::transaction_identifier(&hash) == *transaction_identifier {
                     return Ok(Some(idx));
                 }
@@ -544,10 +633,10 @@ impl RosettaRequestHandler {
 
             prev_chain_length = cur_chain_length;
 
-            if SystemTime::now() > deadline {
+            if Instant::now() > deadline {
                 break;
             }
-            sleep(Duration::from_secs(1)).await;
+            tokio::time::delay_for(Duration::from_secs(1)).await;
         }
 
         warn!(
@@ -641,7 +730,7 @@ impl RosettaRequestHandler {
             .last()?
             .ok_or(ApiError::BlockchainEmpty(true, None))?;
         let tip_id = convert::block_id(&tip)?;
-        let tip_timestamp = convert::timestamp(tip.block.timestamp().into())?;
+        let tip_timestamp = convert::timestamp(tip.block.decode().unwrap().timestamp.into())?;
         // Block at index 0 has to be there if tip was present
         let genesis_block = blocks.get_at(0)?;
         let genesis_block_id = convert::block_id(&genesis_block)?;
@@ -664,4 +753,12 @@ impl RosettaRequestHandler {
             peers,
         ))
     }
+}
+
+fn make_sig_data(message_id: &MessageId) -> Vec<u8> {
+    // Lifted from canister_client::agent::sign_message_id
+    let mut sig_data = vec![];
+    sig_data.extend_from_slice(DOMAIN_IC_REQUEST);
+    sig_data.extend_from_slice(message_id.as_bytes());
+    sig_data
 }

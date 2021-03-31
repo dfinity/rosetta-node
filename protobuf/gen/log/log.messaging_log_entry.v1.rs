@@ -1,14 +1,14 @@
-#[derive(Clone, PartialEq, ::prost::Message)]
 #[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MessagingLogEntry {
     #[prost(message, optional, tag="1")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub round: ::std::option::Option<u64>,
+    pub round: ::core::option::Option<u64>,
     #[prost(message, optional, tag="2")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub core: ::std::option::Option<u64>,
+    pub core: ::core::option::Option<u64>,
     #[prost(message, optional, tag="3")]
-    pub canister_id: ::std::option::Option<::std::string::String>,
+    pub canister_id: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(message, optional, tag="4")]
-    pub message_id: ::std::option::Option<::std::string::String>,
+    pub message_id: ::core::option::Option<::prost::alloc::string::String>,
 }

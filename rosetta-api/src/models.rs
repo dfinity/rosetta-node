@@ -1,3 +1,4 @@
+use ledger_canister::BlockHeight;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::json;
 
@@ -10,6 +11,12 @@ pub type Object = serde_json::map::Map<String, serde_json::Value>;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConstructionSubmitResponse {
     pub transaction_identifier: TransactionIdentifier,
+
+    /// The index of the block just created, if known (i.e. if the ledger
+    /// canister responds within the deadline).
+    // FIXME: put this in metadata?
+    pub block_index: Option<BlockHeight>,
+
     pub metadata: Object,
 }
 
@@ -1025,6 +1032,7 @@ impl Error {
                 (730, "An invalid transaction has been detected", r, d)
             }
             ApiError::ICError(r, d) => (740, "Internet Computer error", r, d),
+            ApiError::TransactionRejected(r, d) => (750, "Transaction rejected", r, d),
         };
         Self {
             code,
@@ -1060,6 +1068,7 @@ pub enum ApiError {
     InvalidTransaction(bool, Option<Object>),
     NotAvailableOffline(bool, Option<Object>),
     ICError(bool, Option<Object>),
+    TransactionRejected(bool, Option<Object>),
 }
 
 impl serde::Serialize for ApiError {

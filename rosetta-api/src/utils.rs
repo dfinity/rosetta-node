@@ -1,5 +1,6 @@
-use ic_rosetta_api::{convert, models};
 use ic_types::PrincipalId;
+use ledger_canister::AccountIdentifier;
+use std::convert::TryFrom;
 use std::str::FromStr;
 use structopt::StructOpt;
 
@@ -8,22 +9,16 @@ use structopt::StructOpt;
 fn main() {
     let opt = Opt::from_args();
     for s in opt.convert.into_iter() {
-        match PrincipalId::from_str(&s) {
-            Ok(pi) => {
-                let add = convert::account_identifier(&pi);
-                println!("{} → {}", pi, add.address);
-            }
-            Err(_) => {
-                if let Ok(pi) = convert::principal_id(&models::AccountIdentifier::new(s.clone())) {
-                    println!("{} → {}", s, pi);
-                }
-            }
+        let bytes: Vec<u8> = hex::decode(s.clone()).unwrap();
+        if let Ok(pid) = PrincipalId::from_str(&s).or_else(|_| PrincipalId::try_from(&bytes)) {
+            let aid: AccountIdentifier = pid.into();
+            println!("{} → {}", s, aid)
         }
     }
 }
 
 #[derive(Debug, StructOpt)]
 struct Opt {
-    #[structopt(long = "convert_address")]
+    #[structopt(short = "c", long = "convert_address")]
     convert: Vec<String>,
 }

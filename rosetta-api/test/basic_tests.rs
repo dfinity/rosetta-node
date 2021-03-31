@@ -46,7 +46,18 @@ async fn smoke_test() {
         res,
         Ok(NetworkStatusResponse::new(
             block_id(&scribe.blockchain.back().unwrap()).unwrap(),
-            timestamp(scribe.blockchain.back().unwrap().block.timestamp().into()).unwrap(),
+            timestamp(
+                scribe
+                    .blockchain
+                    .back()
+                    .unwrap()
+                    .block
+                    .decode()
+                    .unwrap()
+                    .timestamp()
+                    .into()
+            )
+            .unwrap(),
             block_id(&scribe.blockchain.front().unwrap()).unwrap(),
             Some(block_id(&scribe.blockchain.front().unwrap()).unwrap()),
             SyncStatus::new(scribe.blockchain.back().unwrap().index as i64, None),
@@ -108,7 +119,7 @@ async fn smoke_test() {
 
     let msg = AccountBalanceRequest::new(
         req_handler.network_id(),
-        ic_rosetta_api::convert::account_identifier(&to_uid(0)),
+        ic_rosetta_api::convert::to_model_account_identifier(&to_uid(0)),
     );
     let res = req_handler.account_balance(msg).await;
     assert_eq!(
@@ -123,6 +134,7 @@ async fn smoke_test() {
 #[actix_rt::test]
 async fn blocks_test() {
     init_test_logger();
+    rng_set_seed(5);
 
     let ledger = Arc::new(TestLedger::new());
     let req_handler = RosettaRequestHandler::new(ledger.clone());

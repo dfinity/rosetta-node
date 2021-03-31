@@ -4,8 +4,7 @@
 //! including the secret key store and random number generator, and the
 //! stateless crypto lib.
 
-// TODO: Make sure these are minimal and consistent across the files.
-use crate::api::NiDkgCspClient;
+use crate::api::{NiDkgCspClient, NodePublicKeyData};
 use crate::keygen::forward_secure_key_id;
 use crate::secret_key_store::{SecretKeyStore, SecretKeyStoreError};
 use crate::types::conversions::key_id_from_csp_pub_coeffs;
@@ -27,8 +26,7 @@ use ic_types::crypto::threshold_sig::ni_dkg::NiDkgId;
 use ic_types::crypto::{AlgorithmId, KeyId};
 use ic_types::{NodeIndex, NumberOfNodes, Randomness};
 use rand::{CryptoRng, Rng};
-use std::collections::BTreeMap;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(test)]
 mod tests;
@@ -100,14 +98,13 @@ impl<R: Rng + CryptoRng, S: SecretKeyStore> NiDkgCspClient for Csp<R, S> {
     fn update_forward_secure_epoch(
         &self,
         algorithm_id: AlgorithmId,
-        public_key: CspFsEncryptionPublicKey,
         epoch: Epoch,
     ) -> Result<(), ni_dkg_errors::CspDkgUpdateFsEpochError> {
         debug!(self.logger; crypto.method_name => "update_forward_secure_epoch", crypto.dkg_epoch => epoch.get());
 
         // Get state
         let seed = Randomness::from(self.rng_write_lock().gen::<[u8; 32]>());
-        let key_id = forward_secure_key_id(&public_key);
+        let key_id = self.dkg_dealing_encryption_key_id();
         let key_set = self.sks_read_lock().get(&key_id).ok_or_else(|| {
             ni_dkg_errors::CspDkgUpdateFsEpochError::FsKeyNotInSecretKeyStoreError(
                 ni_dkg_errors::KeyNotFoundError {
@@ -349,7 +346,6 @@ impl<R: Rng + CryptoRng, S: SecretKeyStore> NiDkgCspClient for Csp<R, S> {
         _dkg_id: NiDkgId,
         epoch: Epoch,
         csp_transcript: CspNiDkgTranscript,
-        public_key: CspFsEncryptionPublicKey,
         receiver_index: NodeIndex,
     ) -> Result<(), ni_dkg_errors::CspDkgLoadPrivateKeyError> {
         debug!(self.logger; crypto.method_name => "load_threshold_signing_key", crypto.dkg_epoch => epoch.get());
@@ -376,9 +372,9 @@ impl<R: Rng + CryptoRng, S: SecretKeyStore> NiDkgCspClient for Csp<R, S> {
 
                 // Compute the key
                 let fs_key_encryption_key = {
-                    let key_id = forward_secure_key_id(&public_key);
+                    let key_id = self.dkg_dealing_encryption_key_id();
                     let key_set = self.sks_read_lock().get(&key_id).ok_or_else(||
-                      ni_dkg_errors::CspDkgLoadPrivateKeyError::KeyNotFoundError( // TODO: This name is inconsistent with the other error enums, where this is now called FsKeyNotInSecretKeyStoreError or some such paragraph-of-a-name.
+                      ni_dkg_errors::CspDkgLoadPrivateKeyError::KeyNotFoundError( // TODO (CRP-820): This name is inconsistent with the other error enums, where this is now called FsKeyNotInSecretKeyStoreError or some such paragraph-of-a-name.
                         ni_dkg_errors::KeyNotFoundError {
                           internal_error: "Cannot decrypt shares if the forward secure key encryption key is missing".to_string(),
                           key_id,

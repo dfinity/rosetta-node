@@ -10,8 +10,8 @@ RUN \
   rustup target add wasm32-unknown-unknown && \
   (curl -H "Authorization: token ${GITHUB_TOKEN}" -L https://api.github.com/repos/dfinity-lab/dfinity/tarball/${RELEASE} | tar xz --strip-components=1) && \
   cd rs/rosetta-api && \
-  cargo build --release --package ic-rosetta-api && \
-  cargo build --target wasm32-unknown-unknown --release --package ledger-canister
+  cargo build --release --package ic-rosetta-api --bin ic-rosetta-api && \
+  cargo build --target wasm32-unknown-unknown --release --package ledger-canister --bin ledger-canister
 
 FROM debian:sid-slim as builder-01
 
@@ -31,7 +31,7 @@ FROM debian:buster-slim
 
 ARG RELEASE
 
-ARG SDK_VERSION=0.6.24
+ARG SDK_VER=0.6.26
 
 LABEL RELEASE=${RELEASE}
 
@@ -57,7 +57,7 @@ COPY \
   /root/
 
 ADD \
-  https://sdk.dfinity.org/downloads/dfx/${SDK_VERSION}/x86_64-linux/dfx-${SDK_VERSION}.tar.gz \
+  https://sdk.dfinity.org/downloads/dfx/${SDK_VER}/x86_64-linux/dfx-${SDK_VER}.tar.gz \
   /var/tmp/dfx.tar.gz
 
 RUN \

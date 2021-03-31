@@ -2,8 +2,8 @@ use super::{
     CspDealing, CspDkgTranscript, CspPop, CspPublicCoefficients, CspPublicKey, CspSecretKey,
     CspSignature, MultiBls12_381_Signature, SigConverter, ThresBls12_381_Signature,
 };
-use ic_crypto_internal_basic_sig_ecdsa_secp256k1::types as secp256k1_types;
-use ic_crypto_internal_basic_sig_ecdsa_secp256r1::types as ecdsa_types;
+use ic_crypto_internal_basic_sig_ecdsa_secp256k1::types as ecdsa_secp256k1_types;
+use ic_crypto_internal_basic_sig_ecdsa_secp256r1::types as ecdsa_secp256r1_types;
 use ic_crypto_internal_basic_sig_ed25519::types as ed25519_types;
 use ic_crypto_internal_multi_sig_bls12381::types as multi_types;
 use ic_crypto_internal_threshold_sig_bls12381::api::dkg_errors;
@@ -26,8 +26,8 @@ use openssl::sha::Sha256;
 #[cfg(test)]
 mod tests;
 
-// TODO: Tests - take the existing ones from classic DKG.
-// TODO: Remove classic DKG conversion.
+// TODO (CRP-821): Tests - take the existing ones from classic DKG.
+// TODO (CRP-821): Remove classic DKG conversion.
 pub fn key_id_from_csp_pub_coeffs(csp_public_coefficients: &CspPublicCoefficients) -> KeyId {
     let mut hash = Sha256::new();
     hash.update(
@@ -44,7 +44,7 @@ impl From<&CspPublicKey> for AlgorithmId {
     fn from(public_key: &CspPublicKey) -> Self {
         match public_key {
             CspPublicKey::EcdsaP256(_) => AlgorithmId::EcdsaP256,
-            CspPublicKey::Secp256k1(_) => AlgorithmId::EcdsaSecp256k1,
+            CspPublicKey::EcdsaSecp256k1(_) => AlgorithmId::EcdsaSecp256k1,
             CspPublicKey::Ed25519(_) => AlgorithmId::Ed25519,
             CspPublicKey::MultiBls12_381(_) => AlgorithmId::MultiBls12_381,
         }
@@ -85,27 +85,20 @@ impl TryFrom<CspPublicKey> for UserPublicKey {
 
 impl TryFrom<PublicKeyProto> for CspPublicKey {
     type Error = CryptoError;
-    // TODO(CRP-540): move the key bytes from pk_proto.key_value to the
+    // TODO (CRP-540): move the key bytes from pk_proto.key_value to the
     //   resulting csp_pk (instead of copying/cloning them).
     fn try_from(pk_proto: PublicKeyProto) -> Result<Self, Self::Error> {
         match AlgorithmId::from(pk_proto.algorithm) {
             AlgorithmId::Ed25519 => {
-                if pk_proto.key_value.len() != ed25519_types::PublicKeyBytes::SIZE {
-                    Err(CryptoError::MalformedPublicKey {
-                        algorithm: AlgorithmId::Ed25519,
-                        key_bytes: Some(pk_proto.key_value),
-                        internal_error: format!(
-                            "Key must have {} bytes.",
-                            ed25519_types::PublicKeyBytes::SIZE
-                        ),
-                    })
-                } else {
-                    let mut pk_array = [0u8; ed25519_types::PublicKeyBytes::SIZE];
-                    pk_array[..].copy_from_slice(&pk_proto.key_value);
-                    Ok(CspPublicKey::Ed25519(ed25519_types::PublicKeyBytes(
-                        pk_array,
-                    )))
-                }
+                let public_key_bytes =
+                    ed25519_types::PublicKeyBytes::try_from(&pk_proto).map_err(|e| {
+                        CryptoError::MalformedPublicKey {
+                            algorithm: AlgorithmId::Ed25519,
+                            key_bytes: Some(e.key_bytes),
+                            internal_error: e.internal_error,
+                        }
+                    })?;
+                Ok(CspPublicKey::Ed25519(public_key_bytes))
             }
             AlgorithmId::MultiBls12_381 => {
                 let public_key_bytes =
@@ -173,12 +166,12 @@ impl From<PopBytesFromProtoError> for CspPopFromPublicKeyProtoError {
 // we have consolidated the key/signatures types which will likely involve
 // removing the CspPublicKey type. Because this impl is temporary, there are
 // no associated tests.
-// TODO: Remove as part of DFN-1186
+// TODO (DFN-1186): Remove as part of DFN-1186
 impl AsRef<[u8]> for CspPublicKey {
     fn as_ref(&self) -> &[u8] {
         match self {
             CspPublicKey::EcdsaP256(bytes) => &bytes.0,
-            CspPublicKey::Secp256k1(bytes) => &bytes.0,
+            CspPublicKey::EcdsaSecp256k1(bytes) => &bytes.0,
             CspPublicKey::Ed25519(bytes) => &bytes.0,
             CspPublicKey::MultiBls12_381(public_key_bytes) => &public_key_bytes.0,
         }
@@ -189,7 +182,7 @@ impl AsRef<[u8]> for CspPublicKey {
 // we have consolidated the key/signatures types which will likely involve
 // removing the CspPop type. Because this impl is temporary, there are
 // no associated tests.
-// TODO: Remove as part of DFN-1186
+// TODO (DFN-1186): Remove as part of DFN-1186
 impl AsRef<[u8]> for CspPop {
     fn as_ref(&self) -> &[u8] {
         match self {
@@ -203,12 +196,12 @@ impl AsRef<[u8]> for CspPop {
 // we have consolidated the key/signatures types which will likely involve
 // removing the CspSignature type. Because this impl is temporary, there are
 // no associated tests.
-// TODO: Remove as part of DFN-1186
+// TODO (DFN-1186): Remove as part of DFN-1186
 impl AsRef<[u8]> for CspSignature {
     fn as_ref(&self) -> &[u8] {
         match self {
             CspSignature::EcdsaP256(bytes) => &bytes.0,
-            CspSignature::Secp256k1(bytes) => &bytes.0,
+            CspSignature::EcdsaSecp256k1(bytes) => &bytes.0,
             CspSignature::Ed25519(bytes) => &bytes.0,
             CspSignature::MultiBls12_381(sig) => match sig {
                 MultiBls12_381_Signature::Individual(sig_bytes) => &sig_bytes.0,
@@ -245,11 +238,11 @@ impl TryFrom<&UserPublicKey> for CspPublicKey {
                 bytes.copy_from_slice(&user_public_key.key[0..PUBKEY_LEN]);
                 Ok(CspPublicKey::Ed25519(ed25519_types::PublicKeyBytes(bytes)))
             }
-            AlgorithmId::EcdsaP256 => Ok(CspPublicKey::EcdsaP256(ecdsa_types::PublicKeyBytes(
-                user_public_key.key.to_owned(),
-            ))),
-            AlgorithmId::EcdsaSecp256k1 => Ok(CspPublicKey::Secp256k1(
-                secp256k1_types::PublicKeyBytes(user_public_key.key.to_owned()),
+            AlgorithmId::EcdsaP256 => Ok(CspPublicKey::EcdsaP256(
+                ecdsa_secp256r1_types::PublicKeyBytes(user_public_key.key.to_owned()),
+            )),
+            AlgorithmId::EcdsaSecp256k1 => Ok(CspPublicKey::EcdsaSecp256k1(
+                ecdsa_secp256k1_types::PublicKeyBytes(user_public_key.key.to_owned()),
             )),
             algorithm => Err(CryptoError::AlgorithmNotSupported {
                 algorithm,
@@ -265,7 +258,7 @@ impl TryFrom<CspSecretKey> for threshold_types::SecretKeyBytes {
         if let CspSecretKey::ThresBls12_381(key) = value {
             Ok(key)
         } else {
-            // TODO: Add the error type to the error message.
+            // TODO (CRP-822): Add the error type to the error message.
             Err(CspSecretKeyConversionError::WrongSecretKeyType {})
         }
     }

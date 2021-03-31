@@ -67,6 +67,7 @@ pub mod malicious_behaviour;
 pub mod malicious_flags;
 pub mod messages;
 pub mod methods;
+pub mod nominal_cycles;
 pub mod p2p;
 pub mod registry;
 pub mod replica_config;
@@ -327,6 +328,10 @@ impl ComputeAllocation {
     pub fn as_percent(self) -> u64 {
         self.0
     }
+
+    pub const fn zero() -> Self {
+        ComputeAllocation(0)
+    }
 }
 
 // According to the Internet Computer's public spec the default
@@ -521,7 +526,7 @@ pub struct InstallCodeContext {
     pub wasm_module: Vec<u8>,
     pub arg: Vec<u8>,
     pub compute_allocation: ComputeAllocation,
-    pub memory_allocation: MemoryAllocation,
+    pub memory_allocation: Option<MemoryAllocation>,
     pub query_allocation: QueryAllocation,
 }
 
@@ -606,8 +611,8 @@ impl TryFrom<(PrincipalId, InstallCodeArgs)> for InstallCodeContext {
             None => ComputeAllocation::default(),
         };
         let memory_allocation = match args.memory_allocation {
-            Some(ma) => MemoryAllocation::try_from(ma.0.to_u64().unwrap())?,
-            None => MemoryAllocation::default(),
+            Some(ma) => Some(MemoryAllocation::try_from(ma.0.to_u64().unwrap())?),
+            None => None,
         };
         let query_allocation = match args.query_allocation {
             Some(qa) => QueryAllocation::try_from(qa.0.to_u64().unwrap())?,

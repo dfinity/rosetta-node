@@ -3,9 +3,17 @@ package state.queues.v1;
 import "types/v1/types.proto";
 import "state/ingress/v1/ingress.proto";
 
+message Cycles {
+    reserved 1;
+    reserved "raw"; // Originally was defined as a uint64
+    bytes raw_cycles = 2;
+}
+
 message Funds {
-    uint64 cycles = 1;
+    reserved 1;
+    reserved "cycles";
     uint64 icp = 2;
+    Cycles cycles_struct = 3;
 }
 
 message Stream {

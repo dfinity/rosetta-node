@@ -1,12 +1,13 @@
-use dfn_candid::{candid, candid_one, CandidOne};
+use dfn_candid::{candid_one, CandidOne};
 use dfn_core::{
-    api::caller,
-    api::{self, call_with_callbacks},
+    api::{self, arg_data, call_with_callbacks},
+    api::{caller, data_certificate, set_certified_data},
     over, over_init, printer, setup, stable, BytesS,
 };
-use ic_types::{CanisterId, PrincipalId};
+use dfn_protobuf::protobuf;
+use ic_types::CanisterId;
 use ledger_canister::*;
-use on_wire::IntoWire;
+use on_wire::{FromWire, IntoWire, NewType};
 
 use std::collections::{HashMap, VecDeque};
 
@@ -32,8 +33,8 @@ where
 /// * `max_message_size_bytes` - The maximum message size that this subnet
 ///   supports. This is used for egressing block to the archive canister.
 fn init(
-    minting_account: PrincipalId,
-    initial_values: HashMap<PrincipalId, ICPTs>,
+    minting_account: AccountIdentifier,
+    initial_values: HashMap<AccountIdentifier, ICPTs>,
     archive_canister: Option<CanisterId>,
     max_message_size_bytes: Option<usize>,
 ) {
@@ -59,6 +60,16 @@ fn init(
     }
 }
 
+fn add_payment(
+    memo: Memo,
+    transfer: Transfer,
+    block_height: Option<BlockHeight>,
+) -> (BlockHeight, HashOf<EncodedBlock>) {
+    let (height, hash) = ledger_canister::add_payment(memo, transfer, block_height);
+    set_certified_data(&hash.into_bytes());
+    (height, hash)
+}
+
 /// This is the only operation that changes the state of the canister blocks and
 /// balances after init. This creates a payment from the caller's account. It
 /// returns the index of the resulting transaction
@@ -80,14 +91,11 @@ fn send(
     memo: Memo,
     amount: ICPTs,
     fee: ICPTs,
-    from_subaccount: Option<[u8; 32]>,
-    to: PrincipalId,
-    to_subaccount: Option<[u8; 32]>,
+    from_subaccount: Option<Subaccount>,
+    to: AccountIdentifier,
     block_height: Option<BlockHeight>,
 ) -> BlockHeight {
-    let from =
-        account_identifier(caller(), from_subaccount).expect("Constructing 'from' address failed");
-    let to = account_identifier(to, to_subaccount).expect("Constructing 'to' address failed");
+    let from = AccountIdentifier::new(caller(), from_subaccount);
 
     let minting_acc = STATE
         .read()
@@ -119,7 +127,8 @@ fn send(
             fee,
         }
     };
-    add_payment(memo, transfer, block_height)
+    let (height, _) = add_payment(memo, transfer, block_height);
+    height
 }
 
 /// You can notify a canister that you have made a payment to it. The
@@ -137,25 +146,25 @@ fn send(
 pub fn notify(
     block_height: BlockHeight,
     max_fee: ICPTs,
-    from_subaccount: Option<[u8; 32]>,
+    from_subaccount: Option<Subaccount>,
     to_canister: CanisterId,
-    to_subaccount: Option<[u8; 32]>,
+    to_subaccount: Option<Subaccount>,
 ) {
     let caller_principal = caller();
 
-    let expected_from = account_identifier(caller_principal, from_subaccount)
-        .expect("Failed to construct 'from' account identifier");
+    let expected_from = AccountIdentifier::new(caller_principal, from_subaccount);
 
-    let expected_to = account_identifier(to_canister.get(), to_subaccount)
-        .expect("Failed to construct 'to' account identifier");
+    let expected_to = AccountIdentifier::new(to_canister.get(), to_subaccount);
 
-    let block = STATE
+    let raw_block = STATE
         .read()
         .unwrap()
         .blocks
         .get(block_height)
         .unwrap_or_else(|| panic!("Failed to find a block at height {}", block_height))
         .clone();
+
+    let block = raw_block.decode().unwrap();
 
     let (from, to, amount) = match block.transaction().transfer {
         Transfer::Send {
@@ -183,8 +192,13 @@ pub fn notify(
     let bytes = candid::encode_one(transaction_notification_args)
         .expect("transaction notification serialization failed");
 
-    // reply with () on success
-    let on_reply = || api::reply(&CandidOne(()).into_bytes().unwrap());
+    // propagate the response from 'to_canister' on success
+    let on_reply = || {
+        let reply: TransactionNotificationResult =
+            CandidOne::from_bytes(arg_data()).unwrap().into_inner();
+        reply.check_size().unwrap();
+        api::reply(&CandidOne(reply).into_bytes().unwrap());
+    };
     let on_reject = move || {
         // discards error which is better than a panic in a callback
         let _ = change_notification_state(block_height, false);
@@ -203,7 +217,7 @@ pub fn notify(
         amount: ICPTs::ZERO,
         fee: max_fee,
     };
-    let _ = add_payment(Memo(block_height), transfer, None);
+    add_payment(Memo(block_height), transfer, None);
 
     // We use this less easy method of
     let err_code = call_with_callbacks(
@@ -219,26 +233,25 @@ pub fn notify(
 }
 
 /// This gives you the index of the last block added to the chain
-// Certification isn't implemented yet
-fn tip_of_chain() -> (Certification, BlockHeight) {
-    let chain_length = &STATE.read().unwrap().blocks.last_block_index();
-    (0, *chain_length)
+/// together with certification
+fn tip_of_chain() -> TipOfChainRes {
+    let last_block_idx = &STATE.read().unwrap().blocks.last_block_index();
+    let certification = data_certificate();
+    TipOfChainRes {
+        certification,
+        tip_index: *last_block_idx,
+    }
 }
 
-fn block(block_height: BlockHeight) -> Option<RawBlock> {
-    STATE
-        .read()
-        .unwrap()
-        .blocks
-        .get(block_height)
-        .map(|block| block.encode())
+// This is going away and being replaced by getblocks
+fn block(block_height: BlockHeight) -> Option<EncodedBlock> {
+    STATE.read().unwrap().blocks.get(block_height).cloned()
 }
 
 /// Get an account balance.
 /// If the account does not exist it will return 0 ICPTs
-fn account_balance(account: PrincipalId, sub_account: Option<[u8; 32]>) -> ICPTs {
-    let id = account_identifier(account, sub_account).expect("Account creation failed");
-    STATE.read().unwrap().balances.account_balance(&id)
+fn account_balance(account: AccountIdentifier) -> ICPTs {
+    STATE.read().unwrap().balances.account_balance(&account)
 }
 
 /// The total number of ICPTs not inside the minting canister
@@ -293,10 +306,8 @@ async fn archive_blocks(age: std::time::Duration) {
         None => print("[ledger] archive canister not set. skipping archive_blocks()"),
         Some(archive_canister) => {
             let num_blocks_before = STATE.read().unwrap().blocks.inner.len();
-            let mut blocks_to_archive: VecDeque<RawBlock> = split_off_older_than(age)
-                .iter()
-                .map(|block| block.encode())
-                .collect();
+            let mut blocks_to_archive: VecDeque<EncodedBlock> =
+                split_off_older_than(age).iter().cloned().collect();
             let num_blocks_after = STATE.read().unwrap().blocks.inner.len();
             print(format!(
                 "[ledger] archive_blocks(): blocks before split: {}, blocks to archive: {}, blocks after split: {}",
@@ -318,60 +329,46 @@ async fn archive_blocks(age: std::time::Duration) {
                     archive_canister.clone()
                 ));
 
-                let () = dfn_core::api::call(
+                dfn_core::api::call(
                     archive_canister,
                     "archive_blocks",
                     dfn_candid::candid_one,
                     chunk,
                 )
                 .await
-                .unwrap();
+                .unwrap()
             }
         }
     }
 }
 
-fn get_blocks(offset: usize, length: usize) -> Vec<RawBlock> {
+fn get_blocks(offset: usize, length: usize) -> GetBlocksRes {
     let blocks = &STATE.read().unwrap().blocks.inner;
     let start = std::cmp::min(offset, blocks.len());
     let end = std::cmp::min(start + length, blocks.len());
-    let blocks: Vec<RawBlock> = blocks[start..end]
-        .iter()
-        .map(|block| block.encode())
-        .collect();
+    let blocks = blocks[start..end].to_vec();
     print(format!(
         "[ledger] get_blocks(offset={}, length={}): returning {} blocks",
         offset,
         length,
         blocks.len()
     ));
-    blocks
+    GetBlocksRes(blocks)
 }
 
 /// Canister endpoints
 #[export_name = "canister_update send"]
 fn send_() {
     over(
-        candid_one,
+        protobuf,
         |SendArgs {
              memo,
              amount,
              fee,
              from_subaccount,
              to,
-             to_subaccount,
              block_height,
-         }| {
-            send(
-                memo,
-                amount,
-                fee,
-                from_subaccount,
-                to,
-                to_subaccount,
-                block_height,
-            )
-        },
+         }| { send(memo, amount, fee, from_subaccount, to, block_height) },
     );
 }
 
@@ -400,28 +397,24 @@ fn notify_() {
 
 #[export_name = "canister_query block"]
 fn block_() {
-    over(candid_one, block);
+    over(protobuf, |BlockArg(height)| BlockRes(block(height)));
 }
 
 #[export_name = "canister_query tip_of_chain"]
 fn tip_of_chain_() {
-    over(candid, |()| tip_of_chain());
+    over(protobuf, |protobuf::TipOfChainRequest {}| tip_of_chain());
 }
 
 #[export_name = "canister_query account_balance"]
 fn account_balance_() {
-    over(
-        candid_one,
-        |AccountBalanceArgs {
-             account,
-             sub_account,
-         }| account_balance(account, sub_account),
-    )
+    over(protobuf, |AccountBalanceArgs { account }| {
+        account_balance(account)
+    })
 }
 
 #[export_name = "canister_query total_supply"]
 fn total_supply_() {
-    over(candid_one, |_: TotalSupplyArgs| total_supply())
+    over(protobuf, |_: TotalSupplyArgs| total_supply())
 }
 
 #[export_name = "canister_update archive_blocks"]
@@ -431,5 +424,7 @@ fn archive_blocks_() {
 
 #[export_name = "canister_query get_blocks"]
 fn get_blocks_() {
-    over(candid, |(offset, len)| get_blocks(offset, len));
+    over(protobuf, |GetBlocksArgs { start, length }| {
+        get_blocks(start, length)
+    });
 }
