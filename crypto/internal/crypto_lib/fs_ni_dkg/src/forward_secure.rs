@@ -922,14 +922,6 @@ pub fn baby_giant(tgt: &FP12, base: &FP12, lo: isize, range: isize) -> Option<is
 #[derive(Debug)]
 pub enum DecErr {
     ExpiredKey,
-    /// One or more dlogs failed to compute.
-    ///
-    /// * good: Vec<(dealer index, discrete log)>
-    /// * bad: Vec<(dealer index, value for which dlog has not been found)>
-    DLogCheat {
-        good: Vec<(usize, isize)>,
-        bad: Vec<(usize, FP12)>,
-    },
 }
 
 /// Decrypt the i-th group of chunks.
@@ -988,43 +980,45 @@ pub fn dec_chunks(
         })
         .collect();
 
-    // Find discrete log of powers with baby-step-giant-step in [0..CHUNK_SIZE].
-    // If at least one log lies outside this range, then return a DLogCheat
-    // error identifying the good and bad logs by index.
+    // Find discrete log of powers with baby-step-giant-step.
     let base = pair::fexp(&pair::ate(&g2, &g1));
-    let mut bad = Vec::new();
-    let mut good = Vec::new();
-    for (idx, item) in powers.iter().enumerate() {
+    let mut dlogs = Vec::new();
+    let spec_n = crsz.cc.len();
+    let spec_m = crsz.cc[0].len();
+    for item in powers.iter() {
         match baby_giant(item, &base, 0, CHUNK_SIZE) {
-            Some(dlog) => good.push((idx, dlog)),
-            None => bad.push((idx, *item)),
+            // Happy path: honest DKG participants.
+            Some(dlog) => dlogs.push(BIG::new_int(dlog)),
+            // It may take hours to brute force a cheater's discrete log.
+            None => match solve_cheater_log(spec_n, spec_m, item) {
+                Some(big) => dlogs.push(big),
+                None => panic!("Unsolvable discrete log!"),
+            },
         }
     }
-    if !bad.is_empty() {
-        return Err(DecErr::DLogCheat { good, bad });
-    }
-    Ok(good.iter().map(|(_, base)| *base).collect())
-}
 
-pub fn solve_all_logs(spec_n: usize, spec_m: usize, dec_err: &DecErr) -> Vec<(usize, BIG)> {
-    match dec_err {
-        DecErr::DLogCheat { good, bad } => {
-            let mut solved_bad: Vec<_> = bad
-                .iter()
-                .map(|(idx, tgt)| (*idx, solve_cheater_log(spec_n, spec_m, &tgt).unwrap()))
-                .collect();
-            let mut solved: Vec<_> = good
-                .iter()
-                .map(|(idx, n)| (*idx, BIG::new_int(*n)))
-                .collect();
-            solved.append(&mut solved_bad);
-            solved.sort_by(|(a, _), (b, _)| a.cmp(b));
-            solved
-        }
-        _ => {
-            panic!("BUG! Want a DLogCheat struct.");
-        }
+    // Clippy dislikes `FrBytes::SIZE` or `MESSAGE_BYTES` instead of `32`.
+    let mut fr_bytes = [0u8; 32];
+    let mut big_bytes = [0u8; 48];
+    let b = BIG::new_int(CHUNK_SIZE);
+    let mut acc = BIG::new_int(0);
+    let r = BIG::new_ints(&rom::CURVE_ORDER);
+    for src in dlogs.iter() {
+        acc = BIG::modadd(&src, &BIG::modmul(&acc, &b, &r), &r);
     }
+    acc.tobytes(&mut big_bytes);
+    fr_bytes[..].clone_from_slice(&big_bytes[16..(32 + 16)]);
+
+    // Break up fr_bytes into a vec of isize, which will be combined again later.
+    // It may be better to simply return FrBytes and change enc_chunks() to take
+    // FrBytes and have it break it into chunks. This would confine the chunking
+    // logic to the DKG, where it belongs.
+    // (I tried this for a while, but it seemed to touch a lot of code.)
+    let redundant = fr_bytes[..]
+        .chunks_exact(CHUNK_BYTES)
+        .map(|x| 256 * (x[0] as isize) + (x[1] as isize))
+        .collect();
+    Ok(redundant)
 }
 
 // Part of DVfy of Section 9.1.

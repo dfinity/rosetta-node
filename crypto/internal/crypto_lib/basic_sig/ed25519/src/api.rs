@@ -49,7 +49,7 @@ pub fn public_key_to_der(key: types::PublicKeyBytes) -> Vec<u8> {
 
 // TODO (DFN-845): Consider storing pubkey in key store to improve performance
 pub fn sign(msg: &[u8], sk: &types::SecretKeyBytes) -> CryptoResult<types::SignatureBytes> {
-    use ed25519_dalek::{Keypair, PublicKey, SecretKey};
+    use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signer};
 
     let secret = SecretKey::from_bytes(&sk.0).map_err(|e| CryptoError::MalformedSecretKey {
         algorithm: AlgorithmId::Ed25519,
@@ -67,18 +67,14 @@ pub fn verify(
     msg: &[u8],
     pk: &types::PublicKeyBytes,
 ) -> CryptoResult<()> {
-    use ed25519_dalek::{PublicKey, Signature};
+    use ed25519_dalek::{PublicKey, Signature, Verifier};
 
     let pk = PublicKey::from_bytes(&pk.0).map_err(|e| CryptoError::MalformedPublicKey {
         algorithm: AlgorithmId::Ed25519,
         key_bytes: Some(pk.0.to_vec()),
         internal_error: e.to_string(),
     })?;
-    let sig = Signature::from_bytes(&sig.0).map_err(|e| CryptoError::MalformedSignature {
-        algorithm: AlgorithmId::Ed25519,
-        sig_bytes: sig.0.to_vec(),
-        internal_error: e.to_string(),
-    })?;
+    let sig = Signature::new(sig.0);
 
     pk.verify(msg, &sig)
         .map_err(|e| CryptoError::SignatureVerification {
@@ -87,6 +83,17 @@ pub fn verify(
             sig_bytes: sig.to_bytes().to_vec(),
             internal_error: e.to_string(),
         })
+}
+
+/// Verifies that the public key is valid.
+///
+/// This includes checking that the key is a point on the curve and
+/// in the right subgroup.
+pub fn verify_public_key(pk: &types::PublicKeyBytes) -> bool {
+    match curve25519_dalek::edwards::CompressedEdwardsY(pk.0).decompress() {
+        None => false,
+        Some(edwards_point) => edwards_point.is_torsion_free(),
+    }
 }
 
 fn ensure_correct_oid(oid: simple_asn1::OID, pk_der: &[u8]) -> CryptoResult<()> {

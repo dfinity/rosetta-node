@@ -63,6 +63,8 @@ pub struct HttpCanisterUpdate {
 
 impl HttpCanisterUpdate {
     /// Returns the representation-independent hash.
+    // TODO: Avoid the duplication between this method and the one in
+    // `SignedIngressContent`.
     pub fn representation_independent_hash(&self) -> [u8; 32] {
         use RawHttpRequestVal::*;
         let mut map = btreemap! {
@@ -182,6 +184,8 @@ impl HttpReadContent {
 
 impl HttpUserQuery {
     /// Returns the representation-independent hash.
+    // TODO: Avoid the duplication between this method and the one in
+    // `UserQuery`.
     pub fn representation_independent_hash(&self) -> [u8; 32] {
         use RawHttpRequestVal::*;
         let mut map = btreemap! {
@@ -201,6 +205,8 @@ impl HttpUserQuery {
 
 impl HttpReadState {
     /// Returns the representation-independent hash.
+    // TODO: Avoid the duplication between this method and the one in
+    // `ReadState`.
     pub fn representation_independent_hash(&self) -> [u8; 32] {
         use RawHttpRequestVal::*;
         let mut map = btreemap! {
@@ -233,24 +239,35 @@ impl HttpReadState {
 #[cfg_attr(test, derive(Arbitrary))]
 pub struct HttpRequestEnvelope<C> {
     pub content: C,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub sender_pubkey: Option<Blob>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub sender_sig: Option<Blob>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub sender_delegation: Option<Vec<SignedDelegation>>,
 }
 
 /// A strongly-typed version of HttpRequestEnvelope.
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, Eq, PartialEq, Clone, Hash, Serialize, Deserialize)]
 pub struct HttpRequest<C> {
-    id: MessageId,
     content: C,
     auth: Authentication,
 }
 
 /// The authentication associated with an HTTP request.
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, Eq, PartialEq, Clone, Hash, Serialize, Deserialize)]
 pub enum Authentication {
     Authenticated(UserSignature),
     Anonymous,
+}
+
+impl CountBytes for Authentication {
+    fn count_bytes(&self) -> usize {
+        match self {
+            Self::Authenticated(signature) => signature.count_bytes(),
+            Self::Anonymous => 1,
+        }
+    }
 }
 
 impl<C> TryFrom<&HttpRequestEnvelope<C>> for Authentication {
@@ -276,6 +293,8 @@ impl<C> TryFrom<&HttpRequestEnvelope<C>> for Authentication {
 
 /// Common attributes that all HTTP request contents should have.
 pub trait HttpRequestContent {
+    fn id(&self) -> MessageId;
+
     fn sender(&self) -> UserId;
 
     fn ingress_expiry(&self) -> u64;
@@ -283,7 +302,16 @@ pub trait HttpRequestContent {
     fn nonce(&self) -> Option<Vec<u8>>;
 }
 
+/// A trait implemented by HTTP requests that contain a `canister_id`.
+pub trait HasCanisterId {
+    fn canister_id(&self) -> CanisterId;
+}
+
 impl<C: HttpRequestContent> HttpRequest<C> {
+    pub fn id(&self) -> MessageId {
+        self.content.id()
+    }
+
     pub fn sender(&self) -> UserId {
         self.content.sender()
     }
@@ -302,8 +330,8 @@ impl<C> HttpRequest<C> {
         &self.content
     }
 
-    pub fn id(&self) -> MessageId {
-        self.id.clone()
+    pub fn take_content(self) -> C {
+        self.content
     }
 
     pub fn authentication(&self) -> &Authentication {
@@ -318,6 +346,13 @@ pub enum ReadContent {
 }
 
 impl HttpRequestContent for ReadContent {
+    fn id(&self) -> MessageId {
+        match self {
+            Self::ReadState(read_state) => read_state.id(),
+            Self::Query(query) => query.id(),
+        }
+    }
+
     fn sender(&self) -> UserId {
         match self {
             Self::ReadState(read_state) => read_state.source,
@@ -346,23 +381,15 @@ impl TryFrom<HttpRequestEnvelope<HttpReadContent>> for HttpRequest<ReadContent> 
     fn try_from(envelope: HttpRequestEnvelope<HttpReadContent>) -> Result<Self, Self::Error> {
         let auth = Authentication::try_from(&envelope)?;
         match envelope.content {
-            HttpReadContent::Query { query } => {
-                let id = MessageId::from(query.representation_independent_hash());
-                Ok(HttpRequest {
-                    content: ReadContent::Query(UserQuery::try_from(query)?),
-                    auth,
-                    id,
-                })
-            }
+            HttpReadContent::Query { query } => Ok(HttpRequest {
+                content: ReadContent::Query(UserQuery::try_from(query)?),
+                auth,
+            }),
 
-            HttpReadContent::ReadState { read_state } => {
-                let id = MessageId::from(read_state.representation_independent_hash());
-                Ok(HttpRequest {
-                    content: ReadContent::ReadState(ReadState::try_from(read_state)?),
-                    auth,
-                    id,
-                })
-            }
+            HttpReadContent::ReadState { read_state } => Ok(HttpRequest {
+                content: ReadContent::ReadState(ReadState::try_from(read_state)?),
+                auth,
+            }),
         }
     }
 }
@@ -373,14 +400,10 @@ impl TryFrom<HttpRequestEnvelope<HttpSubmitContent>> for HttpRequest<SignedIngre
     fn try_from(envelope: HttpRequestEnvelope<HttpSubmitContent>) -> Result<Self, Self::Error> {
         let auth = Authentication::try_from(&envelope)?;
         match envelope.content {
-            HttpSubmitContent::Call { update } => {
-                let id = update.id();
-                Ok(HttpRequest {
-                    content: SignedIngressContent::try_from(update)?,
-                    auth,
-                    id,
-                })
-            }
+            HttpSubmitContent::Call { update } => Ok(HttpRequest {
+                content: SignedIngressContent::try_from(update)?,
+                auth,
+            }),
         }
     }
 }

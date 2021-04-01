@@ -53,7 +53,7 @@ message CallContextManager {
 }
 
 message CyclesAccount {
-  // Cycle balance is store as BigUint::to_bytes_le()
+  // Cycle balance is store as u128::to_bytes_le()
   bytes cycles_balance = 1;
   uint64 max_exec_cycles = 2;
 }
@@ -146,4 +146,5 @@ message CanisterStateBits {
   reserved "executed_and_exhausted_its_messages";
   bytes certified_data = 20; 
   uint64 interruped_during_execution = 21;
+  types.v1.NominalCycles consumed_cycles_since_replica_started = 22;
 }

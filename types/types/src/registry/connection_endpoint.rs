@@ -6,12 +6,34 @@ use std::{
 };
 
 use serde::{de, Deserialize, Deserializer, Serialize};
+use strum_macros::Display;
 use thiserror::Error;
 use url::{Host, Url};
 
 use ic_protobuf::registry::node::v1::{
     connection_endpoint::Protocol as pbProtocol, ConnectionEndpoint as pbConnectionEndpoint,
 };
+
+#[derive(Debug, Display, Eq, PartialEq)]
+pub enum Protocol {
+    #[strum(serialize = "http")]
+    Http1,
+    #[strum(serialize = "https")]
+    Http1Tls13,
+    #[strum(serialize = "org.dfinity.p2p1")]
+    P2p1Tls13,
+}
+
+impl From<&pbProtocol> for Protocol {
+    fn from(pb: &pbProtocol) -> Self {
+        match pb {
+            pbProtocol::Unspecified => Protocol::Http1,
+            pbProtocol::Http1 => Protocol::Http1,
+            pbProtocol::Http1Tls13 => Protocol::Http1Tls13,
+            pbProtocol::P2p1Tls13 => Protocol::P2p1Tls13,
+        }
+    }
+}
 
 /// An endpoint is completely defined by a URL.
 ///
@@ -79,6 +101,19 @@ impl From<&ConnectionEndpoint> for SocketAddr {
     }
 }
 
+impl From<&ConnectionEndpoint> for Protocol {
+    fn from(connection_endpoint: &ConnectionEndpoint) -> Self {
+        match connection_endpoint.url.scheme() {
+            "http" => Protocol::Http1,
+            "https" => Protocol::Http1Tls13,
+            "org.dfinity.p2p1" => Protocol::P2p1Tls13,
+            // Unreachable because everything that constructs a ConnectionEndpoint
+            // checks for valid protocols
+            _ => unreachable!(),
+        }
+    }
+}
+
 impl TryFrom<Url> for ConnectionEndpoint {
     type Error = ConnectionEndpointTryFromError;
 
@@ -139,7 +174,7 @@ impl TryFrom<Url> for ConnectionEndpoint {
 
 /// Errors that can occur when converting from the protobuf encoding to the
 /// `ConnectionEndpoint` type.
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Clone, Serialize)]
 pub enum ConnectionEndpointTryFromProtoError {
     #[error("invalid scheme for endpoint: {scheme:}")]
     InvalidScheme { scheme: String },
@@ -193,24 +228,51 @@ impl TryFrom<pbConnectionEndpoint> for ConnectionEndpoint {
 
 /// Errors that can occur when converting from a string to a
 /// `ConnectionEndpoint`.
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Clone, Serialize)]
 pub enum ConnectionEndpointTryFromStringError {
-    #[error("string {url:} does not parse as url: {source:}")]
+    #[error("string {url} does not parse as url: {error}")]
     InvalidUrl {
         url: String,
-        source: url::ParseError,
+        // url::ParseError does not implement Serialize
+        error: String,
     },
+
+    #[error("invalid scheme for endpoint: {scheme:}")]
+    InvalidScheme { scheme: String },
 }
 
 impl FromStr for ConnectionEndpoint {
     type Err = ConnectionEndpointTryFromStringError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let url = Url::parse(&s).map_err(|source| Self::Err::InvalidUrl {
-            url: s.to_string(),
-            source,
-        })?;
-        Ok(Self { url })
+        // Try parsing as a URL first, and if that fails, fall back to parsing
+        // as a SocketAddr
+        match Url::parse(&s) {
+            Ok(url) => {
+                // URL was syntactically correct but may be an unsupported
+                // protocol
+                match url.scheme().as_ref() {
+                    "http" => Ok(pbProtocol::Http1),
+                    "https" => Ok(pbProtocol::Http1Tls13),
+                    "org.dfinity.p2p1" => Ok(pbProtocol::P2p1Tls13),
+                    scheme => Err(ConnectionEndpointTryFromStringError::InvalidScheme {
+                        scheme: scheme.to_string(),
+                    }),
+                }?;
+
+                Ok(Self { url })
+            }
+            Err(source) => match &s.parse::<SocketAddr>() {
+                Ok(socket_addr) => Ok(ConnectionEndpoint::from(*socket_addr)),
+                // If it failed return an error indicating that it's an invalid
+                // URL, as a strong hint that the user should be providing URLs
+                // not socket addresses.
+                Err(_) => Err(Self::Err::InvalidUrl {
+                    url: s.to_string(),
+                    error: source.to_string(),
+                }),
+            },
+        }
     }
 }
 
@@ -397,6 +459,24 @@ mod connection_endpoint_test {
             assert_matches!(
                 ConnectionEndpoint::try_from(url.clone()),
                 Err(ConnectionEndpointTryFromError::HostIsNotIpAddr { .. })
+            );
+        }
+    }
+
+    #[test]
+    fn from_url_scheme_fail() {
+        // Valid URLs, but invalid schemes for a ConnectionEndpoint
+        let urls: Vec<Url> = vec![
+            "ftp://127.0.0.1:80".parse().unwrap(),
+            "file:///path/to/file".parse().unwrap(),
+            "not-a-scheme:///some/thing".parse().unwrap(),
+            "data:text/plain,Hello?World#".parse().unwrap(),
+        ];
+
+        for url in urls.iter() {
+            assert_matches!(
+                ConnectionEndpoint::try_from(url.clone()),
+                Err(ConnectionEndpointTryFromError::InvalidScheme { .. })
             );
         }
     }

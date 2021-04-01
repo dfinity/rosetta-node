@@ -2,7 +2,7 @@ use crate::{
     consensus_pool::ConsensusPoolCache,
     validation::{ValidationError, ValidationResult},
 };
-use ic_types::artifact::CertificationArtifact;
+use ic_types::artifact::{CertificationMessageAttribute, CertificationMessageId};
 use ic_types::{
     artifact::{CertificationMessageFilter, PriorityFn},
     consensus::certification::{Certification, CertificationMessage, CertificationShare},
@@ -54,7 +54,7 @@ pub trait CertifierGossip: Send + Sync {
         &self,
         consensus_cache: &dyn ConsensusPoolCache,
         certification_pool: &dyn CertificationPool,
-    ) -> PriorityFn<CertificationArtifact>;
+    ) -> PriorityFn<CertificationMessageId, CertificationMessageAttribute>;
 
     /// Return a filter that represents what artifacts are needed.
     fn get_filter(&self) -> CertificationMessageFilter;

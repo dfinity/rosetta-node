@@ -52,6 +52,7 @@ pub enum CanisterHeartbeatError {
 
 /// Different types of errors that can be returned from the function(s) that
 /// check if messages should be accepted or not.
+#[derive(Debug, Eq, PartialEq)]
 pub enum MessageAcceptanceError {
     /// The canister that the message is destined for was not found. So no
     /// checks could be performed.
@@ -64,6 +65,9 @@ pub enum MessageAcceptanceError {
 
     /// The canister explicitly rejected the message.
     CanisterRejected,
+
+    /// The canister doesn't have enough cycles to execute the message.
+    CanisterOutOfCycles,
 
     /// The canister experienced a failure while executing the `inspect_message`
     /// method

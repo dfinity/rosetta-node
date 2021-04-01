@@ -1,26 +1,36 @@
-use crate::convert::{ic_error, internal_error, invalid_block_id, transaction_id};
+use crate::convert::{ic_error, internal_error, into_error, invalid_block_id, transaction_id};
 use crate::models::{ApiError, TransactionIdentifier};
 use crate::store::{BlockStore, BlockStoreError, HashedBlock, InMemoryStore, OnDiskStore};
 use async_trait::async_trait;
 use core::ops::Deref;
-use core::time::Duration;
-use dfn_candid::{Candid, CandidOne};
-use ic_canister_client::{Agent, Sender};
-use ic_types::messages::{HttpRequestEnvelope, HttpSubmitContent};
-use ic_types::{CanisterId, PrincipalId};
+use dfn_protobuf::{ProtoBuf, ToProto};
+use ic_canister_client::{Agent, HttpClient, HttpContentType, RequestStub, Sender};
+use ic_crypto_tree_hash::{Digest, LabeledTree, MixedHashTree};
+use ic_crypto_utils_threshold_sig::verify_combined;
+use ic_types::messages::{HttpReadContent, HttpRequestEnvelope, HttpSubmitContent, MessageId};
+use ic_types::CanisterId;
+use ic_types::{
+    consensus::certification::CertificationContent,
+    crypto::{threshold_sig::ThresholdSigPublicKey, CombinedThresholdSigOf, CryptoHash},
+    CryptoHashOfPartialState,
+};
 use im::OrdMap;
 use ledger_canister::{
-    BalancesStore, Block, BlockHeight, Certification, HashOf, ICPTs, RawBlock, Serializable,
+    protobuf::TipOfChainRequest, AccountIdentifier, BalancesStore, BlockArg, BlockHeight, BlockRes,
+    EncodedBlock, HashOf, ICPTs, TipOfChainRes,
 };
 use log::{debug, error, info, trace};
 use on_wire::{FromWire, IntoWire};
-use reqwest::Url;
-use serde::de::DeserializeOwned;
-use std::collections::HashMap;
+use serde::Deserialize;
+use std::collections::{BTreeMap, HashMap};
+use std::convert::TryFrom;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
+use tree_deserializer::LabeledTreeDeserializer;
+use url::Url;
 
 pub type Balances = ledger_canister::Balances<OrdMapBalancesStore>;
 
@@ -30,23 +40,25 @@ pub trait LedgerAccess {
     async fn read_blocks<'a>(&'a self) -> Box<dyn Deref<Target = Blocks> + 'a>;
     async fn sync_blocks(&self, stopped: Arc<AtomicBool>) -> Result<(), ApiError>;
     fn ledger_canister_id(&self) -> &CanisterId;
-    fn reqwest_client(&self) -> &reqwest::Client;
+    fn agent_client(&self) -> &HttpClient;
     fn testnet_url(&self) -> &Url;
     async fn submit(
         &self,
-        _envelope: HttpRequestEnvelope<HttpSubmitContent>,
-    ) -> Result<TransactionIdentifier, ApiError>;
+        _submit_envelope: HttpRequestEnvelope<HttpSubmitContent>,
+        _read_state_envelope: HttpRequestEnvelope<HttpReadContent>,
+    ) -> Result<(TransactionIdentifier, Option<BlockHeight>), ApiError>;
     async fn chain_length(&self) -> BlockHeight;
 }
 
 pub struct LedgerClient {
     blockchain: RwLock<Blocks>,
     canister_id: CanisterId,
-    reqwest_client: Option<reqwest::Client>,
+    agent_client: Option<HttpClient>,
     canister_access: Option<CanisterAccess>,
     testnet_url: Url,
     store_max_blocks: Option<u64>,
     offline: bool,
+    public_key: Option<ThresholdSigPublicKey>,
 }
 
 impl LedgerClient {
@@ -56,6 +68,7 @@ impl LedgerClient {
         store_location: &Path,
         store_max_blocks: Option<u64>,
         offline: bool,
+        public_key: Option<ThresholdSigPublicKey>,
     ) -> Result<LedgerClient, ApiError> {
         let location = store_location.join("blocks");
         std::fs::create_dir_all(&location)
@@ -64,15 +77,15 @@ impl LedgerClient {
 
         let mut blocks = Blocks::new_on_disk(location)?;
 
-        let (reqwest_client, canister_access) = if offline {
+        let (agent_client, canister_access) = if offline {
             (None, None)
         } else {
-            let reqwest_client = reqwest::Client::new();
+            let agent_client = HttpClient::new();
             let canister_access =
-                CanisterAccess::new(testnet_url.clone(), canister_id, reqwest_client.clone());
+                CanisterAccess::new(testnet_url.clone(), canister_id, agent_client.clone());
             Self::verify_store(&blocks, &canister_access).await?;
 
-            (Some(reqwest_client), Some(canister_access))
+            (Some(agent_client), Some(canister_access))
         };
 
         info!("Loading blocks from store");
@@ -97,11 +110,12 @@ impl LedgerClient {
         Ok(Self {
             blockchain: RwLock::new(blocks),
             canister_id,
-            reqwest_client,
+            agent_client,
             canister_access,
             testnet_url,
             store_max_blocks,
             offline,
+            public_key,
         })
     }
 
@@ -112,8 +126,8 @@ impl LedgerClient {
         debug!("Verifying store...");
         match blocks.block_store.get_at(0) {
             Ok(store_genesis) => {
-                let genesis: Block = canister_access
-                    .query_block(0)
+                let genesis = canister_access
+                    .query_raw_block(0)
                     .await?
                     .expect("Blockchain in the ledger canister is empty");
 
@@ -143,7 +157,7 @@ impl LedgerClient {
         }
 
         if let Some((first_block, _)) = blocks.block_store.first_snapshot() {
-            let queried_block = canister_access.query_block(first_block.index).await?;
+            let queried_block = canister_access.query_raw_block(first_block.index).await?;
             if queried_block.is_none() {
                 let msg = format!(
                     "Oldest block snapshot does not match the block on \
@@ -171,10 +185,120 @@ impl LedgerClient {
         Ok(())
     }
 
-    /// TODO actually verify the BLS signature
-    fn verify_tip(_cert: Certification, _hash: Option<HashOf<Block>>) -> Result<(), String> {
-        Ok(())
+    fn verify_tip(
+        &self,
+        cert: ledger_canister::Certification,
+        hash: HashOf<EncodedBlock>,
+    ) -> Result<(), String> {
+        match self.public_key {
+            Some(public_key) => {
+                let from_cert = check_certificate(
+                    &self.canister_id,
+                    &public_key,
+                    &*cert.ok_or("verify tip failed: no data certificate present")?,
+                )
+                .map_err(|e| format!("Certification error: {:?}", e))?;
+                if from_cert.as_bytes() != hash.into_bytes() {
+                    Err("verify tip failed".to_string())
+                } else {
+                    Ok(())
+                }
+            }
+            None => Ok(()),
+        }
     }
+}
+
+#[derive(Debug)]
+pub enum CertificationError {
+    /// Failed to deserialize some part of the response.
+    DeserError(String),
+    /// The signature verification failed.
+    InvalidSignature(String),
+    /// The value at path "/canister/<cid>/certified_data" doesn't match the
+    /// hash computed from the mixed hash tree with registry deltas.
+    CertifiedDataMismatch { certified: Digest, computed: Digest },
+    /// Parsing and signature verification was successful, but the list of
+    /// deltas doesn't satisfy postconditions of the method.
+    InvalidDeltas(String),
+    /// The hash tree in the response was not well-formed.
+    MalformedHashTree(String),
+}
+
+fn verify_combined_threshold_sig(
+    msg: &CryptoHashOfPartialState,
+    sig: &CombinedThresholdSigOf<CertificationContent>,
+    public_key: &ThresholdSigPublicKey,
+) -> Result<(), CertificationError> {
+    verify_combined(&CertificationContent::new(msg.clone()), sig, public_key)
+        .map_err(|e| CertificationError::InvalidSignature(e.to_string()))
+}
+
+fn check_certificate(
+    canister_id: &CanisterId,
+    nns_public_key: &ThresholdSigPublicKey,
+    encoded_certificate: &[u8],
+) -> Result<Digest, CertificationError> {
+    #[derive(Deserialize)]
+    struct Certificate {
+        tree: MixedHashTree,
+        signature: CombinedThresholdSigOf<CertificationContent>,
+    }
+
+    #[derive(Deserialize)]
+    struct CanisterView {
+        certified_data: Digest,
+    }
+
+    #[derive(Deserialize)]
+    struct ReplicaState {
+        canister: BTreeMap<CanisterId, CanisterView>,
+    }
+
+    let certificate: Certificate = serde_cbor::from_slice(encoded_certificate).map_err(|err| {
+        CertificationError::DeserError(format!(
+            "failed to decode certificate from canister {}: {}",
+            canister_id, err
+        ))
+    })?;
+
+    let digest = CryptoHashOfPartialState::from(CryptoHash(certificate.tree.digest().to_vec()));
+
+    verify_combined_threshold_sig(&digest, &certificate.signature, nns_public_key).map_err(|err| {
+        CertificationError::InvalidSignature(format!(
+            "failed to verify threshold signature: root_hash={:?}, sig={:?}, public_key={:?}, error={:?}",
+            digest, certificate.signature, nns_public_key, err
+        ))
+    })?;
+
+    let replica_labeled_tree =
+        LabeledTree::<Vec<u8>>::try_from(certificate.tree).map_err(|err| {
+            CertificationError::MalformedHashTree(format!(
+                "failed to convert hash tree to labeled tree: {:?}",
+                err
+            ))
+        })?;
+
+    let replica_state = ReplicaState::deserialize(LabeledTreeDeserializer::new(
+        &replica_labeled_tree,
+    ))
+    .map_err(|err| {
+        CertificationError::DeserError(format!(
+            "failed to unpack replica state from a labeled tree: {}",
+            err
+        ))
+    })?;
+
+    replica_state
+        .canister
+        .get(canister_id)
+        .map(|canister| canister.certified_data.clone())
+        .ok_or_else(|| {
+            CertificationError::MalformedHashTree(format!(
+                "cannot find certified_data for canister {} in the tree",
+                canister_id
+            ))
+        })
 }
 
 #[async_trait]
@@ -188,8 +312,11 @@ impl LedgerAccess for LedgerClient {
             return Err(ApiError::NotAvailableOffline(false, None));
         }
         let canister = self.canister_access.as_ref().unwrap();
-        let (cert, tip) = canister.query_tip().await?;
-        let chain_length = tip + 1;
+        let TipOfChainRes {
+            tip_index,
+            certification,
+        } = canister.query_tip().await?;
+        let chain_length = tip_index + 1;
 
         if chain_length == 0 {
             return Ok(());
@@ -212,20 +339,34 @@ impl LedgerAccess for LedgerClient {
 
         for i in next_block_index..chain_length {
             if stopped.load(Relaxed) {
-                break;
+                return Err(internal_error("Interrupted"));
             }
             debug!("Fetching block {}", i);
-            let b = canister.query_block(i).await?.unwrap_or_else(|| {
+            let raw_block = canister.query_raw_block(i).await?.unwrap_or_else(|| {
                 panic!(
                     "Block {} is missing when the tip of the chain is {}",
                     i, chain_length
                 )
             });
-            let hb = HashedBlock::hash_block(b, last_block_hash, i);
+            let block = raw_block
+                .decode()
+                .map_err(|err| internal_error(format!("Cannot decode block: {}", err)))?;
+            if block.parent_hash != last_block_hash {
+                let err_msg = format!(
+                    "Block at {}: parent hash mismatch. Expected: {:?}, got: {:?}",
+                    i, last_block_hash, block.parent_hash
+                );
+                error!("{}", err_msg);
+                return Err(internal_error(err_msg));
+            }
+            let hb = HashedBlock::hash_block(raw_block, last_block_hash, i);
             blockchain.add_block(hb.clone())?;
             last_block_hash = Some(hb.hash);
         }
-        LedgerClient::verify_tip(cert, last_block_hash).map_err(internal_error)?;
+        if let Some(last_hash) = last_block_hash {
+            self.verify_tip(certification, last_hash)
+                .map_err(internal_error)?;
+        }
         if next_block_index != chain_length {
             info!(
                 "You are all caught up to block {}",
@@ -242,10 +383,10 @@ impl LedgerAccess for LedgerClient {
         &self.canister_id
     }
 
-    fn reqwest_client(&self) -> &reqwest::Client {
-        self.reqwest_client
+    fn agent_client(&self) -> &HttpClient {
+        self.agent_client
             .as_ref()
-            .expect("Reqwest client not present in offline mode")
+            .expect("Agent client not present in offline mode")
     }
 
     fn testnet_url(&self) -> &Url {
@@ -255,58 +396,157 @@ impl LedgerAccess for LedgerClient {
     async fn submit(
         &self,
         submit_request: HttpRequestEnvelope<HttpSubmitContent>,
-    ) -> Result<TransactionIdentifier, ApiError> {
+        read_state_request: HttpRequestEnvelope<HttpReadContent>,
+    ) -> Result<(TransactionIdentifier, Option<BlockHeight>), ApiError> {
         if self.offline {
             return Err(ApiError::NotAvailableOffline(false, None));
         }
-        const UPDATE_PATH: &str = &"api/v1/submit";
 
-        const INGRESS_TIMEOUT: Duration = Duration::from_secs(30);
+        const TIMEOUT: Duration = Duration::from_secs(20);
 
-        // TODO change all serde_json to serde_cbor to avoid this marshaling, but not
-        // right now because JSON is easier to debug
-        let http_body = serde_cbor::to_vec(&submit_request).map_err(|e| {
+        let start_time = Instant::now();
+        let deadline = start_time + TIMEOUT;
+
+        let http_body = ic_canister_client::cbor::to_self_describing_cbor(&submit_request)
+            .map_err(|e| {
+                internal_error(format!(
+                    "Cannot serialize the submit request in CBOR format because of: {}",
+                    e
+                ))
+            })?;
+
+        let read_state_http_body = ic_canister_client::cbor::to_self_describing_cbor(
+            &read_state_request,
+        )
+        .map_err(|e| {
             internal_error(format!(
-                "Cannot serialize the submit request in CBOR format because of: {}",
+                "Cannot serialize the read state request in CBOR format because of: {}",
                 e
             ))
         })?;
 
-        let url = self.testnet_url.join(UPDATE_PATH).expect("URL join failed");
+        let request_id = MessageId::from(submit_request.content.representation_independent_hash());
 
-        let client = self.reqwest_client();
+        let url = self
+            .testnet_url
+            .join(ic_canister_client::UPDATE_PATH)
+            .expect("URL join failed");
 
-        let request = client
-            .post(url)
-            .header("Content-Type", "application/cbor")
-            .body(http_body);
-
-        let response = request
-            .timeout(INGRESS_TIMEOUT)
-            .send()
+        let agent_client = HttpClient::new();
+        let (body, status) = agent_client
+            .send_post_request(
+                url.as_str(),
+                Some(HttpContentType::CBOR),
+                Some(http_body),
+                Some(TIMEOUT),
+            )
             .await
             .map_err(internal_error)?;
 
-        let status = response.status();
-
         if !status.is_success() {
-            let body = response.text().await.map_err(internal_error)?;
+            let body = String::from_utf8(body).map_err(internal_error)?;
             return Err(ic_error(status.as_u16(), body));
         }
 
-        // If we need to debug the response
-        //     .bytes()
-        //     .await
-        //     .map_err(internal_error)?;
+        // Cut&paste from canister_client Agent.
 
-        // let cbor = serde_cbor::from_slice(&bytes).map_err(|e| {
-        //     internal_error(format!(
-        //         "Failed to parse result from IC, got: {:?} - error {:?}",
-        //         bytes, e
-        //     ))
-        // })?;
+        // Exponential backoff from 100ms to 10s with a multiplier of 1.3.
+        const MIN_POLL_INTERVAL: Duration = Duration::from_millis(100);
+        const MAX_POLL_INTERVAL: Duration = Duration::from_secs(10);
+        const POLL_INTERVAL_MULTIPLIER: f32 = 1.3;
 
-        transaction_id(submit_request)
+        let mut poll_interval = MIN_POLL_INTERVAL;
+
+        while Instant::now() + poll_interval < deadline {
+            debug!("Waiting {} ms for response", poll_interval.as_millis());
+            actix_rt::time::delay_for(poll_interval).await;
+
+            let wait_timeout = TIMEOUT - start_time.elapsed();
+
+            let url = self
+                .testnet_url
+                .join(ic_canister_client::QUERY_PATH)
+                .expect("URL join failed");
+
+            let (body, status) = agent_client
+                .send_post_request(
+                    url.as_str(),
+                    Some(HttpContentType::CBOR),
+                    Some(read_state_http_body.clone()),
+                    Some(wait_timeout),
+                )
+                .await
+                .map_err(internal_error)?;
+
+            if status.is_success() {
+                let cbor: serde_cbor::Value = serde_cbor::from_slice(&body).map_err(|err| {
+                    internal_error(format!("While parsing the status body: {}", err))
+                })?;
+
+                let status = ic_canister_client::parse_read_state_response(&request_id, cbor)
+                    .map_err(|err| {
+                        internal_error(format!("While parsing the read state response: {}", err))
+                    })?;
+
+                debug!("Read state response: {:?}", status);
+
+                match status.status.as_ref() {
+                    "replied" => match status.reply {
+                        Some(bytes) => {
+                            let block_index: BlockHeight =
+                                ProtoBuf::from_bytes(bytes).map(|c| c.0).map_err(|err| {
+                                    internal_error(format!(
+                                        "While parsing the reply of the send call: {}",
+                                        err
+                                    ))
+                                })?;
+                            return transaction_id(submit_request)
+                                .map(|id| (id, Some(block_index)));
+                        }
+                        None => {
+                            return Err(internal_error("Send returned with no result.".to_owned()));
+                        }
+                    },
+                    "unknown" | "received" | "processing" => {}
+                    "rejected" => {
+                        return Err(ApiError::TransactionRejected(
+                            false,
+                            into_error(
+                                status
+                                    .reject_message
+                                    .unwrap_or_else(|| "(no message)".to_owned()),
+                            ),
+                        ));
+                    }
+                    _ => {
+                        return Err(internal_error(format!(
+                            "Send returned unexpected result: {:?} - {:?}",
+                            status.status, status.reject_message
+                        )))
+                    }
+                }
+            } else {
+                let body = String::from_utf8(body).map_err(internal_error)?;
+                error!(
+                    "HTTP error {} while reading the IC state: {}.",
+                    status, body
+                );
+            }
+
+            // Bump the poll interval and compute the next poll time (based on current wall
+            // time, so we don't spin without delay after a slow poll).
+            poll_interval = poll_interval
+                .mul_f32(POLL_INTERVAL_MULTIPLIER)
+                .min(MAX_POLL_INTERVAL);
+        }
+
+        // We didn't get a response in 30 seconds. Let the client handle it.
+        error!(
+            "Block submission took longer than {:?} to complete.",
+            TIMEOUT
+        );
+
+        transaction_id(submit_request).map(|id| (id, None))
     }
 
     async fn chain_length(&self) -> BlockHeight {
@@ -323,74 +563,70 @@ pub struct CanisterAccess {
 }
 
 impl CanisterAccess {
-    pub fn new(url: Url, canister_id: CanisterId, client: reqwest::Client) -> Self {
+    pub fn new(url: Url, canister_id: CanisterId, client: HttpClient) -> Self {
         let agent = Agent::new_with_client(client, url, Sender::Anonymous);
         Self { agent, canister_id }
     }
 
-    pub async fn query<'a, Payload: dfn_candid::ArgumentEncoder, Res: DeserializeOwned>(
+    pub async fn query<'a, Payload: ToProto, Res: ToProto>(
         &self,
         method: &str,
         payload: Payload,
     ) -> Result<Res, String> {
-        let arg = Candid(payload).into_bytes()?;
+        let arg = ProtoBuf(payload).into_bytes()?;
         let bytes = self
             .agent
             .execute_query(&self.canister_id, method, Some(arg))
             .await?
             .ok_or_else(|| "Reply payload was empty".to_string())?;
-        CandidOne::from_bytes(bytes).map(|c| c.0)
+        ProtoBuf::from_bytes(bytes).map(|c| c.0)
     }
 
-    pub async fn query_tip(&self) -> Result<(Certification, BlockHeight), ApiError> {
-        self.query("tip_of_chain", ())
+    pub async fn query_tip(&self) -> Result<TipOfChainRes, ApiError> {
+        self.query("tip_of_chain", TipOfChainRequest {})
             .await
             .map_err(|e| internal_error(format!("In tip: {}", e)))
     }
 
-    pub async fn query_block(&self, height: BlockHeight) -> Result<Option<Block>, ApiError> {
-        let raw_block: Option<RawBlock> = self
-            .query("block", (height,))
+    pub async fn query_raw_block(
+        &self,
+        height: BlockHeight,
+    ) -> Result<Option<EncodedBlock>, ApiError> {
+        let BlockRes(b) = self
+            .query("block", BlockArg(height))
             .await
             .map_err(|e| internal_error(format!("In block: {}", e)))?;
-        match raw_block {
-            Some(raw_block) => {
-                Ok(Some(Block::decode(&*raw_block).map_err(|err| {
-                    internal_error(format!("While decoding block: {}", err))
-                })?))
-            }
-            None => Ok(None),
-        }
+        Ok(b)
     }
 }
 
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
-pub struct OrdMapBalancesStore(pub OrdMap<PrincipalId, ICPTs>);
+pub struct OrdMapBalancesStore(pub OrdMap<AccountIdentifier, ICPTs>);
 
 /// This is essencially copy-paste of BalancesStore for HashMap
 impl BalancesStore for OrdMapBalancesStore {
-    fn get_balance(&self, k: &PrincipalId) -> Option<&ICPTs> {
+    fn get_balance(&self, k: &AccountIdentifier) -> Option<&ICPTs> {
         self.0.get(k)
     }
 
-    fn get_balance_mut(&mut self, k: &PrincipalId) -> Option<&mut ICPTs> {
+    fn get_balance_mut(&mut self, k: &AccountIdentifier) -> Option<&mut ICPTs> {
         self.0.get_mut(k)
     }
 
-    fn get_create_balance(&mut self, k: PrincipalId) -> &mut ICPTs {
+    fn get_create_balance(&mut self, k: AccountIdentifier) -> &mut ICPTs {
         self.0.entry(k).or_insert(ICPTs::ZERO)
     }
 
-    fn remove_account(&mut self, k: &PrincipalId) -> Option<ICPTs> {
+    fn remove_account(&mut self, k: &AccountIdentifier) -> Option<ICPTs> {
         self.0.remove(k)
     }
 }
 
 pub struct Blocks {
     balances: HashMap<BlockHeight, Balances>,
-    hash_location: HashMap<HashOf<Block>, BlockHeight>,
+    hash_location: HashMap<HashOf<EncodedBlock>, BlockHeight>,
     block_store: Box<dyn BlockStore + Send + Sync>,
-    last_hash: Option<HashOf<Block>>,
+    last_hash: Option<HashOf<EncodedBlock>>,
 }
 
 impl Default for Blocks {
@@ -462,7 +698,7 @@ impl Blocks {
             .ok_or_else(|| internal_error("Balances not found"))
     }
 
-    pub fn get(&self, hash: HashOf<Block>) -> Result<HashedBlock, ApiError> {
+    pub fn get(&self, hash: HashOf<EncodedBlock>) -> Result<HashedBlock, ApiError> {
         let index = *self
             .hash_location
             .get(&hash)
@@ -470,7 +706,7 @@ impl Blocks {
         self.get_at(index)
     }
 
-    pub fn get_balances(&self, hash: HashOf<Block>) -> Result<Balances, ApiError> {
+    pub fn get_balances(&self, hash: HashOf<EncodedBlock>) -> Result<Balances, ApiError> {
         let index = *self
             .hash_location
             .get(&hash)
@@ -502,6 +738,8 @@ impl Blocks {
             "When adding a block the parent_hash must match the last added block"
         );
 
+        let block = block.decode().unwrap();
+
         match last_index {
             Some(i) => assert_eq!(i + 1, index),
             None => assert_eq!(0, index),
@@ -519,7 +757,7 @@ impl Blocks {
                 .clone(),
         };
 
-        new_balances.add_payment(&block.transaction().transfer);
+        new_balances.add_payment(&block.transaction.transfer);
 
         self.hash_location.insert(hash, index);
         self.balances.insert(index, new_balances);
@@ -542,7 +780,7 @@ impl Blocks {
         }
     }
 
-    pub fn synced_to(&self) -> Option<(HashOf<Block>, u64)> {
+    pub fn synced_to(&self) -> Option<(HashOf<EncodedBlock>, u64)> {
         self.last().ok().flatten().map(|hb| (hb.hash, hb.index))
     }
 

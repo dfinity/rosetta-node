@@ -37,8 +37,8 @@ pub(crate) mod conversions;
 
 mod crypto {
     pub use ic_crypto_internal_fs_ni_dkg::forward_secure::{
-        dec_chunks, enc_chunks, kgen, mk_sys_params, BTENode, Bit, PublicKey, SecretKey, SysParam,
-        ToxicWaste, CRSZ,
+        dec_chunks, enc_chunks, kgen, mk_sys_params, verify_ciphertext_integrity, BTENode, Bit,
+        PublicKey, SecretKey, SysParam, ToxicWaste, CRSZ,
     };
     pub use ic_crypto_internal_fs_ni_dkg::nizk_chunking::{
         prove_chunking, verify_chunking, ChunkingInstance, ChunkingWitness, ProofChunking,
@@ -159,7 +159,7 @@ pub fn encrypt_and_prove(
         &mut rng,
     )
     .expect(
-        "TODO: I think the result should never be None.  Can the blynn return type be changed?",
+        "TODO (CRP-815): I think the result should never be None.  Can the blynn return type be changed?",
     );
 
     let chunking_proof = prove_chunking(
@@ -344,6 +344,7 @@ fn prove_sharing(
 }
 
 pub fn verify_zk_proofs(
+    epoch: Epoch,
     receiver_fs_public_keys: &BTreeMap<NodeIndex, FsEncryptionPublicKey>,
     public_coefficients: &PublicCoefficientsBytes,
     ciphertexts: &FsEncryptionCiphertext,
@@ -373,6 +374,13 @@ pub fn verify_zk_proofs(
     let ciphertext = ciphertext_into_miracl(&ciphertexts).map_err(|error| {
         CspDkgVerifyDealingError::MalformedDealingError(InvalidArgumentError {
             message: error.to_string(),
+        })
+    })?;
+
+    let tau = Tau::from(epoch);
+    crypto::verify_ciphertext_integrity(&ciphertext, &tau.0[..], &SYS_PARAMS).map_err(|_| {
+        CspDkgVerifyDealingError::InvalidDealingError(InvalidArgumentError {
+            message: "Ciphertext integrity check failed".to_string(),
         })
     })?;
 

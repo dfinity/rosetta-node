@@ -1,7 +1,11 @@
 use crate::{
-    messages::{HttpHandlerError, HttpUserQuery},
+    messages::{
+        message_id::hash_of_map, HasCanisterId, HttpHandlerError, HttpUserQuery, MessageId,
+        RawHttpRequestVal,
+    },
     CanisterId, PrincipalId, UserId,
 };
+use maplit::btreemap;
 use std::convert::TryFrom;
 
 /// Represents a Query that is sent by an end user to a canister.
@@ -13,6 +17,26 @@ pub struct UserQuery {
     pub method_payload: Vec<u8>,
     pub ingress_expiry: u64,
     pub nonce: Option<Vec<u8>>,
+}
+
+impl UserQuery {
+    // TODO: Avoid the duplication between this method and the one in
+    // `HttpUserQuery`.
+    pub fn id(&self) -> MessageId {
+        use RawHttpRequestVal::*;
+        let mut map = btreemap! {
+            "request_type".to_string() => String("query".to_string()),
+            "canister_id".to_string() => Bytes(self.receiver.get().to_vec()),
+            "method_name".to_string() => String(self.method_name.clone()),
+            "arg".to_string() => Bytes(self.method_payload.clone()),
+            "ingress_expiry".to_string() => U64(self.ingress_expiry),
+            "sender".to_string() => Bytes(self.source.get().to_vec()),
+        };
+        if let Some(nonce) = &self.nonce {
+            map.insert("nonce".to_string(), Bytes(nonce.clone()));
+        }
+        MessageId::from(hash_of_map(&map))
+    }
 }
 
 impl TryFrom<HttpUserQuery> for UserQuery {
@@ -37,6 +61,12 @@ impl TryFrom<HttpUserQuery> for UserQuery {
             ingress_expiry: query.ingress_expiry,
             nonce: query.nonce.map(|n| n.0),
         })
+    }
+}
+
+impl HasCanisterId for UserQuery {
+    fn canister_id(&self) -> CanisterId {
+        self.receiver
     }
 }
 

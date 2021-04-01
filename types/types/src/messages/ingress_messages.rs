@@ -1,10 +1,9 @@
 //! This module contains various definitions related to Ingress messages
 
-use super::{HttpHandlerError, MessageId, RawHttpRequestVal, UserSignature};
+use super::{HttpHandlerError, MessageId, RawHttpRequestVal};
 use crate::{
-    crypto::Signed,
     messages::message_id::hash_of_map,
-    messages::{Authentication, HttpCanisterUpdate, HttpRequest, HttpRequestContent},
+    messages::{HasCanisterId, HttpCanisterUpdate, HttpRequest, HttpRequestContent},
     CanisterId, CountBytes, PrincipalId, Time, UserId,
 };
 use ic_protobuf::{
@@ -15,10 +14,7 @@ use ic_protobuf::{
 };
 use maplit::btreemap;
 use serde::{Deserialize, Serialize};
-use std::{
-    convert::{From, TryFrom, TryInto},
-    time::Duration,
-};
+use std::convert::{From, TryFrom, TryInto};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct SignedIngressContent {
@@ -31,6 +27,46 @@ pub struct SignedIngressContent {
 }
 
 impl SignedIngressContent {
+    pub fn sender(&self) -> UserId {
+        self.sender
+    }
+
+    pub fn canister_id(&self) -> CanisterId {
+        self.canister_id
+    }
+
+    pub fn method_name(&self) -> &str {
+        self.method_name.as_str()
+    }
+
+    pub fn arg(&self) -> &[u8] {
+        &self.arg
+    }
+
+    pub fn nonce(&self) -> Option<&Vec<u8>> {
+        self.nonce.as_ref()
+    }
+}
+
+impl HasCanisterId for SignedIngressContent {
+    fn canister_id(&self) -> CanisterId {
+        self.canister_id
+    }
+}
+
+impl CountBytes for SignedIngressContent {
+    fn count_bytes(&self) -> usize {
+        self.sender.get().as_slice().len()
+            + self.canister_id.get().as_slice().len()
+            + self.method_name.len()
+            + self.arg.len()
+            + self.nonce.as_ref().map(|n| n.len()).unwrap_or(0)
+    }
+}
+
+impl HttpRequestContent for SignedIngressContent {
+    // TODO: Avoid the duplication between this method and the one in
+    // `HttpUpdateContent`.
     fn id(&self) -> MessageId {
         use RawHttpRequestVal::*;
         let mut map = btreemap! {
@@ -46,19 +82,7 @@ impl SignedIngressContent {
         }
         MessageId::from(hash_of_map(&map))
     }
-}
 
-impl CountBytes for SignedIngressContent {
-    fn count_bytes(&self) -> usize {
-        self.sender.get().as_slice().len()
-            + self.canister_id.get().as_slice().len()
-            + self.method_name.len()
-            + self.arg.len()
-            + self.nonce.as_ref().map(|n| n.len()).unwrap_or(0)
-    }
-}
-
-impl HttpRequestContent for SignedIngressContent {
     fn sender(&self) -> UserId {
         self.sender
     }
@@ -69,12 +93,6 @@ impl HttpRequestContent for SignedIngressContent {
 
     fn nonce(&self) -> Option<Vec<u8>> {
         self.nonce.clone()
-    }
-}
-
-impl SignedIngressContent {
-    pub fn canister_id(&self) -> CanisterId {
-        self.canister_id
     }
 }
 
@@ -103,30 +121,8 @@ impl TryFrom<HttpCanisterUpdate> for SignedIngressContent {
     }
 }
 
-/// Describes the signed ingress message that was received from the end user.
-/// The only way to construct this is
-/// `TryFrom<HttpRequestEnvelope<HttpSubmitContent>>` which should guarantee
-/// that all the necessary fields are accounted for and all the necessary checks
-/// have been performed.
-pub type SignedIngress = Signed<SignedIngressContent, Option<UserSignature>>;
-
-impl From<&SignedIngress> for pb_types::SignedIngress {
-    fn from(signed_ingress: &SignedIngress) -> Self {
-        Self {
-            signature: bincode::serialize(&signed_ingress.signature).unwrap(),
-            sender: Some(crate::user_id_into_protobuf(signed_ingress.sender())),
-            canister_id: Some(pb_types::CanisterId::from(signed_ingress.canister_id())),
-            method_name: signed_ingress.method_name(),
-            arg: signed_ingress.method_arg().to_vec(),
-            ingress_expiry: signed_ingress.content.ingress_expiry,
-            nonce: signed_ingress
-                .content
-                .nonce
-                .clone()
-                .map(|bytes| pb_types::Nonce { raw_bytes: bytes }),
-        }
-    }
-}
+/// Describes the ingress message that was received from the end user.
+pub type SignedIngress = HttpRequest<SignedIngressContent>;
 
 impl From<&SignedIngress> for IngressMessageLogEntry {
     fn from(ingress: &SignedIngress) -> Self {
@@ -150,24 +146,16 @@ impl From<&SignedIngress> for IngressMessageLogEntry {
 }
 
 impl SignedIngress {
-    pub fn id(&self) -> MessageId {
-        self.content.id()
-    }
-
-    pub fn sender(&self) -> UserId {
-        self.content.sender
-    }
-
     pub fn canister_id(&self) -> CanisterId {
-        self.content.canister_id
+        self.content().canister_id
     }
 
     pub fn method_name(&self) -> String {
-        self.content.method_name.clone()
+        self.content().method_name.clone()
     }
 
     pub fn method_arg(&self) -> &[u8] {
-        &self.content.arg
+        &self.content().arg
     }
 
     pub fn log_entry(&self) -> IngressMessageLogEntry {
@@ -175,19 +163,13 @@ impl SignedIngress {
     }
 
     pub fn expiry_time(&self) -> Time {
-        crate::time::UNIX_EPOCH + Duration::from_nanos(self.content.ingress_expiry)
+        Time::from_nanos_since_unix_epoch(self.content().ingress_expiry)
     }
 }
 
-impl From<HttpRequest<SignedIngressContent>> for SignedIngress {
-    fn from(request: HttpRequest<SignedIngressContent>) -> Self {
-        Self {
-            signature: match request.authentication().clone() {
-                Authentication::Anonymous => None,
-                Authentication::Authenticated(signature) => Some(signature),
-            },
-            content: request.content().clone(),
-        }
+impl CountBytes for SignedIngress {
+    fn count_bytes(&self) -> usize {
+        self.content().count_bytes() + self.authentication().count_bytes()
     }
 }
 
@@ -203,8 +185,6 @@ pub struct Ingress {
     pub expiry_time: Time,
 }
 
-// This conversion should be error free as long as we performed all the
-// validation checks when we computed the SignedIngress.
 impl From<SignedIngress> for Ingress {
     fn from(signed_ingress: SignedIngress) -> Self {
         Self {
@@ -214,6 +194,20 @@ impl From<SignedIngress> for Ingress {
             method_payload: signed_ingress.method_arg().to_vec(),
             message_id: signed_ingress.id(),
             expiry_time: signed_ingress.expiry_time(),
+        }
+    }
+}
+
+impl From<SignedIngressContent> for Ingress {
+    fn from(ingress: SignedIngressContent) -> Self {
+        let message_id = ingress.id();
+        Self {
+            source: ingress.sender,
+            receiver: ingress.canister_id,
+            method_name: ingress.method_name,
+            method_payload: ingress.arg,
+            message_id,
+            expiry_time: Time::from_nanos_since_unix_epoch(ingress.ingress_expiry),
         }
     }
 }

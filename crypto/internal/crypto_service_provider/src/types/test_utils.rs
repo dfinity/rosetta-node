@@ -77,7 +77,7 @@ pub fn arbitrary_ecdsa_secp256r1_signature() -> CspSignature {
     for b in random_bytes.iter_mut() {
         *b = rand::random();
     }
-    CspSignature::EcdsaP256(ecdsa_types::SignatureBytes(random_bytes))
+    CspSignature::EcdsaP256(ecdsa_secp256r1_types::SignatureBytes(random_bytes))
 }
 
 #[allow(unused)]
@@ -86,7 +86,7 @@ pub fn arbitrary_ecdsa_secp256k1_public_key() -> CspPublicKey {
     for b in random_bytes.iter_mut() {
         *b = rand::random();
     }
-    CspPublicKey::Secp256k1(ecdsa_secp256k1_types::PublicKeyBytes(random_bytes.to_vec()))
+    CspPublicKey::EcdsaSecp256k1(ecdsa_secp256k1_types::PublicKeyBytes(random_bytes.to_vec()))
 }
 
 #[allow(unused)]
@@ -122,7 +122,7 @@ pub fn arbitrary_secp256k1_signature() -> CspSignature {
     for b in random_bytes.iter_mut() {
         *b = rand::random();
     }
-    CspSignature::Secp256k1(secp256k1_types::SignatureBytes(random_bytes))
+    CspSignature::EcdsaSecp256k1(ecdsa_secp256k1_types::SignatureBytes(random_bytes))
 }
 
 #[allow(unused)]

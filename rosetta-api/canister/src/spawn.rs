@@ -11,7 +11,7 @@ pub async fn install_code<Arg: IntoWire>(
     wasm_module: Vec<u8>,
     arg: Arg,
     memory_allocation: Option<usize>,
-) {
+) -> Result<(), (Option<i32>, String)> {
     dfn_core::api::print("[spawn] install_code()");
     let install_code = InstallCodeArgs {
         mode: CanisterInstallMode::Install,
@@ -22,14 +22,13 @@ pub async fn install_code<Arg: IntoWire>(
         memory_allocation: memory_allocation.map(candid::Nat::from),
         query_allocation: None,
     };
-    dfn_core::api::call_no_reply(
+    dfn_core::api::call(
         IC_00,
         &Method::InstallCode.to_string(),
         dfn_candid::candid::<(), (InstallCodeArgs,)>,
         (install_code,),
-        dfn_core::api::Funds::zero(),
     )
-    .unwrap()
+    .await
 }
 
 pub async fn create_canister() -> CanisterId {

@@ -4,10 +4,14 @@ mod cycles;
 pub mod icp;
 
 pub use cycles::Cycles;
-use ic_protobuf::state::queues::*;
+use ic_protobuf::{
+    proxy::{try_from_option_field, ProxyDecodeError},
+    state::queues::v1::Cycles as PbCycles,
+    state::queues::v1::Funds as PbFunds,
+};
 use icp::ICP;
 use serde::{Deserialize, Serialize};
-use std::convert::From;
+use std::convert::{From, TryFrom};
 
 /// A struct to hold various types of funds. Currently, only Cycles and ICP are
 /// supported.
@@ -75,21 +79,23 @@ impl Funds {
     }
 }
 
-impl From<&Funds> for v1::Funds {
+impl From<&Funds> for PbFunds {
     fn from(item: &Funds) -> Self {
         Self {
-            cycles: item.cycles.get(),
+            cycles_struct: Some(PbCycles::from(item.cycles)),
             icp: item.icp.balance(),
         }
     }
 }
 
-impl From<v1::Funds> for Funds {
-    fn from(item: v1::Funds) -> Self {
-        Self {
-            cycles: Cycles::from(item.cycles),
+impl TryFrom<PbFunds> for Funds {
+    type Error = ProxyDecodeError;
+
+    fn try_from(item: PbFunds) -> Result<Self, Self::Error> {
+        Ok(Self {
+            cycles: try_from_option_field(item.cycles_struct, "Funds::cycles_struct")?,
             icp: icp::Tap::mint(item.icp),
-        }
+        })
     }
 }
 // TODO(EXE-84): Move the following parameters to the registry
@@ -98,11 +104,14 @@ impl From<v1::Funds> for Funds {
 // Fees
 //////////////////////////////////////////////////////////////
 
-/// Cost for using a single WASM page worth of data, for one round.
-pub const CYCLES_PER_ACTIVE_WASM_PAGE: Cycles = Cycles::new(1);
-
-/// Cycles charged per 1MiB of the memory allocation.
-pub const CYCLES_PER_MEMORY_ALLOCATION_MB: Cycles = Cycles::new(1);
+/// Cycles charged per Wasm page (64KiB), for one round.
+/// The assumptions used to set the cost are:
+/// 1T cycles is about 1USD
+/// a round takes ca 3s.
+/// The value is set so that storing 1GB/month costs roughly 100 USD
+/// This is the intended cost for storage on a 7 node subnetwork at launch.
+/// The cost should go down as the protocol storage costs improve.
+pub const CYCLES_PER_WASM_PAGE: Cycles = Cycles::new(7500);
 
 /// Cycles charged for each percent of the reserved compute allocation.
 /// Note that reserved compute allocation is a scarce resource, and should be
@@ -123,14 +132,16 @@ pub const FIXED_FEE_FOR_NETWORK_TRANSFER: Cycles = Cycles::new(10);
 // allocation and usage
 pub const CANISTER_FREEZE_BALANCE_RESERVE: Cycles = Cycles::new(1 << 33);
 
-/// Globals are expensive for us to handle, so we charge more for them than we
-/// do for regular data.
-pub const CYCLES_PER_WASM_EXPORTED_GLOBAL: Cycles = Cycles::new(100);
-
 /// Creating canisters incurs a "large" fee in order to prevent someone from
 /// creating a lot of canisters and thus attempt to DDoS the system. Arbitrarily
 /// set to 10^12 cycles which ought to be large enough.
 pub const CANISTER_CREATION_FEE: Cycles = Cycles::new(1_000_000_000_000);
+
+/// Flat fee to charge for an incoming ingress message.
+pub const INGRESS_MESSAGE_RECEIVED_FEE: Cycles = Cycles::new(100);
+
+/// Fee to charge per byte of an ingress message.
+pub const INGRESS_BYTE_RECEIVED_FEE: Cycles = Cycles::new(100);
 
 //////////////////////////////////////////////////////////////
 // Conversions
@@ -148,10 +159,3 @@ pub const CYCLES_PER_BYTE_RATIO: Cycles = Cycles::new(1);
 /// (86400[sec] * (3 * 10^9)[inst/sec]) / 10^12 = 259
 /// The assumption is that storage and network costs can be ignored.
 pub const EXECUTED_INSTRUCTIONS_PER_CYCLE: u64 = 250;
-
-//////////////////////////////////////////////////////////////
-// Other
-//////////////////////////////////////////////////////////////
-
-/// Cycles limit for a canister.
-pub const CYCLES_LIMIT_PER_CANISTER: Cycles = Cycles::new(100_000_000_000_000);

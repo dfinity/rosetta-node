@@ -272,3 +272,51 @@ mod verify {
         }
     }
 }
+
+mod verify_public_key {
+    use crate::types::PublicKeyBytes;
+    use crate::{keypair_from_rng, verify_public_key};
+    use curve25519_dalek::edwards::CompressedEdwardsY;
+
+    #[test]
+    fn should_fail_public_key_verification_if_point_is_not_on_curve() {
+        let pubkey_not_on_curve = {
+            let point_not_on_curve = [
+                2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0,
+            ];
+            assert_eq!(CompressedEdwardsY(point_not_on_curve).decompress(), None);
+            PublicKeyBytes(point_not_on_curve)
+        };
+
+        assert_eq!(verify_public_key(&pubkey_not_on_curve), false);
+    }
+
+    #[test]
+    fn should_fail_public_key_verification_if_point_has_small_order() {
+        let pubkey_with_small_order = {
+            let pubkey_with_order_8 = PublicKeyBytes([0; 32]);
+            assert!(CompressedEdwardsY(pubkey_with_order_8.0)
+                .decompress()
+                .expect("pubkey cannot be decompressed")
+                .is_small_order());
+            pubkey_with_order_8
+        };
+
+        assert_eq!(verify_public_key(&pubkey_with_small_order), false);
+    }
+
+    #[test]
+    fn should_fail_public_key_verification_if_point_has_wrong_order() {
+        let point_with_composite_order = {
+            let (_sk_bytes, pk_bytes) = keypair_from_rng(&mut rand::thread_rng());
+            let point_of_prime_order = CompressedEdwardsY(pk_bytes.0).decompress().unwrap();
+            let point_of_order_8 = CompressedEdwardsY([0; 32]).decompress().unwrap();
+            let point_of_composite_order = point_of_prime_order + point_of_order_8;
+            assert_eq!(point_of_composite_order.is_torsion_free(), false);
+            point_of_composite_order
+        };
+        let pubkey_with_composite_order = PublicKeyBytes(point_with_composite_order.compress().0);
+        assert_eq!(verify_public_key(&pubkey_with_composite_order), false);
+    }
+}

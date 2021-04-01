@@ -2,8 +2,7 @@ use crate::convert::{internal_error, invalid_block_id};
 use crate::ledger_client::Balances;
 use crate::models::ApiError;
 
-use ic_types::PrincipalId;
-use ledger_canister::{Block, BlockHeight, HashOf, ICPTs, Serializable};
+use ledger_canister::{AccountIdentifier, BlockHeight, EncodedBlock, HashOf, ICPTs};
 use log::{debug, error};
 use serde::{Deserialize, Serialize};
 
@@ -13,16 +12,16 @@ use std::path::{Path, PathBuf};
 
 #[derive(candid::CandidType, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct HashedBlock {
-    pub block: Block,
-    pub hash: HashOf<Block>,
-    pub parent_hash: Option<HashOf<Block>>,
+    pub block: EncodedBlock,
+    pub hash: HashOf<EncodedBlock>,
+    pub parent_hash: Option<HashOf<EncodedBlock>>,
     pub index: u64,
 }
 
 impl HashedBlock {
     pub fn hash_block(
-        block: Block,
-        parent_hash: Option<HashOf<Block>>,
+        block: EncodedBlock,
+        parent_hash: Option<HashOf<EncodedBlock>>,
         index: BlockHeight,
     ) -> HashedBlock {
         HashedBlock {
@@ -165,7 +164,7 @@ impl OnDiskStore {
         match file.map_err(|e| e.kind()) {
             Ok(f) => {
                 debug!("Loading oldest block snapshot");
-                let (hb, bal, icpt_pool): (HashedBlock, Vec<(PrincipalId, ICPTs)>, ICPTs) =
+                let (hb, bal, icpt_pool): (HashedBlock, Vec<(AccountIdentifier, ICPTs)>, ICPTs) =
                     serde_json::from_reader(f).map_err(|e| e.to_string())?;
                 let mut balances = Balances::default();
                 balances.icpt_pool = icpt_pool;

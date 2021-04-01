@@ -1,11 +1,13 @@
 use canister_test::*;
 use dfn_candid::{candid, candid_one, CandidOne};
+use dfn_protobuf::protobuf;
 use ic_canister_client::Sender;
 use ic_types::{CanisterId, PrincipalId};
 use ledger_canister::{
-    account_identifier, AccountBalanceArgs, ArchiveCanisterInitPayload, Block, BlockHeight, ICPTs,
-    LedgerCanisterInitPayload, Memo, NotifyCanisterArgs, RawBlock, SendArgs, Serializable,
-    TotalSupplyArgs, Transfer, MIN_BURN_AMOUNT, TRANSACTION_FEE,
+    AccountBalanceArgs, AccountIdentifier, ArchiveCanisterInitPayload, Block, BlockHeight,
+    GetBlocksArgs, GetBlocksRes, ICPTs, LedgerCanisterInitPayload, Memo, NotifyCanisterArgs,
+    SendArgs, Subaccount, TotalSupplyArgs, TransactionNotificationResult, Transfer,
+    MIN_BURN_AMOUNT, TRANSACTION_FEE,
 };
 use on_wire::IntoWire;
 use std::collections::HashMap;
@@ -31,14 +33,13 @@ async fn simple_send(
     ledger
         .update_from_sender(
             "send",
-            candid_one,
+            protobuf,
             SendArgs {
                 memo: Memo::default(),
                 amount: ICPTs::from_doms(amount_doms),
                 fee: ICPTs::from_doms(fee_doms),
                 from_subaccount: None,
-                to: to.get_principal_id(),
-                to_subaccount: None,
+                to: to.get_principal_id().into(),
                 block_height: None,
             },
             &from,
@@ -50,13 +51,27 @@ async fn query_balance(ledger: &Canister<'_>, acc: &Sender) -> Result<ICPTs, Str
     ledger
         .query_(
             "account_balance",
-            candid_one,
+            protobuf,
             AccountBalanceArgs {
-                account: acc.get_principal_id(),
-                sub_account: None,
+                account: acc.get_principal_id().into(),
             },
         )
         .await
+}
+
+fn make_accounts(num_accounts: u64, num_subaccounts: u8) -> HashMap<AccountIdentifier, ICPTs> {
+    (1..num_accounts)
+        .flat_map(|i| {
+            let pid = CanisterId::from_u64(i).get();
+            (1..num_subaccounts).map(move |j| {
+                let subaccount: [u8; 32] = [j; 32];
+                (
+                    AccountIdentifier::new(pid, Some(Subaccount(subaccount))),
+                    ICPTs::from_doms(i * j as u64),
+                )
+            })
+        })
+        .collect()
 }
 
 #[test]
@@ -64,16 +79,14 @@ fn upgrade_test() {
     local_test_e(|r| async move {
         let proj = Project::new(env!("CARGO_MANIFEST_DIR"));
 
-        let accounts: std::collections::HashMap<PrincipalId, ICPTs> = (1..5)
-            .map(|i| (CanisterId::from_u64(i).get(), ICPTs::from_doms(i)))
-            .collect();
+        let accounts = make_accounts(5, 4);
 
         let mut ledger = proj
             .cargo_bin("ledger-canister")
             .install_(
                 &r,
                 CandidOne(LedgerCanisterInitPayload {
-                    minting_account: CanisterId::from_u64(0).get(),
+                    minting_account: CanisterId::from_u64(0).into(),
                     initial_values: accounts,
                     archive_canister: None,
                     max_message_size_bytes: None,
@@ -81,14 +94,14 @@ fn upgrade_test() {
             )
             .await?;
 
-        let blocks_before: Vec<RawBlock> = ledger
-            .query_("get_blocks", dfn_candid::candid, (0usize, 128usize))
+        let GetBlocksRes(blocks_before) = ledger
+            .query_("get_blocks", protobuf, GetBlocksArgs::new(0usize, 128usize))
             .await?;
 
         ledger.upgrade_to_self_binary(Vec::new()).await?;
 
-        let blocks_after: Vec<RawBlock> = ledger
-            .query_("get_blocks", dfn_candid::candid, (0usize, 128usize))
+        let GetBlocksRes(blocks_after) = ledger
+            .query_("get_blocks", protobuf, GetBlocksArgs::new(0usize, 128usize))
             .await?;
 
         assert_eq!(blocks_before, blocks_after);
@@ -101,9 +114,7 @@ fn archive_blocks_small_test() {
     local_test_e(|r| async move {
         let proj = Project::new(env!("CARGO_MANIFEST_DIR"));
 
-        let accounts: std::collections::HashMap<PrincipalId, ICPTs> = (1..8)
-            .map(|i| (CanisterId::from_u64(i).get(), ICPTs::from_doms(i)))
-            .collect();
+        let accounts = make_accounts(4, 8);
         println!("[test] accounts: {:?}", accounts);
 
         println!("[test] installing archive canister");
@@ -114,8 +125,8 @@ fn archive_blocks_small_test() {
             "[test] blocks per archive node: {}",
             blocks_per_archive_node
         );
-        let max_message_size_bytes = 192;
-        let node_max_memory_size_bytes = 256;
+        let max_message_size_bytes = 512;
+        let node_max_memory_size_bytes = 512;
         let archive_init_args = ArchiveCanisterInitPayload {
             node_max_memory_size_bytes: Some(node_max_memory_size_bytes),
             max_message_size_bytes: Some(max_message_size_bytes),
@@ -129,7 +140,7 @@ fn archive_blocks_small_test() {
         println!("[test] installing ledger canister");
         let ledger: canister_test::Canister = {
             let payload = LedgerCanisterInitPayload {
-                minting_account: CanisterId::from_u64(0).get(),
+                minting_account: CanisterId::from_u64(0).into(),
                 initial_values: accounts,
                 archive_canister: Some(archive.canister_id()),
                 max_message_size_bytes: Some(max_message_size_bytes),
@@ -142,8 +153,8 @@ fn archive_blocks_small_test() {
 
         // We will archive all Blocks from the ledger. Retrieving a copy to
         // compare with archive contents
-        let blocks: Vec<RawBlock> = ledger
-            .query_("get_blocks", dfn_candid::candid, (0usize, 128usize))
+        let GetBlocksRes(blocks) = ledger
+            .query_("get_blocks", protobuf, GetBlocksArgs::new(0usize, 128usize))
             .await?;
         println!("[test] retrieved {} blocks", blocks.len());
 
@@ -162,7 +173,7 @@ fn archive_blocks_small_test() {
         // created
         println!("[test] retrieving nodes from archive");
         let nodes: Vec<CanisterId> = archive.query_("get_nodes", dfn_candid::candid, ()).await?;
-        assert_eq!(nodes.len(), 3, "expected 3 archive nodes");
+        assert_eq!(nodes.len(), 5, "expected 5 archive nodes");
         println!("[test] retrieved {} nodes: {:?}", nodes.len(), nodes);
 
         // Then loop over these nodes and fetch all blocks
@@ -170,8 +181,8 @@ fn archive_blocks_small_test() {
         for n in nodes {
             println!("[test] retrieving blocks from {}. calling get_blocks()", n);
             let node = Canister::new(&r, n);
-            let mut blocks: Vec<RawBlock> = node
-                .query_("get_blocks", dfn_candid::candid, (0usize, 128usize))
+            let GetBlocksRes(mut blocks) = node
+                .query_("get_blocks", protobuf, GetBlocksArgs::new(0usize, 128usize))
                 .await?;
             blocks_from_archive.append(&mut blocks);
             println!(
@@ -193,10 +204,8 @@ fn archive_blocks_large_test() {
     local_test_e(|r| async move {
         let proj = Project::new(env!("CARGO_MANIFEST_DIR"));
 
-        // Generate around 4 MiB of Blocks
-        let accounts: std::collections::HashMap<PrincipalId, ICPTs> = (1..32768)
-            .map(|i| (CanisterId::from_u64(i).get(), ICPTs::from_doms(i)))
-            .collect();
+        // Generate around 2 MiB of Blocks
+        let accounts = make_accounts(64, 64);
 
         println!("[test] installing archive canister");
         let blocks_per_archive_node: usize = 32768;
@@ -223,7 +232,7 @@ fn archive_blocks_large_test() {
         println!("[test] installing ledger canister");
         let ledger: canister_test::Canister = {
             let payload = LedgerCanisterInitPayload {
-                minting_account: CanisterId::from_u64(0).get(),
+                minting_account: CanisterId::from_u64(0).into(),
                 initial_values: accounts,
                 archive_canister: Some(archive.canister_id()),
                 max_message_size_bytes: Some(max_message_size_bytes),
@@ -247,14 +256,19 @@ fn archive_blocks_large_test() {
                     offset,
                     offset + blocks_per_query
                 );
-                let mut result: Vec<RawBlock> = ledger
-                    .query_("get_blocks", dfn_candid::candid, (offset, blocks_per_query))
+                let GetBlocksRes(mut result) = ledger
+                    .query_(
+                        "get_blocks",
+                        protobuf,
+                        GetBlocksArgs::new(offset, blocks_per_query),
+                    )
                     .await?;
                 blocks.append(&mut result);
             }
             println!("[test] retrieved {} blocks", blocks.len());
             blocks
         };
+        assert_eq!(blocks.len(), 3969, "Expected 3969 blocks.");
 
         // Since we're archiving Blocks from the age >= 0, the ledger should be
         // empty after this call
@@ -291,8 +305,12 @@ fn archive_blocks_large_test() {
                         offset,
                         offset + blocks_per_query
                     );
-                    let mut result: Vec<RawBlock> = node
-                        .query_("get_blocks", dfn_candid::candid, (offset, blocks_per_query))
+                    let GetBlocksRes(mut result) = node
+                        .query_(
+                            "get_blocks",
+                            protobuf,
+                            GetBlocksArgs::new(offset, blocks_per_query),
+                        )
                         .await?;
                     blocks.append(&mut result);
                 }
@@ -320,7 +338,7 @@ fn notify_test() {
         let proj = Project::new(env!("CARGO_MANIFEST_DIR"));
         let mut accounts = HashMap::new();
         accounts.insert(
-            PrincipalId::new_anonymous(),
+            PrincipalId::new_anonymous().into(),
             ICPTs::from_icpts(100).unwrap(),
         );
 
@@ -338,7 +356,7 @@ fn notify_test() {
                 CandidOne(LedgerCanisterInitPayload {
                     minting_account: CanisterId::try_from(minting_account.get_principal_id())
                         .unwrap()
-                        .get(),
+                        .into(),
                     initial_values: accounts,
                     archive_canister: None,
                     max_message_size_bytes: None,
@@ -349,11 +367,10 @@ fn notify_test() {
         let block_height: BlockHeight = ledger_canister
             .update_(
                 "send",
-                candid_one,
+                protobuf,
                 SendArgs {
                     from_subaccount: None,
-                    to: test_canister.canister_id().get(),
-                    to_subaccount: None,
+                    to: test_canister.canister_id().into(),
                     amount: ICPTs::from_icpts(1).unwrap(),
                     fee: TRANSACTION_FEE,
                     memo: Memo(0),
@@ -370,15 +387,15 @@ fn notify_test() {
             to_subaccount: None,
         };
 
-        let r1: Result<(), String> = ledger_canister
+        let r1: Result<TransactionNotificationResult, String> = ledger_canister
             .update_("notify", candid_one, notify.clone())
             .await;
 
-        let r2: Result<(), String> = ledger_canister
+        let r2: Result<TransactionNotificationResult, String> = ledger_canister
             .update_("notify", candid_one, notify.clone())
             .await;
 
-        let r3: Result<(), String> = ledger_canister
+        let r3: Result<TransactionNotificationResult, String> = ledger_canister
             .update_("notify", candid_one, notify.clone())
             .await;
 
@@ -391,7 +408,8 @@ fn notify_test() {
             ),
             r1
         );
-        assert_eq!(Ok(()), r2);
+
+        assert_eq!(r2.unwrap().decode::<()>(), Ok(()));
 
         // This is vague because it contains stuff like src spans as it's a panic
         assert!(r3
@@ -411,13 +429,13 @@ fn sub_account_test() {
 
         let mut initial_values = HashMap::new();
 
-        let sub_account = |x| Some([x; 32]);
+        let sub_account = |x| Some(Subaccount([x; 32]));
 
         // The principal ID of the test runner
         let us = PrincipalId::new_anonymous();
 
         initial_values.insert(
-            account_identifier(us, sub_account(1)).unwrap(),
+            AccountIdentifier::new(us, sub_account(1)),
             ICPTs::from_icpts(10).unwrap(),
         );
 
@@ -426,7 +444,7 @@ fn sub_account_test() {
             .install_(
                 &r,
                 CandidOne(LedgerCanisterInitPayload {
-                    minting_account: CanisterId::from_u64(0).get(),
+                    minting_account: CanisterId::from_u64(0).into(),
                     initial_values,
                     archive_canister: None,
                     max_message_size_bytes: None,
@@ -438,11 +456,10 @@ fn sub_account_test() {
         let _: BlockHeight = ledger_canister
             .update_(
                 "send",
-                candid_one,
+                protobuf,
                 SendArgs {
                     from_subaccount: sub_account(1),
-                    to: us,
-                    to_subaccount: sub_account(2),
+                    to: AccountIdentifier::new(us, sub_account(2)),
                     amount: ICPTs::from_icpts(1).unwrap(),
                     fee: TRANSACTION_FEE,
                     memo: Memo(0),
@@ -454,10 +471,9 @@ fn sub_account_test() {
         let balance_1 = ledger_canister
             .query_(
                 "account_balance",
-                candid_one,
+                protobuf,
                 AccountBalanceArgs {
-                    account: us,
-                    sub_account: sub_account(1),
+                    account: AccountIdentifier::new(us, sub_account(1)),
                 },
             )
             .await?;
@@ -465,10 +481,9 @@ fn sub_account_test() {
         let balance_2 = ledger_canister
             .query_(
                 "account_balance",
-                candid_one,
+                protobuf,
                 AccountBalanceArgs {
-                    account: us,
-                    sub_account: sub_account(2),
+                    account: AccountIdentifier::new(us, sub_account(2)),
                 },
             )
             .await?;
@@ -501,8 +516,14 @@ fn transaction_test() {
         let acc2_start_amount = 2000;
 
         let mut accounts = HashMap::new();
-        accounts.insert(acc1.get_principal_id(), ICPTs::from_doms(acc1_start_amount));
-        accounts.insert(acc2.get_principal_id(), ICPTs::from_doms(acc2_start_amount));
+        accounts.insert(
+            acc1.get_principal_id().into(),
+            ICPTs::from_doms(acc1_start_amount),
+        );
+        accounts.insert(
+            acc2.get_principal_id().into(),
+            ICPTs::from_doms(acc2_start_amount),
+        );
 
         let ledger = proj
             .cargo_bin("ledger-canister")
@@ -511,7 +532,7 @@ fn transaction_test() {
                 CandidOne(LedgerCanisterInitPayload {
                     minting_account: CanisterId::try_from(minting_account.get_principal_id())
                         .unwrap()
-                        .get(),
+                        .into(),
                     initial_values: accounts,
                     archive_canister: None,
                     max_message_size_bytes: None,
@@ -526,7 +547,7 @@ fn transaction_test() {
         assert_eq!(acc2_balance.get_doms(), acc2_start_amount);
 
         let supply: ICPTs = ledger
-            .query_("total_supply", candid_one, TotalSupplyArgs {})
+            .query_("total_supply", protobuf, TotalSupplyArgs {})
             .await?;
         assert_eq!(supply.get_doms(), acc1_start_amount + acc2_start_amount);
 
@@ -538,7 +559,7 @@ fn transaction_test() {
         assert_eq!(acc1_balance.get_doms(), acc1_start_amount + mint_amount);
 
         let supply: ICPTs = ledger
-            .query_("total_supply", candid_one, TotalSupplyArgs {})
+            .query_("total_supply", protobuf, TotalSupplyArgs {})
             .await?;
         assert_eq!(
             supply.get_doms(),
@@ -593,29 +614,31 @@ fn transaction_test() {
         let minting_canister_balance = query_balance(&ledger, &minting_account).await?;
         assert_eq!(minting_canister_balance.get_doms(), 0);
 
-        let raw_blocks: Vec<RawBlock> = ledger
-            .query_("get_blocks", dfn_candid::candid, (0usize, 100usize))
-            .await?;
+        let blocks: Vec<Block> = {
+            let GetBlocksRes(blocks) = ledger
+                .query_("get_blocks", protobuf, GetBlocksArgs::new(0usize, 100usize))
+                .await?;
+            blocks.iter().map(|rb| rb.decode().unwrap()).collect()
+        };
 
-        let blocks: Vec<Block> = raw_blocks
-            .iter()
-            .map(|rb| Block::decode(&rb).unwrap())
-            .collect();
-
-        let mint_transaction = match blocks.get(blocks.len() - 3).unwrap() {
-            Block::V0(b) => b.transaction.transfer.clone(),
-        };
-        let send_transaction = match blocks.get(blocks.len() - 2).unwrap() {
-            Block::V0(b) => b.transaction.transfer.clone(),
-        };
-        let burn_transaction = match blocks.last().unwrap() {
-            Block::V0(b) => b.transaction.transfer.clone(),
-        };
+        let mint_transaction = blocks
+            .get(blocks.len() - 3)
+            .unwrap()
+            .transaction()
+            .into_owned()
+            .transfer;
+        let send_transaction = blocks
+            .get(blocks.len() - 2)
+            .unwrap()
+            .transaction()
+            .into_owned()
+            .transfer;
+        let burn_transaction = blocks.last().unwrap().transaction().into_owned().transfer;
 
         assert_eq!(
             mint_transaction,
             Transfer::Mint {
-                to: acc1.get_principal_id(),
+                to: acc1.get_principal_id().into(),
                 amount: ICPTs::from_doms(mint_amount)
             }
         );
@@ -623,8 +646,8 @@ fn transaction_test() {
         assert_eq!(
             send_transaction,
             Transfer::Send {
-                from: acc1.get_principal_id(),
-                to: acc2.get_principal_id(),
+                from: acc1.get_principal_id().into(),
+                to: acc2.get_principal_id().into(),
                 amount: ICPTs::from_doms(send_amount),
                 fee: ICPTs::from_doms(send_fee)
             }
@@ -633,7 +656,7 @@ fn transaction_test() {
         assert_eq!(
             burn_transaction,
             Transfer::Burn {
-                from: acc2.get_principal_id(),
+                from: acc2.get_principal_id().into(),
                 amount: ICPTs::from_doms(burn_amount)
             }
         );

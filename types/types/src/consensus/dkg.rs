@@ -147,6 +147,16 @@ impl Summary {
         &self.next_transcripts
     }
 
+    /// Return the set of transcripts (current and next) for all tags.
+    /// This function avoids expensive copying when transcripts are large.
+    pub fn into_transcripts(self) -> Vec<NiDkgTranscript> {
+        self.current_transcripts
+            .into_iter()
+            .chain(self.next_transcripts.into_iter())
+            .map(|(_, t)| t)
+            .collect()
+    }
+
     /// Return the set of next transcripts for all tags. If for some tag
     /// the next transcript is not available, the current transcript is used.
     /// This function avoids expensive copying when transcripts are large.
@@ -454,7 +464,7 @@ impl TryFrom<pb::DkgPayload> for Payload {
             // TODO: Support dealings, although the protobufs are intended
             // mostly for use with cups so this may not be necessary since cups
             // will always have Summary values.
-            _ => Err(String::from("Deserialization of dkg payloads that are not summary blocks is not currently supported"))
+            _ => Err(String::from("Deserialization of DKG payloads that are not summary blocks is currently not supported"))
         }
     }
 }

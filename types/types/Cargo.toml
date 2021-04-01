@@ -25,7 +25,7 @@ maplit = "1.0.2"
 num-traits = "0.2.12"
 once_cell = { git = "https://github.com/dfinity-lab/once_cell", branch = "master" }
 phantom_newtype = { path = "../../phantom_newtype" }
-prost = "0.6"
+prost = "0.7.0"
 serde = { version = "1.0.99", features = ["derive", "rc"] }
 serde_bytes = "0.11"
 serde_cbor = "0.11.1"

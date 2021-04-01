@@ -98,13 +98,12 @@ pub enum NiDkgIdFromProtoError {
 
 impl From<NiDkgIdFromProtoError> for ic_protobuf::proxy::ProxyDecodeError {
     fn from(error: NiDkgIdFromProtoError) -> Self {
-        use prost::DecodeError;
         use NiDkgIdFromProtoError::*;
         match error {
             InvalidPrincipalId(err) => Self::InvalidPrincipalId(Box::new(err)),
-            InvalidDkgTag => Self::DecodeError(DecodeError::new("Invalid DKG tag.")),
+            InvalidDkgTag => Self::Other("Invalid DKG tag.".to_string()),
             InvalidRemoteTargetIdSize(_) => {
-                Self::DecodeError(DecodeError::new("Invalid remote target Id size."))
+                Self::Other("Invalid remote target Id size.".to_string())
             }
         }
     }

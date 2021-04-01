@@ -4,6 +4,7 @@ pub mod cache;
 use super::*;
 use crate::secret_key_store::volatile_store::VolatileSecretKeyStore;
 use ic_crypto_internal_types::sign::threshold_sig::public_key::CspThresholdSigPublicKey;
+use ic_protobuf::crypto::v1::NodePublicKeys;
 use ic_types::crypto::threshold_sig::ni_dkg::config::dealers::NiDkgDealers;
 use ic_types::crypto::threshold_sig::ni_dkg::config::receivers::NiDkgReceivers;
 use ic_types::crypto::threshold_sig::ni_dkg::config::NiDkgThreshold;
@@ -108,7 +109,7 @@ impl MockNetwork {
             .iter_mut()
             .map(|(node_id, node)| {
                 println!("Creating fs keys for {}", node_id);
-                (
+                let (id, (pubkey, pok)) = (
                     *node_id,
                     node.csp
                         .create_forward_secure_key_pair(AlgorithmId::NiDkg_Groth20_Bls12_381)
@@ -117,9 +118,20 @@ impl MockNetwork {
                                 "Failed to create forward secure encryption key for NodeId {}",
                                 node_id
                             )
-                        })
-                        .0,
-                )
+                        }),
+                );
+                let node_pks = NodePublicKeys {
+                    version: 0,
+                    dkg_dealing_encryption_pk: Some(
+                        crate::keygen::utils::dkg_dealing_encryption_pk_to_proto(
+                            pubkey.to_owned(),
+                            pok,
+                        ),
+                    ),
+                    ..Default::default()
+                };
+                node.csp.reset_public_key_data(node_pks);
+                (id, pubkey)
             })
             .collect();
 
@@ -417,22 +429,12 @@ impl StateWithTranscript {
                 .nodes_by_node_id
                 .get_mut(&node_id)
                 .expect("Config refers to a NodeId not in the network");
-            let fs_key = network
-                .forward_secure_keys
-                .get(&node_id)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "Test error: Could not find forward secure key for node {}",
-                        node_id
-                    )
-                });
             node.csp
                 .load_threshold_signing_key(
                     self.config.algorithm_id,
                     self.config.dkg_id,
                     self.config.epoch,
                     self.transcript.clone(),
-                    *fs_key,
                     node_index,
                 )
                 .expect("Failed to load threshold key");

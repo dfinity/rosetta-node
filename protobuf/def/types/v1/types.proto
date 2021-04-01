@@ -39,3 +39,8 @@ enum NiDkgTag {
 	NI_DKG_TAG_LOW_THRESHOLD = 1;
 	NI_DKG_TAG_HIGH_THRESHOLD = 2;
 }
+
+message NominalCycles {
+    uint64 high = 1;
+    uint64 low = 2;
+}

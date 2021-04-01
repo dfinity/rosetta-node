@@ -2,6 +2,8 @@ use super::*;
 use ic_types::crypto::{AlgorithmId, CryptoError};
 use std::convert::TryFrom;
 
+pub mod protobuf;
+
 impl Into<String> for SecretKeyBytes {
     fn into(self) -> String {
         base64::encode(&self.0[..])
@@ -85,6 +87,28 @@ impl Into<String> for SignatureBytes {
         base64::encode(&self.0[..])
     }
 }
+
+impl TryFrom<&Vec<u8>> for SignatureBytes {
+    type Error = CryptoError;
+
+    fn try_from(signature_bytes: &Vec<u8>) -> Result<Self, CryptoError> {
+        if signature_bytes.len() != SignatureBytes::SIZE {
+            return Err(CryptoError::MalformedSignature {
+                algorithm: AlgorithmId::Ed25519,
+                sig_bytes: signature_bytes.clone(),
+                internal_error: format!(
+                    "Incorrect signature length: expected {}, got {}.",
+                    SignatureBytes::SIZE,
+                    signature_bytes.len()
+                ),
+            });
+        }
+        let mut buffer = [0u8; SignatureBytes::SIZE];
+        buffer.copy_from_slice(&signature_bytes);
+        Ok(SignatureBytes(buffer))
+    }
+}
+
 impl TryFrom<&str> for SignatureBytes {
     type Error = CryptoError;
 

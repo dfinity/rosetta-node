@@ -686,7 +686,6 @@ pub trait NiDkgCspClient {
     fn update_forward_secure_epoch(
         &self,
         algorithm_id: AlgorithmId,
-        public_key: CspFsEncryptionPublicKey,
         epoch: Epoch,
     ) -> Result<(), ni_dkg_errors::CspDkgUpdateFsEpochError>;
 
@@ -976,7 +975,6 @@ pub trait NiDkgCspClient {
         dkg_id: NiDkgId,
         epoch: Epoch,
         csp_transcript: CspNiDkgTranscript,
-        public_key: CspFsEncryptionPublicKey,
         receiver_index: NodeIndex,
     ) -> Result<(), ni_dkg_errors::CspDkgLoadPrivateKeyError>;
 

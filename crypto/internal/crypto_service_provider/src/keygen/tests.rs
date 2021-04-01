@@ -198,6 +198,17 @@ mod tls {
     }
 
     #[test]
+    fn should_use_stable_node_id_string_representation_as_subject_cn() {
+        let mut csp = Csp::of(rng(), volatile_key_store());
+
+        let der_cert = csp.gen_tls_key_pair(node_test_id(NODE_1), NOT_AFTER);
+
+        let x509_cert = x509_cert(&der_cert);
+        let subject_cn = cn_entries(&x509_cert).next().unwrap();
+        assert_eq!(b"w43gn-nurca-aaaaa-aaaap-2ai", subject_cn.data().as_slice());
+    }
+
+    #[test]
     fn should_set_cert_issuer_cn_as_node_id() {
         let mut csp = Csp::of(rng(), volatile_key_store());
 
@@ -253,10 +264,6 @@ mod tls {
         assert_ne!(serial_1, serial_3);
     }
 
-    fn serial_number(der_cert: &X509PublicKeyCert) -> BigNum {
-        x509_cert(&der_cert).serial_number().to_bn().unwrap()
-    }
-
     #[test]
     fn should_set_cert_not_after_correctly() {
         let mut csp = Csp::of(rng(), volatile_key_store());
@@ -307,5 +314,9 @@ mod tls {
 
     fn cn_entries(x509_cert: &X509) -> X509NameEntries {
         x509_cert.subject_name().entries_by_nid(Nid::COMMONNAME)
+    }
+
+    fn serial_number(der_cert: &X509PublicKeyCert) -> BigNum {
+        x509_cert(&der_cert).serial_number().to_bn().unwrap()
     }
 }

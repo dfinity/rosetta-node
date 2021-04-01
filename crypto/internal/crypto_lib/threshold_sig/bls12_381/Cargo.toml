@@ -16,7 +16,7 @@ ic-crypto-sha256 = { path = "../../../../sha256" }
 ic-types = { path = "../../../../../types/types" }
 lazy_static = "1.4.0"
 libsecp256k1 = "0.3.5"
-miracl_core = { path = "../../fs_ni_dkg/miracl_core" }
+miracl_core = { version = "4.1.0", package = "miracl_core_bls12381" }
 pairing = "0.15.0"
 rand = "0.7.3"
 rand_chacha = "0.2.2"

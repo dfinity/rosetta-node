@@ -1,57 +1,57 @@
-#[derive(Clone, PartialEq, ::prost::Message)]
 #[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CryptoLogEntry {
     #[prost(message, optional, tag="1")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub trait_name: ::std::option::Option<::std::string::String>,
+    pub trait_name: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(message, optional, tag="2")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub dkg_id: ::std::option::Option<::std::string::String>,
+    pub dkg_id: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(message, optional, tag="3")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub request_id: ::std::option::Option<::std::string::String>,
+    pub request_id: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(message, optional, tag="4")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub public_key: ::std::option::Option<::std::string::String>,
+    pub public_key: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(message, optional, tag="5")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub registry_version: ::std::option::Option<u64>,
+    pub registry_version: ::core::option::Option<u64>,
     #[prost(message, optional, tag="6")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub method_name: ::std::option::Option<::std::string::String>,
+    pub method_name: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(message, optional, tag="7")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: ::std::option::Option<::std::string::String>,
+    pub description: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(message, optional, tag="8")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub is_ok: ::std::option::Option<bool>,
+    pub is_ok: ::core::option::Option<bool>,
     #[prost(message, optional, tag="9")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: ::std::option::Option<::std::string::String>,
+    pub error: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(message, optional, tag="10")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub subnet_id: ::std::option::Option<::std::string::String>,
+    pub subnet_id: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(message, optional, tag="11")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub dkg_config: ::std::option::Option<::std::string::String>,
+    pub dkg_config: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(message, optional, tag="12")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub dkg_dealing: ::std::option::Option<::std::string::String>,
+    pub dkg_dealing: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(message, optional, tag="13")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub dkg_dealer: ::std::option::Option<::std::string::String>,
+    pub dkg_dealer: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(message, optional, tag="14")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub dkg_transcript: ::std::option::Option<::std::string::String>,
+    pub dkg_transcript: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(message, optional, tag="15")]
-    pub signed_bytes: ::std::option::Option<::std::string::String>,
+    pub signed_bytes: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(message, optional, tag="16")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub allowed_tls_clients: ::std::option::Option<::std::string::String>,
+    pub allowed_tls_clients: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(message, optional, tag="17")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tls_server: ::std::option::Option<::std::string::String>,
+    pub tls_server: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(message, optional, tag="18")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub dkg_epoch: ::std::option::Option<u32>,
+    pub dkg_epoch: ::core::option::Option<u32>,
 }

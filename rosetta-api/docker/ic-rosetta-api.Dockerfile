@@ -9,7 +9,7 @@ WORKDIR /var/tmp
 RUN \
   (curl -H "Authorization: token ${GITHUB_TOKEN}" -L https://api.github.com/repos/dfinity-lab/dfinity/tarball/${RELEASE} | tar xz --strip-components=1) && \
   cd rs/rosetta-api && \
-  cargo build --release --package ic-rosetta-api
+  cargo build --release --package ic-rosetta-api --bin ic-rosetta-api
 
 FROM debian:buster-slim
 

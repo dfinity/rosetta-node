@@ -5,10 +5,12 @@ edition = "2018"
 
 [dependencies]
 base64 = "0.11.0"
-ed25519-dalek = "1.0.0-pre.3"
+curve25519-dalek = "3.0.2"
+ed25519-dalek = "1.0.1"
 hex = "0.4.2"
 ic-crypto-internal-types = { path = "../../../crypto_lib/types" }
 ic-crypto-internal-basic-sig-der-utils = { path = "../der_utils" }
+ic-protobuf = { path = "../../../../../protobuf" }
 ic-types = { path = "../../../../../types/types" }
 rand = "0.7.3"
 rand_chacha = "0.2.2"

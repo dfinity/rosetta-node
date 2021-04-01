@@ -15,9 +15,9 @@ use std::convert::TryFrom;
 use strum_macros::EnumIter;
 
 pub mod config;
-pub mod current_and_next_transcripts;
 pub mod errors;
 pub mod id;
+pub mod transcripts_to_retain;
 
 use ic_crypto_internal_types::sign::threshold_sig::public_coefficients::CspPublicCoefficients;
 pub use id::NiDkgId;

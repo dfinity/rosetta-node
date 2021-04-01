@@ -13,17 +13,17 @@ use crate::{
 pub use blob::Blob;
 pub use http::{
     validate_ingress_expiry, Authentication, Certificate, CertificateDelegation, Delegation,
-    HttpCanisterUpdate, HttpQueryResponse, HttpQueryResponseReply, HttpReadContent, HttpReadState,
-    HttpReadStateResponse, HttpReply, HttpRequest, HttpRequestContent, HttpRequestEnvelope,
-    HttpResponseStatus, HttpStatusResponse, HttpSubmitContent, HttpUserQuery, RawHttpRequestVal,
-    ReadContent, SignedDelegation,
+    HasCanisterId, HttpCanisterUpdate, HttpQueryResponse, HttpQueryResponseReply, HttpReadContent,
+    HttpReadState, HttpReadStateResponse, HttpReply, HttpRequest, HttpRequestContent,
+    HttpRequestEnvelope, HttpResponseStatus, HttpStatusResponse, HttpSubmitContent, HttpUserQuery,
+    RawHttpRequestVal, ReadContent, SignedDelegation,
 };
 pub use ic_base_types::CanisterInstallMode;
 use ic_base_types::{CanisterId, CanisterIdError, PrincipalId};
 use ic_protobuf::proxy::{try_from_option_field, ProxyDecodeError};
 use ic_protobuf::state::canister_state_bits::v1 as pb;
 use ic_protobuf::types::v1 as pb_types;
-pub use ingress_messages::{Ingress, SignedIngress};
+pub use ingress_messages::{Ingress, SignedIngress, SignedIngressContent};
 pub use inter_canister::{
     CallContextId, CallbackId, Payload, RejectContext, Request, RequestOrResponse, Response,
 };
@@ -418,7 +418,7 @@ mod tests {
             sender_sig: Some(Blob(vec![1; 32])),
             sender_delegation: None,
         };
-        let signed_ingress = SignedIngress::from(HttpRequest::try_from(update).unwrap());
+        let signed_ingress = HttpRequest::try_from(update).unwrap();
         let bytes = bincode::serialize(&signed_ingress).unwrap();
         let signed_ingress1 = bincode::deserialize::<SignedIngress>(&bytes);
         assert!(signed_ingress1.is_ok());
@@ -442,7 +442,7 @@ mod tests {
             sender_sig: None,
             sender_delegation: None,
         };
-        let signed_ingress = SignedIngress::from(HttpRequest::try_from(update).unwrap());
+        let signed_ingress = HttpRequest::try_from(update).unwrap();
         let bytes = bincode::serialize(&signed_ingress).unwrap();
         let mut buffer = Cursor::new(&bytes);
         let signed_ingress1: SignedIngress = bincode::deserialize_from(&mut buffer).unwrap();

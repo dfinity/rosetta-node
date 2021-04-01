@@ -208,7 +208,11 @@ impl ProtoSecretKeyStore {
         let unix_permission_bits = permissions.mode();
         let non_user_permissions = unix_permission_bits & 0o77;
         if non_user_permissions != 0 {
-            panic!("Permissions too open for path {}", &path.display());
+            panic!(
+                "crypto keystore path {} has permissions {:#o}, allowing reading by others",
+                &path.display(),
+                unix_permission_bits
+            );
         }
     }
 }

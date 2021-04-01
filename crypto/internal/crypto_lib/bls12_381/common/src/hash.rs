@@ -72,8 +72,8 @@ fn hash_to_g1_miracl(dst: &[u8], msg: &[u8]) -> G1 {
 }
 
 // Conversions to and from Miracl
-// TODO: Maybe a standard serialisation of miracl types.  Note the three flag
-// bits in the standard encoding, two in miracl.
+// TODO(CRP-811): Maybe a standard serialisation of miracl types.  Note the
+// three flag bits in the standard encoding, two in miracl.
 pub fn g1_from_miracl(p: &miracl_core::bls12381::ecp::ECP) -> G1 {
     // MIRACL: 1-byte tag <> 48-byte x-coord <> 48-byte y-coord
     // Serialize without compression.

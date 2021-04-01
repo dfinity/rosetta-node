@@ -123,7 +123,7 @@ pub fn create_dealing(
 pub fn verify_dealing(
     _dkg_id: NiDkgId,
     threshold: NumberOfNodes,
-    _epoch: Epoch,
+    epoch: Epoch,
     receiver_keys: &BTreeMap<NodeIndex, FsEncryptionPublicKey>,
     dealing: &Dealing,
 ) -> Result<(), CspDkgVerifyDealingError> {
@@ -137,6 +137,7 @@ pub fn verify_dealing(
     verify_public_coefficients_match_threshold(dealing, threshold)
         .map_err(CspDkgVerifyDealingError::InvalidDealingError)?;
     verify_zk_proofs(
+        epoch,
         receiver_keys,
         &dealing.public_coefficients,
         &dealing.ciphertexts,

@@ -7,7 +7,9 @@ use crate::{
     messaging::{InvalidXNetPayload, XNetPayloadValidationError, XNetTransientValidationError},
     validation::ValidationError,
 };
-use ic_types::artifact::{ConsensusArtifact, ConsensusMessageFilter, PriorityFn};
+use ic_types::artifact::{
+    ConsensusMessageAttribute, ConsensusMessageFilter, ConsensusMessageId, PriorityFn,
+};
 
 /// Consensus artifact processing interface.
 pub trait Consensus: Send {
@@ -38,7 +40,7 @@ pub trait ConsensusGossip: Send + Sync {
     fn get_priority_function(
         &self,
         consensus_pool: &dyn ConsensusPool,
-    ) -> PriorityFn<ConsensusArtifact>;
+    ) -> PriorityFn<ConsensusMessageId, ConsensusMessageAttribute>;
 
     /// Return a filter that represents what artifacts are needed.
     fn get_filter(&self) -> ConsensusMessageFilter;

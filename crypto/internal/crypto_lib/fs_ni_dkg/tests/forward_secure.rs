@@ -53,7 +53,7 @@ fn encrypted_chunks_should_decrypt(epoch: u32) {
     let sij: Vec<_> = (0..keys.len())
         .map(|receiver_index| {
             let chunk =
-                (receiver_index | (receiver_index << 8) | 0xF0F0F0F0) % (CHUNK_SIZE as usize);
+                (receiver_index | (receiver_index << 8) | 0x0FF00FF0) % (CHUNK_SIZE as usize);
             vec![chunk as isize; NUM_CHUNKS]
         })
         .collect();

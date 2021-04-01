@@ -20,13 +20,13 @@ impl From<SecretKey> for SecretKeyBytes {
     }
 }
 
-impl TryInto<PublicKey> for PublicKeyBytes {
+impl TryFrom<PublicKeyBytes> for PublicKey {
     type Error = CryptoError;
 
-    fn try_into(self) -> Result<PublicKey, CryptoError> {
-        bls::g2_from_bytes(&self.0).map_err(|e| CryptoError::MalformedPublicKey {
+    fn try_from(public_key_bytes: PublicKeyBytes) -> Result<Self, Self::Error> {
+        bls::g2_from_bytes(&public_key_bytes.0).map_err(|e| CryptoError::MalformedPublicKey {
             algorithm: AlgorithmId::MultiBls12_381,
-            key_bytes: Some(self.0.to_vec()),
+            key_bytes: Some(public_key_bytes.0.to_vec()),
             internal_error: e.to_string(),
         })
     }

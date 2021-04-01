@@ -179,3 +179,30 @@ mod tls_keygen {
         }
     }
 }
+
+pub mod utils {
+    use ic_crypto_internal_types::encrypt::forward_secure::{
+        CspFsEncryptionPok, CspFsEncryptionPublicKey,
+    };
+    use ic_protobuf::registry::crypto::v1::AlgorithmId as AlgorithmIdProto;
+    use ic_protobuf::registry::crypto::v1::PublicKey as PublicKeyProto;
+
+    pub fn dkg_dealing_encryption_pk_to_proto(
+        pk: CspFsEncryptionPublicKey,
+        pok: CspFsEncryptionPok,
+    ) -> PublicKeyProto {
+        match (pk, pok) {
+            (
+                CspFsEncryptionPublicKey::Groth20_Bls12_381(fs_enc_pk),
+                CspFsEncryptionPok::Groth20_Bls12_381(_),
+            ) => PublicKeyProto {
+                algorithm: AlgorithmIdProto::Groth20Bls12381 as i32,
+                key_value: fs_enc_pk.as_bytes().to_vec(),
+                version: 0,
+                proof_data: Some(serde_cbor::to_vec(&pok).expect(
+                    "Failed to serialize DKG dealing encryption key proof of knowledge (PoK) to CBOR",
+                )),
+            },
+        }
+    }
+}

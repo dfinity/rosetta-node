@@ -14,14 +14,10 @@
 /// All Artifact sub-types must also implement ChunkableArtifact trait defined
 /// in the chunkable crate.
 use crate::{
-    consensus::{
-        certification::{CertificationMessage, CertificationMessageHash},
-        dkg::Message as DkgMessage,
-        ConsensusMessage, ConsensusMessageAttribute, ConsensusMessageHash,
-    },
+    consensus::{certification::CertificationMessageHash, ConsensusMessageHash},
     crypto::{CryptoHash, CryptoHashOf},
     filetree_sync::{FileTreeSyncArtifact, FileTreeSyncId},
-    messages::{MessageId, SignedIngress},
+    messages::MessageId,
     p2p::GossipAdvert,
     CryptoHashOfState, Height, Time,
 };
@@ -31,6 +27,14 @@ use ic_protobuf::proxy::{try_from_option_field, ProxyDecodeError};
 use serde::{Deserialize, Serialize};
 use std::convert::{TryFrom, TryInto};
 use strum_macros::EnumIter;
+
+pub use crate::{
+    consensus::{
+        certification::CertificationMessage, dkg::Message as DkgMessage, ConsensusMessage,
+        ConsensusMessageAttribute,
+    },
+    messages::SignedIngress,
+};
 
 /// The artifact type
 #[derive(From, TryInto, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -162,12 +166,9 @@ pub enum Priority {
 }
 
 /// Priority function used by the artifact manager clients
-pub type PriorityFn<Kind> = Box<
-    dyn Fn(&<Kind as ArtifactKind>::Id, &<Kind as ArtifactKind>::Attribute) -> Priority
-        + Send
-        + Sync
-        + 'static,
->;
+pub type PriorityFn<Id, Attribute> =
+    Box<dyn Fn(&Id, &Attribute) -> Priority + Send + Sync + 'static>;
+
 pub type GenericPriorityFn =
     Box<dyn Fn(&ArtifactId, &ArtifactAttribute) -> Priority + Send + Sync + 'static>;
 
@@ -183,6 +184,26 @@ pub trait ArtifactKind: Sized {
     type Message: Unpin;
     type Attribute;
     type Filter: Default;
+
+    /// Return the advert of the given message.
+    fn to_advert(msg: &<Self as ArtifactKind>::Message) -> Advert<Self>;
+
+    /// Check if the given advert matches what is computed from the message.
+    /// Returns the advert derived from artifact on mismatch.
+    fn check_advert(
+        msg: &<Self as ArtifactKind>::Message,
+        advert: &Advert<Self>,
+    ) -> Result<(), Advert<Self>>
+    where
+        Advert<Self>: Eq,
+    {
+        let computed = Self::to_advert(msg);
+        if advert == &computed {
+            Ok(())
+        } else {
+            Err(computed)
+        }
+    }
 }
 
 /// A helper type that represents a type-indexed Advert.
@@ -257,10 +278,6 @@ where
 // -----------------------------------------------------------------------------
 // Consensus artifacts
 
-/// The `ArtifactKind` of consensus messages.
-#[derive(Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct ConsensusArtifact;
-
 /// Consensus message identifier carries both an message hash and a height,
 /// which is used by the consensus pool to help lookup.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -275,20 +292,8 @@ pub struct ConsensusMessageFilter {
     pub height: Height,
 }
 
-impl ArtifactKind for ConsensusArtifact {
-    const TAG: ArtifactTag = ArtifactTag::ConsensusArtifact;
-    type Id = ConsensusMessageId;
-    type Message = ConsensusMessage;
-    type Attribute = ConsensusMessageAttribute;
-    type Filter = ConsensusMessageFilter;
-}
-
 // -----------------------------------------------------------------------------
 // Ingress artifacts
-
-/// The `ArtifactKind` of ingress message.
-#[derive(Clone, Copy, Eq, PartialEq)]
-pub struct IngressArtifact;
 
 /// IngressMessageId includes expiry time in addition to MessageId.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -353,20 +358,8 @@ impl IngressMessageAttribute {
 /// The notion of "not expired" is with respect to the local time source.
 pub type IngressMessageFilter = Option<Time>;
 
-impl ArtifactKind for IngressArtifact {
-    const TAG: ArtifactTag = ArtifactTag::IngressArtifact;
-    type Id = IngressMessageId;
-    type Message = SignedIngress;
-    type Attribute = IngressMessageAttribute;
-    type Filter = IngressMessageFilter;
-}
-
 // -----------------------------------------------------------------------------
 // Certification artifacts
-
-/// The `ArtifactKind` of certification messages.
-#[derive(Clone, Copy, Eq, PartialEq)]
-pub struct CertificationArtifact;
 
 /// Certification message identifier carries both message hash and a height,
 /// which is used by the certification pool to help lookup.
@@ -389,33 +382,14 @@ pub struct CertificationMessageFilter {
     pub height: Height,
 }
 
-impl ArtifactKind for CertificationArtifact {
-    const TAG: ArtifactTag = ArtifactTag::CertificationArtifact;
-    type Id = CertificationMessageId;
-    type Message = CertificationMessage;
-    type Attribute = CertificationMessageAttribute;
-    type Filter = CertificationMessageFilter;
-}
-
 // -----------------------------------------------------------------------------
 // DKG artifacts
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-pub struct DkgArtifact;
 
 pub type DkgMessageId = CryptoHashOf<DkgMessage>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DkgMessageAttribute {
     pub interval_start_height: Height,
-}
-
-impl ArtifactKind for DkgArtifact {
-    const TAG: ArtifactTag = ArtifactTag::DkgArtifact;
-    type Id = DkgMessageId;
-    type Message = DkgMessage;
-    type Attribute = DkgMessageAttribute;
-    type Filter = ();
 }
 
 // ------------------------------------------------------------------------------
@@ -469,9 +443,6 @@ impl std::hash::Hash for StateSyncMessage {
     }
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub struct StateSyncArtifact;
-
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct StateSyncAttribute {
     pub height: Height,
@@ -485,14 +456,6 @@ pub struct StateSyncAttribute {
 #[derive(Default, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct StateSyncFilter {
     pub height: Height,
-}
-
-impl ArtifactKind for StateSyncArtifact {
-    const TAG: ArtifactTag = ArtifactTag::StateSyncArtifact;
-    type Id = StateSyncArtifactId;
-    type Message = StateSyncMessage;
-    type Attribute = StateSyncAttribute;
-    type Filter = StateSyncFilter;
 }
 
 // ------------------------------------------------------------------------------

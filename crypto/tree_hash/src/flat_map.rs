@@ -2,7 +2,10 @@ use serde::de::{Deserialize, Deserializer, MapAccess, Visitor};
 use serde::ser::Serializer;
 use serde::Serialize;
 use std::fmt;
-use std::iter::Iterator;
+use std::iter::{DoubleEndedIterator, Iterator};
+
+#[cfg(test)]
+mod tests;
 
 /// Create a FlatMap from a list of key => value pairs.
 ///
@@ -31,7 +34,7 @@ macro_rules! flatmap {
     };
 }
 
-/// An implementation of a sorted map that with fast lookups and appends.
+/// An implementation of a sorted map with fast lookups and appends.
 ///
 /// It stores keys and values in vectors.
 ///
@@ -160,7 +163,7 @@ impl<K: Ord, V> FlatMap<K, V> {
     }
 
     /// Returns an iterator over key-value pairs.
-    pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = (&K, &V)> {
         (0..self.len()).map(move |i| (&self.keys[i], &self.values[i]))
     }
 
@@ -184,6 +187,16 @@ impl<K: Ord, V> FlatMap<K, V> {
     pub fn len(&self) -> usize {
         self.keys.len()
     }
+
+    /// Splits the collection into two at the given key. Returns everything
+    /// after the given key, including the key if present.
+    pub fn split_off(&mut self, key: &K) -> Self {
+        let at = self.keys.binary_search(key).unwrap_or_else(|at| at);
+        Self {
+            keys: self.keys.split_off(at),
+            values: self.values.split_off(at),
+        }
+    }
 }
 
 pub struct IntoIter<K, V> {
@@ -197,6 +210,14 @@ impl<K, V> std::iter::Iterator for IntoIter<K, V> {
     fn next(&mut self) -> Option<(K, V)> {
         let k = self.keys.next()?;
         let v = self.values.next()?;
+        Some((k, v))
+    }
+}
+
+impl<K, V> std::iter::DoubleEndedIterator for IntoIter<K, V> {
+    fn next_back(&mut self) -> Option<(K, V)> {
+        let k = self.keys.next_back()?;
+        let v = self.values.next_back()?;
         Some((k, v))
     }
 }

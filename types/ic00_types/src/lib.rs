@@ -97,7 +97,7 @@ impl CanisterStatusResult {
         module_hash: Option<Vec<u8>>,
         controller: PrincipalId,
         memory_size: NumBytes,
-        cycles: u64,
+        cycles: u128,
     ) -> Self {
         Self {
             status,
@@ -127,8 +127,8 @@ impl CanisterStatusResult {
         NumBytes::from(self.memory_size.0.to_u64().unwrap())
     }
 
-    pub fn cycles(&self) -> u64 {
-        self.cycles.0.to_u64().unwrap()
+    pub fn cycles(&self) -> u128 {
+        self.cycles.0.to_u128().unwrap()
     }
 }
 
@@ -144,6 +144,41 @@ pub struct InstallCodeArgs {
     pub compute_allocation: Option<candid::Nat>,
     pub memory_allocation: Option<candid::Nat>,
     pub query_allocation: Option<candid::Nat>,
+}
+
+impl std::fmt::Display for InstallCodeArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "InstallCodeArgs {{")?;
+        writeln!(f, "  mode: {:?}", &self.mode)?;
+        writeln!(f, "  canister_id: {:?}", &self.canister_id)?;
+        writeln!(f, "  wasm_module: <{:?} bytes>", self.wasm_module.len())?;
+        writeln!(f, "  arg: <{:?} bytes>", self.arg.len())?;
+        writeln!(
+            f,
+            "  compute_allocation: {:?}",
+            &self
+                .compute_allocation
+                .as_ref()
+                .map(|value| format!("{}", value))
+        )?;
+        writeln!(
+            f,
+            "  memory_allocation: {:?}",
+            &self
+                .memory_allocation
+                .as_ref()
+                .map(|value| format!("{}", value))
+        )?;
+        writeln!(
+            f,
+            "  query_allocation: {:?}",
+            &self
+                .query_allocation
+                .as_ref()
+                .map(|value| format!("{}", value))
+        )?;
+        writeln!(f, "}}")
+    }
 }
 
 impl Payload<'_> for InstallCodeArgs {}

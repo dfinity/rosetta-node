@@ -12,6 +12,12 @@ pub type FlowTag = Id<FlowTagType, u32>;
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TransportPayload(#[serde(with = "serde_bytes")] pub Vec<u8>);
 
+#[derive(Debug)]
+pub enum TransportNotification {
+    TransportStateChange(TransportStateChange),
+    TransportError(TransportError),
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Bytes(#[serde(with = "serde_bytes")] pub Vec<u8>);
 
@@ -25,7 +31,7 @@ pub enum TransportClientType {
 }
 
 /// FlowId is the unique key for the flows being managed
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FlowId {
     /// Client type
     pub client_type: TransportClientType,
@@ -67,6 +73,11 @@ pub enum TransportStateChange {
 
     /// Peer flow went down
     PeerFlowDown(TransportFlowInfo),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum TransportError {
+    TransportSendError(TransportFlowInfo),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -273,6 +284,9 @@ pub enum TransportErrorCode {
     /// Failed to configure the client side TLS connector
     ConnectorConfigFailed,
 
+    /// Received an error from sender
+    SenderErrorIndicated,
+
     /// Failed to get socket address
     InvalidSockAddr,
 
@@ -281,6 +295,8 @@ pub enum TransportErrorCode {
 
     /// Missing connection endpoint in NodeRecord
     NodeRecordMissingConnectionEndpoint,
+
+    TimeoutExpired,
 }
 
 impl FlowId {

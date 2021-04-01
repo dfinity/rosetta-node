@@ -3,7 +3,7 @@ use dfn_core::println;
 use dfn_core::{api::id, over, over_may_reject};
 use ic_base_types::PrincipalId;
 use lazy_static::lazy_static;
-use ledger_canister::{ICPTs, Memo, TransactionNotification};
+use ledger_canister::{ICPTs, Memo, TransactionNotification, TransactionNotificationResult};
 use std::sync::RwLock;
 
 // This is a canister that gets notified
@@ -13,7 +13,9 @@ lazy_static! {
 
 #[export_name = "canister_update transaction_notification"]
 fn transaction_notification_() {
-    fn transaction_notification(tn: TransactionNotification) -> Result<(), String> {
+    fn transaction_notification(
+        tn: TransactionNotification,
+    ) -> Result<TransactionNotificationResult, String> {
         let count = *COUNTER.read().unwrap();
         let res = match count {
             0 => {
@@ -21,7 +23,7 @@ fn transaction_notification_() {
                 Err("Rejected".to_string())
             }
             // Succeeds
-            1 => Ok(()),
+            1 => Ok(TransactionNotificationResult::encode(()).unwrap()),
             _ => Err("This should not be called a third time".to_string()),
         };
         let expected_tn = TransactionNotification {

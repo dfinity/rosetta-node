@@ -11,4 +11,4 @@ hex = "0.4.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 cvt = "0.1.1"
-libc = "0.2.74"
+libc = "0.2.91"

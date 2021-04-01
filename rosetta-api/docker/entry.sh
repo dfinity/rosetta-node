@@ -10,7 +10,7 @@ dfx start \
     --host 0.0.0.0:8000
 
 dfx deploy \
-    --argument "record { minting_account = principal \"$(dfx identity get-principal)\"; initial_values = vec { record { principal \"qnooh-7ujws-a4bd3-ghlod-k3mz6-zsrba-xiiqe-dalex-3ja2a-ktqte-iae\"; record { doms = 18446744073709551615 } } }; archive_canister = null; max_message_size_bytes = null}" \
+    --argument "record { minting_account = \"807077e900000000000000000000000000000000000000000000000000000000\"; initial_values = vec { record { \"ea7161aa15fd1f1ab8ead80c5f2556a449b42eeadbb7be94d450df1ec1ecf0cd\"; record { doms = 18446744073709551615 } } }; archive_canister = null; max_message_size_bytes = null}" \
     --network=local \
     ledger
 

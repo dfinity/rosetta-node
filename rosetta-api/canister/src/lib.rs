@@ -1,11 +1,14 @@
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use candid::CandidType;
+use dfn_candid::CandidOne;
+use dfn_protobuf::ProtoBuf;
 use ic_crypto_sha256::Sha256;
 use ic_types::{CanisterId, PrincipalId};
 use intmap::IntMap;
 use lazy_static::lazy_static;
+use on_wire::{FromWire, IntoWire, NewType};
 use phantom_newtype::Id;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::convert::TryFrom;
@@ -16,16 +19,20 @@ use std::marker::PhantomData;
 use std::str::FromStr;
 use std::sync::RwLock;
 
+mod account_identifier;
 mod icpts;
+#[path = "../gen/ic_ledger.pb.types.v1.rs"]
+#[rustfmt::skip]
+pub mod protobuf;
 mod timestamp;
+mod validate_endpoints;
 
 pub mod spawn;
+pub use account_identifier::{AccountIdentifier, Subaccount};
 pub use icpts::{ICPTs, DECIMAL_PLACES, ICP_SUBDIVIDABLE_BY, MIN_BURN_AMOUNT, TRANSACTION_FEE};
 pub use timestamp::Timestamp;
 
-pub type RawBlock = Box<[u8]>;
-
-const HASH_LENGTH: usize = 32;
+pub const HASH_LENGTH: usize = 32;
 
 #[derive(CandidType, Clone, Hash, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct HashOf<T> {
@@ -130,16 +137,30 @@ impl<'de, T> Deserialize<'de> for HashOf<T> {
     }
 }
 
-pub trait Serializable: Sized {
-    fn encode(&self) -> Box<[u8]>;
+#[derive(Serialize, Deserialize, CandidType, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(transparent)]
+pub struct EncodedBlock(pub Box<[u8]>);
 
-    fn decode(bytes: &[u8]) -> Result<Self, String>;
+impl From<Box<[u8]>> for EncodedBlock {
+    fn from(bytes: Box<[u8]>) -> Self {
+        Self(bytes)
+    }
+}
 
-    fn hash(&self) -> HashOf<Self> {
-        let bytes = self.encode();
+impl EncodedBlock {
+    pub fn hash(&self) -> HashOf<Self> {
         let mut state = Sha256::new();
-        state.write(&bytes);
+        state.write(&self.0);
         HashOf::new(state.finish())
+    }
+
+    pub fn decode(&self) -> Result<Block, String> {
+        let bytes = self.0.to_vec();
+        Ok(ProtoBuf::from_bytes(bytes)?.get())
+    }
+
+    pub fn size_bytes(&self) -> usize {
+        self.0.len()
     }
 }
 
@@ -155,35 +176,33 @@ impl Default for Memo {
 }
 
 /// Position of a block in the chain. The first block has position 0.
-// FIXME: Rename to ChainLength or BlockIndex or ...?
 pub type BlockHeight = u64;
 
-// This type will change when we implement certification
-pub type Certification = u64;
+pub type Certification = Option<Vec<u8>>;
 
-pub type LedgerBalances = Balances<HashMap<PrincipalId, ICPTs>>;
+pub type LedgerBalances = Balances<HashMap<AccountIdentifier, ICPTs>>;
 
 pub trait BalancesStore {
-    fn get_balance(&self, k: &PrincipalId) -> Option<&ICPTs>;
-    fn get_balance_mut(&mut self, k: &PrincipalId) -> Option<&mut ICPTs>;
-    fn get_create_balance(&mut self, k: PrincipalId) -> &mut ICPTs;
-    fn remove_account(&mut self, k: &PrincipalId) -> Option<ICPTs>;
+    fn get_balance(&self, k: &AccountIdentifier) -> Option<&ICPTs>;
+    fn get_balance_mut(&mut self, k: &AccountIdentifier) -> Option<&mut ICPTs>;
+    fn get_create_balance(&mut self, k: AccountIdentifier) -> &mut ICPTs;
+    fn remove_account(&mut self, k: &AccountIdentifier) -> Option<ICPTs>;
 }
 
-impl BalancesStore for HashMap<PrincipalId, ICPTs> {
-    fn get_balance(&self, k: &PrincipalId) -> Option<&ICPTs> {
+impl BalancesStore for HashMap<AccountIdentifier, ICPTs> {
+    fn get_balance(&self, k: &AccountIdentifier) -> Option<&ICPTs> {
         self.get(k)
     }
 
-    fn get_balance_mut(&mut self, k: &PrincipalId) -> Option<&mut ICPTs> {
+    fn get_balance_mut(&mut self, k: &AccountIdentifier) -> Option<&mut ICPTs> {
         self.get_mut(k)
     }
 
-    fn get_create_balance(&mut self, k: PrincipalId) -> &mut ICPTs {
+    fn get_create_balance(&mut self, k: AccountIdentifier) -> &mut ICPTs {
         self.entry(k).or_insert(ICPTs::ZERO)
     }
 
-    fn remove_account(&mut self, k: &PrincipalId) -> Option<ICPTs> {
+    fn remove_account(&mut self, k: &AccountIdentifier) -> Option<ICPTs> {
         self.remove(k)
     }
 }
@@ -237,7 +256,7 @@ impl<S: Default + BalancesStore> Balances<S> {
 
     // Debiting an account will automatically remove it from the `inner`
     // HashMap if the balance reaches zero.
-    pub fn debit(&mut self, from: &PrincipalId, amount: ICPTs) {
+    pub fn debit(&mut self, from: &AccountIdentifier, amount: ICPTs) {
         let balance = self
             .store
             .get_balance_mut(from)
@@ -258,12 +277,12 @@ impl<S: Default + BalancesStore> Balances<S> {
 
     // Crediting an account will automatically add it to the `inner` HashMap if
     // not already present.
-    pub fn credit(&mut self, to: &PrincipalId, amount: ICPTs) {
+    pub fn credit(&mut self, to: &AccountIdentifier, amount: ICPTs) {
         let balance = self.store.get_create_balance(*to);
         *balance += amount;
     }
 
-    pub fn account_balance(&self, account: &PrincipalId) -> ICPTs {
+    pub fn account_balance(&self, account: &AccountIdentifier) -> ICPTs {
         self.store
             .get_balance(account)
             .cloned()
@@ -286,8 +305,8 @@ impl<S: Default + BalancesStore> Balances<S> {
 impl LedgerBalances {
     // Find the specified number of accounts with lowest balances so that their
     // balances can be reclaimed.
-    fn select_accounts_to_trim(&mut self, num_accounts: usize) -> Vec<(ICPTs, PrincipalId)> {
-        let mut to_trim: std::collections::BinaryHeap<(ICPTs, PrincipalId)> =
+    fn select_accounts_to_trim(&mut self, num_accounts: usize) -> Vec<(ICPTs, AccountIdentifier)> {
+        let mut to_trim: std::collections::BinaryHeap<(ICPTs, AccountIdentifier)> =
             std::collections::BinaryHeap::new();
 
         let mut iter = self.store.iter();
@@ -316,16 +335,16 @@ impl LedgerBalances {
 #[derive(Serialize, Deserialize, CandidType, Clone, Hash, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Transfer {
     Burn {
-        from: PrincipalId,
+        from: AccountIdentifier,
         amount: ICPTs,
     },
     Mint {
-        to: PrincipalId,
+        to: AccountIdentifier,
         amount: ICPTs,
     },
     Send {
-        from: PrincipalId,
-        to: PrincipalId,
+        from: AccountIdentifier,
+        to: AccountIdentifier,
         amount: ICPTs,
         fee: ICPTs,
     },
@@ -350,8 +369,8 @@ pub struct Transaction {
 
 impl Transaction {
     pub fn new(
-        from: PrincipalId,
-        to: PrincipalId,
+        from: AccountIdentifier,
+        to: AccountIdentifier,
         amount: ICPTs,
         fee: ICPTs,
         memo: Memo,
@@ -369,116 +388,25 @@ impl Transaction {
             created_at,
         }
     }
-}
 
-impl Serializable for Transaction {
-    fn encode(&self) -> Box<[u8]> {
-        // FIXME: Should transactions have a version header, since
-        // blocks already have one?
-        serde_cbor::ser::to_vec_packed(&self).unwrap().into()
-    }
-
-    fn decode(bytes: &[u8]) -> Result<Self, String> {
-        let mut deserializer = serde_cbor::Deserializer::from_slice(bytes);
-
-        serde::de::Deserialize::deserialize(&mut deserializer).map_err(|err| {
-            format!(
-                "Unable to decode bytes into a {}: {}",
-                std::any::type_name::<Self>(),
-                err
-            )
-        })
+    pub fn hash(&self) -> HashOf<Self> {
+        let mut state = Sha256::new();
+        state.write(&serde_cbor::ser::to_vec_packed(&self).unwrap());
+        HashOf::new(state.finish())
     }
 }
 
-/// Abstract block type, wrapping the current and previous block
-/// formats.
-#[derive(CandidType, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum Block {
-    V0(BlockV0),
-}
-
-impl Block {
-    pub fn new(
-        parent_hash: Option<HashOf<Block>>,
-        transfer: Transfer,
-        memo: Memo,
-        created_at: BlockHeight,
-        timestamp: Timestamp,
-    ) -> Result<Self, String> {
-        Ok(Self::V0(BlockV0::new(
-            parent_hash,
-            transfer,
-            memo,
-            created_at,
-            timestamp,
-        )?))
-    }
-
-    pub fn new_from_transaction(
-        parent_hash: Option<HashOf<Block>>,
-        transaction: Transaction,
-        timestamp: Timestamp,
-    ) -> Self {
-        Self::V0(BlockV0::new_from_transaction(
-            parent_hash,
-            transaction,
-            timestamp,
-        ))
-    }
-
-    pub fn parent_hash(&self) -> Option<HashOf<Block>> {
-        match self {
-            Self::V0(b) => b.parent_hash,
-        }
-    }
-
-    pub fn transaction(&self) -> Cow<Transaction> {
-        match self {
-            Self::V0(b) => Cow::Borrowed(&b.transaction),
-        }
-    }
-
-    pub fn timestamp(&self) -> Timestamp {
-        match self {
-            Self::V0(b) => b.timestamp,
-        }
-    }
-}
-
-impl Serializable for Block {
-    fn encode(&self) -> Box<[u8]> {
-        match self {
-            Self::V0(b) => b.encode(),
-        }
-    }
-
-    fn decode(bytes: &[u8]) -> Result<Self, String> {
-        let mut rdr = std::io::Cursor::new(bytes);
-        let version = rdr.read_u32::<LittleEndian>().unwrap();
-
-        match version {
-            BlockV0::VERSION => Ok(Self::V0(BlockV0::decode(bytes)?)),
-            _ => Err(format!(
-                "Cannot decode block with unknown version {}.",
-                version
-            )),
-        }
-    }
-}
-
-/// A transaction with the metadata the canister generated attached to it
-#[derive(CandidType, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
-pub struct BlockV0 {
-    pub parent_hash: Option<HashOf<Block>>,
+#[derive(CandidType, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct Block {
+    pub parent_hash: Option<HashOf<EncodedBlock>>,
     pub transaction: Transaction,
     /// Nanoseconds since the Unix epoch.
     pub timestamp: Timestamp,
 }
 
-impl BlockV0 {
+impl Block {
     pub fn new(
-        parent_hash: Option<HashOf<Block>>,
+        parent_hash: Option<HashOf<EncodedBlock>>,
         transfer: Transfer,
         memo: Memo,
         created_at: BlockHeight,
@@ -497,7 +425,7 @@ impl BlockV0 {
     }
 
     pub fn new_from_transaction(
-        parent_hash: Option<HashOf<Block>>,
+        parent_hash: Option<HashOf<EncodedBlock>>,
         transaction: Transaction,
         timestamp: Timestamp,
     ) -> Self {
@@ -508,43 +436,29 @@ impl BlockV0 {
         }
     }
 
-    const VERSION: u32 = 0x314b4c42; // == 'BLK1'
-}
-
-impl Serializable for BlockV0 {
-    fn encode(&self) -> Box<[u8]> {
-        let mut bytes = Vec::new();
-        bytes.write_u32::<LittleEndian>(Self::VERSION).unwrap();
-        bytes.append(&mut serde_cbor::ser::to_vec_packed(&self).unwrap());
-        bytes.into()
+    pub fn encode(self) -> Result<EncodedBlock, String> {
+        let slice = ProtoBuf::new(self).into_bytes()?.into_boxed_slice();
+        Ok(EncodedBlock(slice))
     }
 
-    fn decode(bytes: &[u8]) -> Result<Self, String> {
-        let mut rdr = std::io::Cursor::new(bytes);
-        let version = rdr.read_u32::<LittleEndian>().unwrap();
+    pub fn parent_hash(&self) -> Option<HashOf<EncodedBlock>> {
+        self.parent_hash
+    }
 
-        if version != Self::VERSION {
-            return Err("Expected a block.".to_string());
-        }
+    pub fn transaction(&self) -> Cow<Transaction> {
+        Cow::Borrowed(&self.transaction)
+    }
 
-        let mut deserializer = serde_cbor::Deserializer::from_slice(&bytes[4..]);
-
-        serde::de::Deserialize::deserialize(&mut deserializer).map_err(|err| {
-            format!(
-                "Unable to decode bytes into a {}: {}",
-                std::any::type_name::<Self>(),
-                err
-            )
-        })
+    pub fn timestamp(&self) -> Timestamp {
+        self.timestamp
     }
 }
 
 /// Stores a chain of transactions with their metadata
 #[derive(Default)]
 pub struct BlockChain {
-    // FIXME: store blocks in serialized form?
-    pub inner: Vec<Block>,
-    pub last_hash: Option<HashOf<Block>>,
+    pub inner: Vec<EncodedBlock>,
+    pub last_hash: Option<HashOf<EncodedBlock>>,
 }
 
 impl BlockChain {
@@ -571,15 +485,24 @@ impl BlockChain {
     }
 
     pub fn add_block(&mut self, block: Block) -> Result<BlockHeight, String> {
-        if block.parent_hash() != self.last_hash {
+        let raw_block = block.clone().encode()?;
+        self.add_block_with_encoded(block, raw_block)
+    }
+
+    pub fn add_block_with_encoded(
+        &mut self,
+        block: Block,
+        encoded_block: EncodedBlock,
+    ) -> Result<BlockHeight, String> {
+        if block.parent_hash != self.last_hash {
             return Err("Cannot apply block because its parent hash doesn't match.".to_string());
         }
-        self.last_hash = Some(block.hash());
-        self.inner.push(block);
+        self.last_hash = Some(encoded_block.hash());
+        self.inner.push(encoded_block);
         Ok(self.last_block_index())
     }
 
-    pub fn get(&self, height: BlockHeight) -> Option<&Block> {
+    pub fn get(&self, height: BlockHeight) -> Option<&EncodedBlock> {
         self.inner.get(usize::try_from(height).unwrap())
     }
 
@@ -587,7 +510,7 @@ impl BlockChain {
         self.inner.len() as u64 - 1
     }
 
-    pub fn last(&self) -> Option<&Block> {
+    pub fn last(&self) -> Option<&EncodedBlock> {
         self.inner.last()
     }
 
@@ -596,9 +519,8 @@ impl BlockChain {
     pub fn encode(&self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
         writer.write_u64::<LittleEndian>(self.inner.len() as u64)?;
         for block in &self.inner {
-            let bytes = block.encode();
-            writer.write_u64::<LittleEndian>(bytes.len() as u64)?;
-            writer.write_all(&bytes)?;
+            writer.write_u64::<LittleEndian>(block.size_bytes() as u64)?;
+            writer.write_all(&block.0)?;
         }
         Ok(())
     }
@@ -612,7 +534,7 @@ pub struct State {
     // When maximum number of accounts is exceeded, a specified number of
     // accounts with lowest balances are removed
     accounts_overflow_trim_quantity: usize,
-    pub minting_account_id: Option<PrincipalId>,
+    pub minting_account_id: Option<AccountIdentifier>,
     // This is a set of blockheights that have been notified
     pub blocks_notified: IntMap<()>,
 }
@@ -638,7 +560,7 @@ impl State {
         payment: Transfer,
         created_at: Option<BlockHeight>,
         timestamp: Timestamp,
-    ) -> Result<BlockHeight, String> {
+    ) -> Result<(BlockHeight, HashOf<EncodedBlock>), String> {
         self.balances.add_payment(&payment);
         let result = self
             .blocks
@@ -661,20 +583,29 @@ impl State {
                 .unwrap();
         }
 
-        result
+        result.map(|height| (height, self.blocks.last_hash.unwrap()))
     }
 
     /// This adds a pre created block to the ledger. This should only be used
     /// during canister migration or upgrade
     pub fn add_block(&mut self, block: Block) -> Result<BlockHeight, String> {
-        self.balances.add_payment(&block.transaction().transfer);
+        self.balances.add_payment(&block.transaction.transfer);
         self.blocks.add_block(block)
+    }
+
+    pub fn add_block_with_raw(
+        &mut self,
+        block: Block,
+        raw_block: EncodedBlock,
+    ) -> Result<BlockHeight, String> {
+        self.balances.add_payment(&block.transaction.transfer);
+        self.blocks.add_block_with_encoded(block, raw_block)
     }
 
     pub fn from_init(
         &mut self,
-        initial_values: HashMap<PrincipalId, ICPTs>,
-        minting_account: PrincipalId,
+        initial_values: HashMap<AccountIdentifier, ICPTs>,
+        minting_account: AccountIdentifier,
         timestamp: Timestamp,
     ) {
         self.balances.icpt_pool = ICPTs::MAX;
@@ -717,11 +648,11 @@ impl State {
 
                 for _ in 0..nr_blocks {
                     let block_size = rdr.read_u64::<LittleEndian>().unwrap();
-                    let block = Block::decode(
-                        &rdr.get_ref()
-                            [rdr.position() as usize..(rdr.position() + block_size) as usize],
-                    )?;
-                    state.add_block(block)?;
+                    let contents: &[u8] = &rdr.get_ref()
+                        [rdr.position() as usize..(rdr.position() + block_size) as usize];
+                    let block = ProtoBuf::from_bytes(contents.to_vec())?.get();
+                    let raw_block = contents.to_vec().into_boxed_slice().into();
+                    state.add_block_with_raw(block, raw_block)?;
                     rdr.seek(SeekFrom::Current(block_size as i64)).unwrap();
                 }
 
@@ -769,7 +700,7 @@ pub fn add_payment(
     message: Memo,
     payment: Transfer,
     created_at: Option<BlockHeight>,
-) -> BlockHeight {
+) -> (BlockHeight, HashOf<EncodedBlock>) {
     STATE
         .write()
         .unwrap()
@@ -784,14 +715,16 @@ pub fn change_notification_state(height: BlockHeight, new_state: bool) -> Result
         .change_notification_state(height, new_state)
 }
 
-pub fn split_off_older_than(split_off_age: std::time::Duration) -> Vec<Block> {
+pub fn split_off_older_than(split_off_age: std::time::Duration) -> Vec<EncodedBlock> {
     let mut state = STATE.write().unwrap();
 
     // Find the index of the first block older than specified duration
     let now = dfn_core::api::now();
     let mut split_off_ix = None;
     for (ix, block) in state.blocks.inner.iter().enumerate() {
-        let elapsed: std::time::Duration = now.duration_since(block.timestamp().into()).unwrap();
+        let elapsed: std::time::Duration = now
+            .duration_since(block.decode().unwrap().timestamp.into())
+            .unwrap();
         dfn_core::api::print(format!("block {} elapsed {:?}", ix, elapsed));
         if elapsed > split_off_age {
             split_off_ix = Some(ix);
@@ -807,37 +740,19 @@ pub fn split_off_older_than(split_off_age: std::time::Duration) -> Vec<Block> {
         .unwrap_or_default()
 }
 
-/// TODO This is a security flaw and should be fixed before launch.
-/// since the account isn't hashed if there is no sub_account there may be a way
-/// to create a public key = account ++ sub_account and steal funds from an
-/// account. Tracked in ROSETTA1-32
-pub fn account_identifier(
-    account: PrincipalId,
-    sub_account: Option<[u8; 32]>,
-) -> Result<PrincipalId, String> {
-    match sub_account {
-        None => Ok(account),
-        Some(sub_account) => {
-            let mut id = account.into_vec();
-            id.extend(&sub_account[..]);
-            Ok(PrincipalId::new_self_authenticating(&id))
-        }
-    }
-}
-
 // This is how we pass arguments to 'init' in main.rs
 #[derive(Serialize, Deserialize, CandidType, Clone, Debug, PartialEq, Eq)]
 pub struct LedgerCanisterInitPayload {
-    pub minting_account: PrincipalId,
-    pub initial_values: HashMap<PrincipalId, ICPTs>,
+    pub minting_account: AccountIdentifier,
+    pub initial_values: HashMap<AccountIdentifier, ICPTs>,
     pub archive_canister: Option<CanisterId>,
     pub max_message_size_bytes: Option<usize>,
 }
 
 impl LedgerCanisterInitPayload {
     pub fn new(
-        minting_account: PrincipalId,
-        initial_values: HashMap<PrincipalId, ICPTs>,
+        minting_account: AccountIdentifier,
+        initial_values: HashMap<AccountIdentifier, ICPTs>,
         archive_canister: Option<CanisterId>,
         max_message_size_bytes: Option<usize>,
     ) -> Self {
@@ -879,13 +794,16 @@ impl ArchiveCanisterInitPayload {
 /// Pop blocks off the start of the vector `blocks` as long as the
 /// total size of the blocks is less than `max_size`. FIXME: need to
 /// decide what to do if the first block is greater than max_size.
-pub fn get_chain_prefix(blocks: &mut VecDeque<RawBlock>, mut max_size: usize) -> Vec<RawBlock> {
+pub fn get_chain_prefix(
+    blocks: &mut VecDeque<EncodedBlock>,
+    mut max_size: usize,
+) -> Vec<EncodedBlock> {
     let mut result = vec![];
     while let Some(last) = blocks.front() {
-        if last.len() > max_size {
+        if last.size_bytes() > max_size {
             break;
         }
-        max_size -= last.len();
+        max_size -= last.size_bytes();
         result.push(blocks.pop_front().unwrap());
     }
     result
@@ -904,7 +822,7 @@ mod tests {
             blocks: BlockChain::default(),
             maximum_number_of_accounts: 8,
             accounts_overflow_trim_quantity: 2,
-            minting_account_id: Some(PrincipalId::new_user_test_id(137)),
+            minting_account_id: Some(PrincipalId::new_user_test_id(137).into()),
             blocks_notified: IntMap::new(),
         };
         assert_eq!(state.balances.icpt_pool, ICPTs::MAX);
@@ -919,7 +837,7 @@ mod tests {
                 .add_payment(
                     Memo::default(),
                     Transfer::Mint {
-                        to: PrincipalId::new_user_test_id(i),
+                        to: PrincipalId::new_user_test_id(i).into(),
                         amount,
                     },
                     None,
@@ -938,13 +856,13 @@ mod tests {
         assert_eq!(
             state
                 .balances
-                .account_balance(&PrincipalId::new_user_test_id(0)),
+                .account_balance(&PrincipalId::new_user_test_id(0).into()),
             ICPTs::ZERO
         );
         assert_eq!(
             state
                 .balances
-                .account_balance(&PrincipalId::new_user_test_id(1)),
+                .account_balance(&PrincipalId::new_user_test_id(1).into()),
             ICPTs::ZERO
         );
         // We have credited 45 ICPTs to vairous accounts but the two accounts
@@ -958,8 +876,8 @@ mod tests {
     #[test]
     fn balances_remove_accounts_with_zero_balance() {
         let mut b = LedgerBalances::new();
-        let canister = CanisterId::from_u64(7).get();
-        let target_canister = CanisterId::from_u64(13).get();
+        let canister = CanisterId::from_u64(7).get().into();
+        let target_canister = CanisterId::from_u64(13).into();
         b.add_payment(&Transfer::Mint {
             to: canister,
             amount: ICPTs::from_doms(1000),
@@ -986,8 +904,8 @@ mod tests {
     fn balances_fee() {
         let mut b = LedgerBalances::new();
         let pool_start_balance = b.icpt_pool.get_doms();
-        let uid0 = PrincipalId::new_user_test_id(1000);
-        let uid1 = PrincipalId::new_user_test_id(1007);
+        let uid0 = PrincipalId::new_user_test_id(1000).into();
+        let uid1 = PrincipalId::new_user_test_id(1007).into();
         let mint_amount = 1000000;
         let send_amount = 10000;
         let send_fee = 100;
@@ -1023,18 +941,18 @@ mod tests {
 
         state.from_init(
             vec![(
-                PrincipalId::new_user_test_id(0),
+                PrincipalId::new_user_test_id(0).into(),
                 ICPTs::new(2000000, 0).unwrap(),
             )]
             .into_iter()
             .collect(),
-            PrincipalId::new_user_test_id(1000),
+            PrincipalId::new_user_test_id(1000).into(),
             SystemTime::UNIX_EPOCH.into(),
         );
 
         let txn = Transaction::new(
-            PrincipalId::new_user_test_id(0),
-            PrincipalId::new_user_test_id(1),
+            PrincipalId::new_user_test_id(0).into(),
+            PrincipalId::new_user_test_id(1).into(),
             ICPTs::new(10000, 50).unwrap(),
             TRANSACTION_FEE,
             Memo(456),
@@ -1043,50 +961,39 @@ mod tests {
 
         let txn_hash = txn.hash();
         println!("txn hash = {}", txn_hash);
-        let txn_bytes = txn.encode();
-        println!("txn bytes = {:x?}", txn_bytes);
-        assert_eq!(
-            txn_hash,
-            HashOf::<Transaction>::from_str(
-                &"bfbead8c5629306c7964489611e55296b7b813fa4d4a0d4347820042d4cc62a6"
-            )
-            .unwrap()
-        );
-        let txn_decoded = Transaction::decode(&txn_bytes).unwrap();
-        assert_eq!(txn, txn_decoded);
 
-        let block = Block::V0(BlockV0 {
+        let block = Block {
             parent_hash: state.blocks.last_hash,
             transaction: txn,
             timestamp: (SystemTime::UNIX_EPOCH + Duration::new(2000000000, 123456789)).into(),
-        });
+        };
 
-        let block_hash = block.hash();
+        let block_bytes = block.clone().encode().unwrap();
+        println!("block bytes = {:02x?}", block_bytes.0);
+        let block_hash = block_bytes.hash();
         println!("block hash = {}", block_hash);
-        let block_bytes = block.encode();
-        println!("block bytes = {:02x?}", block_bytes);
-        let block_decoded: serde_cbor::Value = serde_cbor::from_slice(&block_bytes[4..]).unwrap();
+        let block_decoded = block_bytes.decode().unwrap();
         println!("block decoded = {:#?}", block_decoded);
 
-        let block_decoded = Block::decode(&block_bytes).unwrap();
+        let block_decoded = block_bytes.decode().unwrap();
         assert_eq!(block, block_decoded);
 
         state.add_block(block).unwrap();
 
         let txn2 = Transaction::new(
-            PrincipalId::new_user_test_id(0),
-            PrincipalId::new_user_test_id(200),
+            PrincipalId::new_user_test_id(0).into(),
+            PrincipalId::new_user_test_id(200).into(),
             ICPTs::new(30000, 10000).unwrap(),
             TRANSACTION_FEE,
             Memo(0),
             321,
         );
 
-        let block2 = Block::V0(BlockV0 {
+        let block2 = Block {
             parent_hash: Some(block_hash),
             transaction: txn2,
             timestamp: (SystemTime::UNIX_EPOCH + Duration::from_nanos(200000000)).into(),
-        });
+        };
 
         state.add_block(block2).unwrap();
 
@@ -1110,9 +1017,9 @@ pub struct SendArgs {
     pub memo: Memo,
     pub amount: ICPTs,
     pub fee: ICPTs,
-    pub from_subaccount: Option<[u8; 32]>,
-    pub to: PrincipalId,
-    pub to_subaccount: Option<[u8; 32]>,
+    pub from_subaccount: Option<Subaccount>,
+    pub to: AccountIdentifier,
+    // TODO rename this to created_at
     pub block_height: Option<BlockHeight>,
 }
 
@@ -1120,12 +1027,41 @@ pub struct SendArgs {
 #[derive(Serialize, Deserialize, CandidType, Clone, Hash, Debug, PartialEq, Eq)]
 pub struct TransactionNotification {
     pub from: PrincipalId,
-    pub from_subaccount: Option<[u8; 32]>,
+    pub from_subaccount: Option<Subaccount>,
     pub to: CanisterId,
-    pub to_subaccount: Option<[u8; 32]>,
+    pub to_subaccount: Option<Subaccount>,
     pub block_height: BlockHeight,
     pub amount: ICPTs,
     pub memo: Memo,
+}
+
+/// A Candid-encoded value returned by transaction notification, limited to
+/// MAX_LENGTH bytes.
+#[derive(Serialize, Deserialize, CandidType, Clone, Hash, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct TransactionNotificationResult(Vec<u8>);
+
+impl TransactionNotificationResult {
+    pub const MAX_LENGTH: usize = 1024;
+
+    pub fn encode<T: CandidType>(x: T) -> Result<Self, String> {
+        let res = Self(CandidOne(x).into_bytes()?);
+        res.check_size()?;
+        Ok(res)
+    }
+
+    pub fn decode<T: CandidType + DeserializeOwned>(self) -> Result<T, String> {
+        Ok(CandidOne::from_bytes(self.0)?.into_inner())
+    }
+
+    pub fn check_size(&self) -> Result<(), String> {
+        if self.0.len() > Self::MAX_LENGTH {
+            return Err(format!(
+                "TransactionNotificationResult is too long ({} bytes)",
+                self.0.len()
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Argument taken by the notification endpoint
@@ -1133,24 +1069,44 @@ pub struct TransactionNotification {
 pub struct NotifyCanisterArgs {
     pub block_height: BlockHeight,
     pub max_fee: ICPTs,
-    pub from_subaccount: Option<[u8; 32]>,
+    pub from_subaccount: Option<Subaccount>,
     pub to_canister: CanisterId,
-    pub to_subaccount: Option<[u8; 32]>,
+    pub to_subaccount: Option<Subaccount>,
+}
+
+impl NotifyCanisterArgs {
+    /// Construct a `notify` call to notify a canister about the
+    /// transaction created by a previous `send` call. `block_height`
+    /// is the index of the block returned by `send`.
+    pub fn new_from_send(
+        send_args: &SendArgs,
+        block_height: BlockHeight,
+        to_canister: CanisterId,
+        to_subaccount: Option<Subaccount>,
+    ) -> Result<Self, String> {
+        if AccountIdentifier::new(to_canister.get(), to_subaccount) != send_args.to {
+            Err("Account identifier does not match canister args".to_string())
+        } else {
+            Ok(NotifyCanisterArgs {
+                block_height,
+                max_fee: send_args.fee,
+                from_subaccount: send_args.from_subaccount,
+                to_canister,
+                to_subaccount,
+            })
+        }
+    }
 }
 
 /// Argument taken by the account_balance endpoint
 #[derive(Serialize, Deserialize, CandidType, Clone, Hash, Debug, PartialEq, Eq)]
 pub struct AccountBalanceArgs {
-    pub account: PrincipalId,
-    pub sub_account: Option<[u8; 32]>,
+    pub account: AccountIdentifier,
 }
 
 impl AccountBalanceArgs {
-    pub fn new(account: PrincipalId) -> Self {
-        AccountBalanceArgs {
-            account,
-            sub_account: None,
-        }
+    pub fn new(account: AccountIdentifier) -> Self {
+        AccountBalanceArgs { account }
     }
 }
 
@@ -1162,3 +1118,26 @@ impl AccountBalanceArgs {
 /// as input is backward-compatible.
 #[derive(Serialize, Deserialize, CandidType, Clone, Hash, Debug, PartialEq, Eq)]
 pub struct TotalSupplyArgs {}
+
+/// Argument returned by the tip_of_chain endpoint
+pub struct TipOfChainRes {
+    pub certification: Option<Vec<u8>>,
+    pub tip_index: BlockHeight,
+}
+
+pub struct GetBlocksArgs {
+    pub start: usize,
+    pub length: usize,
+}
+
+impl GetBlocksArgs {
+    pub fn new(start: usize, length: usize) -> Self {
+        GetBlocksArgs { start, length }
+    }
+}
+
+pub struct GetBlocksRes(pub Vec<EncodedBlock>);
+
+// These is going away soon
+pub struct BlockArg(pub BlockHeight);
+pub struct BlockRes(pub Option<EncodedBlock>);

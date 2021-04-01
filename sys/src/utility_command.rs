@@ -1,5 +1,8 @@
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::process::{Command as StdCommand, ExitStatus, Stdio};
+
+const VSOCK_AGENT_PATH: &str = "/opt/dfinity/vsock_agent";
 
 #[derive(Clone, Debug)]
 pub enum UtilityCommandError {
@@ -70,7 +73,7 @@ impl UtilityCommand {
             }
         };
 
-        stdin.write(self.input.as_slice()).map_err(map_to_err)?;
+        stdin.write_all(self.input.as_slice()).map_err(map_to_err)?;
         stdin.flush().map_err(map_to_err)?;
         drop(stdin);
         let output = child.wait_with_output().map_err(map_to_err)?;
@@ -119,7 +122,6 @@ impl UtilityCommand {
         Self::new(
             "pkcs11-tool".to_string(),
             vec![
-                "--login",               // login to the hsm
                 "--slot",                // choose HSM slot
                 hsm_slot.unwrap_or("0"), // default: 0
                 "--pin",                 //
@@ -135,6 +137,44 @@ impl UtilityCommand {
             .collect::<Vec<_>>(),
         )
         .with_input(ic_crypto_sha256::Sha256::hash(msg.as_slice()).to_vec())
+    }
+
+    /// Try to attach the USB HSM, if the VSOCK_AGENT_PATH binary
+    /// exists. Ignore any errors in the execution.
+    pub fn try_to_attach_hsm() {
+        if let Ok(metadata) = std::fs::metadata(VSOCK_AGENT_PATH) {
+            let permissions = metadata.permissions();
+            if permissions.mode() & 0o111 != 0 {
+                // Executable exists. We will run it, without checking the result.
+                // The attach may fail or happen later, and that needs to be handled at a
+                // higher level.
+                // Once we finish migration to the Ubuntu-based IC-OS and the Vsock-based HSM
+                // sharing, we'll want to know whether and why the command failed.
+                if StdCommand::new(VSOCK_AGENT_PATH)
+                    .arg("--attach-hsm".to_string())
+                    .status()
+                    .is_ok()
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                }
+            }
+        }
+    }
+
+    /// Try to detach the USB HSM, if the VSOCK_AGENT_PATH binary
+    /// exists. Ignore any errors in the execution.
+    pub fn try_to_detach_hsm() {
+        if let Ok(metadata) = std::fs::metadata(VSOCK_AGENT_PATH) {
+            let permissions = metadata.permissions();
+            if permissions.mode() & 0o111 != 0 {
+                // Executable exists. We will run it, without checking the result.
+                // Once we finish migration to the Ubuntu-based IC-OS and the Vsock-based HSM
+                // sharing, we'll want to know if this command failed.
+                let _ = StdCommand::new(VSOCK_AGENT_PATH)
+                    .arg("--detach-hsm".to_string())
+                    .status();
+            }
+        }
     }
 }
 

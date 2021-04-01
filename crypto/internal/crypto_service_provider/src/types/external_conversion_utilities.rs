@@ -208,9 +208,9 @@ impl SigConverter {
                 }
                 let mut bytes: [u8; SIG_LEN] = [0; SIG_LEN];
                 bytes.copy_from_slice(&sig_bytes[0..SIG_LEN]);
-                Ok(CspSignature::Secp256k1(secp256k1_types::SignatureBytes(
-                    bytes,
-                )))
+                Ok(CspSignature::EcdsaSecp256k1(
+                    secp256k1_types::SignatureBytes(bytes),
+                ))
             }
             algorithm => Err(CryptoError::AlgorithmNotSupported {
                 algorithm,

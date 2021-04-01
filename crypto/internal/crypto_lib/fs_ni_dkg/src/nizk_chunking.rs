@@ -1,5 +1,6 @@
 //! Zero Knowledge Proofs
 use crate::forward_secure::CHUNK_SIZE;
+use crate::random_oracles::{random_oracle, random_oracle_to_scalar, HashedMap, UniqueHash};
 use crate::utils::*;
 use miracl_core::bls12381::big::BIG;
 use miracl_core::bls12381::ecp::ECP;
@@ -8,14 +9,16 @@ use miracl_core::rand::RAND;
 use std::vec::Vec;
 
 /// Domain separators for the zk proof of chunking
-pub const DOMAIN_PROOF_OF_CHUNKING_ORACLE: &[u8; 0x21] = b"\x20ic-zk-proof-of-chunking-chunking";
-pub const DOMAIN_PROOF_OF_CHUNKING_CHALLENGE: &[u8; 0x22] =
-    b"\x21ic-zk-proof-of-chunking-challenge";
-pub const NUM_ZK_REPETITIONS: usize = 40;
+pub const DOMAIN_PROOF_OF_CHUNKING_ORACLE: &str = "ic-zk-proof-of-chunking-chunking";
+pub const DOMAIN_PROOF_OF_CHUNKING_CHALLENGE: &str = "ic-zk-proof-of-chunking-challenge";
+
+pub const NUM_ZK_REPETITIONS: usize = 32;
 pub const SECURITY_LEVEL: usize = 256;
 pub const CHALLENGE_BITS: usize = (SECURITY_LEVEL + NUM_ZK_REPETITIONS - 1) / NUM_ZK_REPETITIONS; // == ceil(SECURITY_LEVEL/NUM_ZK_REPETITIONS)
 
-/// Section 8.5 of the paper.
+/// Instance for a chunking relation.
+///
+/// From Section 6.5 of the NIDKG paper.
 ///   instance = ([y_1..y_n], [chunk_{1,1}..chunk_{n,m}], R)
 /// We rename:
 ///   y -> public_keys.
@@ -30,6 +33,9 @@ pub struct ChunkingInstance {
     pub points_r: Vec<ECP>,
 }
 
+/// Witness for the validity of a chunking instance.
+///
+/// From Section 6.5 of the NIDKG paper:
 ///   Witness = (scalar_r =[r_1..r_m], scalar_s=[s_{1,1}..s_{n,m}])
 pub struct ChunkingWitness {
     //This should have size NUM_CHUNKS
@@ -44,6 +50,7 @@ pub enum ZkProofChunkingError {
     InvalidInstance,
 }
 
+/// Zero-knowledge proof of chunking.
 pub struct ProofChunking {
     pub y0: ECP,
     pub bb: Vec<ECP>,
@@ -53,6 +60,20 @@ pub struct ProofChunking {
     pub z_r: Vec<BIG>,
     pub z_s: Vec<BIG>,
     pub z_beta: BIG,
+}
+
+/// First move of the prover in the zero-knowledge proof of chunking.
+struct FirstMoveChunking {
+    pub y0: ECP,
+    pub bb: Vec<ECP>,
+    pub cc: Vec<ECP>,
+}
+
+/// Prover's response to the first challenge of the verifier.
+struct SecondMoveChunking {
+    pub z_s: Vec<BIG>,
+    pub dd: Vec<ECP>,
+    pub yy: ECP,
 }
 
 impl ChunkingInstance {
@@ -67,6 +88,57 @@ impl ChunkingInstance {
             return Err(ZkProofChunkingError::InvalidInstance);
         };
         Ok(())
+    }
+}
+
+impl FirstMoveChunking {
+    fn from(y0: &ECP, bb: &[ECP], cc: &[ECP]) -> Self {
+        Self {
+            y0: y0.to_owned(),
+            bb: bb.to_owned(),
+            cc: cc.to_owned(),
+        }
+    }
+}
+
+impl SecondMoveChunking {
+    fn from(z_s: &[BIG], dd: &[ECP], yy: &ECP) -> Self {
+        Self {
+            z_s: z_s.to_owned(),
+            dd: dd.to_owned(),
+            yy: yy.to_owned(),
+        }
+    }
+}
+
+impl UniqueHash for ChunkingInstance {
+    fn unique_hash(&self) -> [u8; 32] {
+        let mut map = HashedMap::new();
+        map.insert_hashed("g1-generator", &self.g1_gen);
+        map.insert_hashed("public-keys", &self.public_keys);
+        map.insert_hashed("ciphertext-chunks", &self.ciphertext_chunks);
+        map.insert_hashed("randomizers-r", &self.points_r);
+        map.unique_hash()
+    }
+}
+
+impl UniqueHash for FirstMoveChunking {
+    fn unique_hash(&self) -> [u8; 32] {
+        let mut map = HashedMap::new();
+        map.insert_hashed("y0", &self.y0);
+        map.insert_hashed("bb", &self.bb);
+        map.insert_hashed("cc", &self.cc);
+        map.unique_hash()
+    }
+}
+
+impl UniqueHash for SecondMoveChunking {
+    fn unique_hash(&self) -> [u8; 32] {
+        let mut map = HashedMap::new();
+        map.insert_hashed("z_s", &self.z_s);
+        map.insert_hashed("dd", &self.dd);
+        map.insert_hashed("yy", &self.yy);
+        map.unique_hash()
     }
 }
 
@@ -102,7 +174,7 @@ pub fn prove_chunking(
         .map(|_| BIG::randomnum(&spec_p, rng))
         .collect();
     let bb: Vec<ECP> = beta.iter().map(|beta_i| g1.mul(&beta_i)).collect();
-    let (cc, e, z_s) = loop {
+    let (first_move, first_challenge, z_s) = loop {
         let sigma: Vec<BIG> = (0..NUM_ZK_REPETITIONS)
             .map(|_| BIG::modadd(&BIG::randomnum(&range_big, rng), &p_sub_s, &spec_p))
             .collect();
@@ -112,20 +184,23 @@ pub fn prove_chunking(
             .map(|(beta_i, sigma_i)| y0.mul2(&beta_i, &g1, &sigma_i))
             .collect();
 
-        // e_{m,n,l} = oracle(instance, y_0, bb, cc)/SHA-256_SSWU_RO
-        let e = ChunksOracle::new(&instance, &y0, &bb[..], &cc[..]).get_all_chunks(spec_n, spec_m);
+        let first_move = FirstMoveChunking::from(&y0, &bb, &cc);
+        // Verifier's challenge.
+        let first_challenge =
+            ChunksOracle::new(&instance, &first_move).get_all_chunks(spec_n, spec_m);
 
         // z_s = [sum [e_ijk * s_ij | i <- [1..n], j <- [1..m]] + sigma_k | k <- [1..l]]
         let z_s: Result<Vec<BIG>, ()> = (0..NUM_ZK_REPETITIONS)
             .map(|k| {
                 let mut acc = BIG::new_int(0);
-                e.iter()
+                first_challenge
+                    .iter()
                     .zip(witness.scalars_s.iter())
                     .for_each(|(e_i, s_i)| {
                         e_i.iter().zip(s_i.iter()).for_each(|(e_ij, s_ij)| {
                             acc = BIG::modadd(
                                 &acc,
-                                &BIG::modmul(&BIG::new_int(e_ij[k]), &s_ij, &spec_p),
+                                &BIG::modmul(&BIG::new_int(e_ij[k] as isize), &s_ij, &spec_p),
                                 &spec_p,
                             );
                         });
@@ -142,7 +217,7 @@ pub fn prove_chunking(
             .collect();
 
         if let Ok(z_s) = z_s {
-            break (cc, e, z_s);
+            break (first_move, first_challenge, z_s);
         }
     };
 
@@ -162,44 +237,48 @@ pub fn prove_chunking(
         }
         delta.push(delta_i);
     }
+
+    let second_move = SecondMoveChunking::from(&z_s, &dd, &yy);
+
+    // Second verifier's challege. Forth move in the protocol.
     // x = oracle(e, z_s, dd, yy)
-    let x = challenge_oracle(&e, &z_s, &dd, &yy);
+    let second_challenge = chunking_proof_challenge_oracle(&first_challenge, &second_move);
 
     let mut z_r = Vec::new();
     let mut delta_idx = 1;
-    for e_i in e.iter() {
+    for e_i in first_challenge.iter() {
         let mut z_rk = delta[delta_idx];
         delta_idx += 1;
         e_i.iter()
             .zip(witness.scalars_r.iter())
             .for_each(|(e_ij, r_j)| {
-                let mut xpow = x;
+                let mut xpow = second_challenge;
                 e_ij.iter().for_each(|e_ijk| {
                     z_rk = BIG::modadd(
                         &z_rk,
                         &BIG::modmul(
-                            &BIG::modmul(&BIG::new_int(*e_ijk), &r_j, &spec_p),
+                            &BIG::modmul(&BIG::new_int(*e_ijk as isize), &r_j, &spec_p),
                             &xpow,
                             &spec_p,
                         ),
                         &spec_p,
                     );
-                    xpow = BIG::modmul(&xpow, &x, &spec_p);
+                    xpow = BIG::modmul(&xpow, &second_challenge, &spec_p);
                 })
             });
         z_r.push(z_rk);
     }
 
-    let mut xpow = x;
+    let mut xpow = second_challenge;
     let mut z_beta = delta[0];
     beta.iter().for_each(|beta_k| {
         z_beta = BIG::modadd(&z_beta, &BIG::modmul(&beta_k, &xpow, &spec_p), &spec_p);
-        xpow = BIG::modmul(&xpow, &x, &spec_p);
+        xpow = BIG::modmul(&xpow, &second_challenge, &spec_p);
     });
     ProofChunking {
-        y0,
-        bb,
-        cc,
+        y0: first_move.y0,
+        bb: first_move.bb,
+        cc: first_move.cc,
         dd,
         yy,
         z_r,
@@ -218,7 +297,7 @@ pub fn verify_chunking(
     let num_receivers = instance.public_keys.len();
     require_eq("bb", nizk.bb.len(), NUM_ZK_REPETITIONS)?;
     require_eq("cc", nizk.cc.len(), NUM_ZK_REPETITIONS)?;
-    require_eq("dd", nizk.dd.len(), instance.public_keys.len() + 1)?;
+    require_eq("dd", nizk.dd.len(), num_receivers + 1)?;
     require_eq("z_r", nizk.z_r.len(), num_receivers)?;
     require_eq("z_s", nizk.z_s.len(), NUM_ZK_REPETITIONS)?;
 
@@ -237,12 +316,13 @@ pub fn verify_chunking(
         }
     }
 
+    let first_move = FirstMoveChunking::from(&nizk.y0, &nizk.bb, &nizk.cc);
+    let second_move = SecondMoveChunking::from(&nizk.z_s, &nizk.dd, &nizk.yy);
     // e_{m,n,l} = oracle(instance, y_0, bb, cc)
-    let e = ChunksOracle::new(&instance, &nizk.y0, &nizk.bb[..], &nizk.cc[..])
-        .get_all_chunks(spec_n, spec_m);
+    let e = ChunksOracle::new(&instance, &first_move).get_all_chunks(spec_n, spec_m);
 
     // x = oracle(e, z_s, dd, yy)
-    let x = challenge_oracle(&e, &nizk.z_s, &nizk.dd, &nizk.yy);
+    let x = chunking_proof_challenge_oracle(&e, &second_move);
 
     let mut xpowers = Vec::new();
     let mut tmp = x;
@@ -268,7 +348,7 @@ pub fn verify_chunking(
                 e_ij.iter().for_each(|e_ijk| {
                     acc = BIG::modadd(
                         &acc,
-                        &BIG::modmul(&BIG::new_int(*e_ijk), &xpow, &spec_p),
+                        &BIG::modmul(&BIG::new_int(*e_ijk as isize), &xpow, &spec_p),
                         &spec_p,
                     );
                     xpow = BIG::modmul(&xpow, &x, &spec_p);
@@ -307,7 +387,7 @@ pub fn verify_chunking(
             .zip(e.iter())
             .for_each(|(chunk_i, e_i)| {
                 chunk_i.iter().zip(e_i.iter()).for_each(|(chunk_ij, e_ij)| {
-                    acc.add(&chunk_ij.mul(&BIG::new_int(e_ij[k])));
+                    acc.add(&chunk_ij.mul(&BIG::new_int(e_ij[k] as isize)));
                 })
             });
         cij_to_eijks.push(acc);
@@ -334,54 +414,29 @@ struct ChunksOracle {
 }
 
 impl ChunksOracle {
-    pub fn new(instance: &ChunkingInstance, y0: &ECP, bb: &[ECP], cc: &[ECP]) -> Self {
-        let mut oracle = miracl_core::hash256::HASH256::new();
-        oracle.process_array(DOMAIN_PROOF_OF_CHUNKING_ORACLE);
+    pub fn new(instance: &ChunkingInstance, first_move: &FirstMoveChunking) -> Self {
+        let mut map = HashedMap::new();
+        map.insert_hashed("instance", instance);
+        map.insert_hashed("first-move", first_move);
+        map.insert_hashed("number-of-parallel-repetitions", &NUM_ZK_REPETITIONS);
 
-        // The NCC Group recommends feeding the n, m, l of the paper to the oracle.
-        let n = instance.ciphertext_chunks.len();
-        let m = if n == 0 {
-            0
-        } else {
-            instance.ciphertext_chunks[0].len()
-        };
-        // The `l` of the paper is NUM_ZK_REPETITIONS.
-        oracle.process_num(n as i32);
-        oracle.process_num(m as i32);
-        oracle.process_num(NUM_ZK_REPETITIONS as i32);
+        let hash = random_oracle(DOMAIN_PROOF_OF_CHUNKING_ORACLE, &map);
 
-        process_ecp(&mut oracle, &instance.g1_gen);
-        instance
-            .public_keys
-            .iter()
-            .for_each(|point| process_ecp(&mut oracle, point));
-        instance
-            .points_r
-            .iter()
-            .for_each(|point| process_ecp(&mut oracle, point));
-        instance
-            .ciphertext_chunks
-            .iter()
-            .for_each(|v| v.iter().for_each(|point| process_ecp(&mut oracle, point)));
-        process_ecp(&mut oracle, y0);
-        bb.iter().for_each(|point| process_ecp(&mut oracle, point));
-        cc.iter().for_each(|point| process_ecp(&mut oracle, point));
-
-        let rng = RAND_ChaCha20::new(oracle.hash());
+        let rng = RAND_ChaCha20::new(hash);
         Self { rng }
     }
 
     /// Get a chunk-sized unit of data.
-    fn get_chunk(&mut self) -> isize {
+    fn get_chunk(&mut self) -> usize {
         // The order of the getbyte(..) calls matters so this is intentionally serial.
         let challenge_bytes = (CHALLENGE_BITS + 7) / 8;
-        debug_assert!(challenge_bytes < std::mem::size_of::<isize>());
-        let (challenge_mask, _) = (1isize << CHALLENGE_BITS).overflowing_sub(1); // == 111...1
+        debug_assert!(challenge_bytes < std::mem::size_of::<usize>());
+        let (challenge_mask, _) = (1usize << CHALLENGE_BITS).overflowing_sub(1); // == 111...1
         challenge_mask
-            & (0..challenge_bytes).fold(0, |state, _| (state << 8) | (self.rng.getbyte() as isize))
+            & (0..challenge_bytes).fold(0, |state, _| (state << 8) | (self.rng.getbyte() as usize))
     }
 
-    fn get_all_chunks(&mut self, spec_n: usize, spec_m: usize) -> Vec<Vec<Vec<isize>>> {
+    fn get_all_chunks(&mut self, spec_n: usize, spec_m: usize) -> Vec<Vec<Vec<usize>>> {
         (0..spec_n)
             .map(|_| {
                 (0..spec_m)
@@ -392,18 +447,15 @@ impl ChunksOracle {
     }
 }
 
-fn challenge_oracle(e: &[Vec<Vec<isize>>], z_s: &[BIG], dd: &[ECP], yy: &ECP) -> BIG {
-    let mut oracle = miracl_core::hash256::HASH256::new();
-    oracle.process_array(DOMAIN_PROOF_OF_CHUNKING_CHALLENGE);
-    e.iter().for_each(|e_i| {
-        e_i.iter()
-            .for_each(|e_ij| e_ij.iter().for_each(|num| oracle.process_num(*num as i32)))
-    });
-    z_s.iter().for_each(|big| process_fr(&mut oracle, &big));
-    dd.iter().for_each(|point| process_ecp(&mut oracle, &point));
-    process_ecp(&mut oracle, &yy);
-    let rng = &mut RAND_ChaCha20::new(oracle.hash());
-    BIG::randomnum(&curve_order(), rng)
+fn chunking_proof_challenge_oracle(
+    first_challenge: &[Vec<Vec<usize>>],
+    second_move: &SecondMoveChunking,
+) -> BIG {
+    let mut map = HashedMap::new();
+    map.insert_hashed("first-challenge", &first_challenge.to_vec());
+    map.insert_hashed("second-move", second_move);
+
+    random_oracle_to_scalar(DOMAIN_PROOF_OF_CHUNKING_CHALLENGE, &map)
 }
 
 #[inline]

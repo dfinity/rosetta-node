@@ -13,7 +13,7 @@ $ docker build \
     --file local-deployment.Dockerfile \
     --build-arg GITHUB_TOKEN=token \
     --build-arg RELEASE=master \
-    --build-arg SDK_VERSION=0.6.24 \
+    --build-arg SDK_VER=0.6.26 \
     --tag my-ic-testnet \
     .
 ```
