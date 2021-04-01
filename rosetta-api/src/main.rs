@@ -19,7 +19,7 @@ struct Opt {
     #[structopt(
         short = "c",
         long = "canister-id",
-        default_value = "5v3p4-iyaaa-aaaaa-qaaaa-cai"
+        default_value = "5s2ji-faaaa-aaaaa-qaaaq-cai"
     )]
     ic_canister_id: String,
     #[structopt(long = "ic-url", default_value = "https://exchanges.dfinity.network")]
