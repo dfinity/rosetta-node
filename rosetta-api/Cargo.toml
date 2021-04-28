@@ -19,10 +19,11 @@ ic-crypto = { path = "../crypto" }
 ic-crypto-sha256 = {path = "../crypto/sha256/"}
 ic-crypto-tree-hash = { path = "../crypto/tree_hash" }
 ic-crypto-utils-threshold-sig = { path = "../crypto/utils/threshold_sig" }
-im = { git = "https://github.com/dfinity-lab/im-rs", branch = "fix-remove-index-ordmap", features = [ "serde" ] }
+ic-nns-constants = { path = "../nns/constants" }
+immutable-chunkmap = "0.5.9"
 ic-canister-client = { path = "../canister_client" }
 itertools = "0.10.0"
-log = "*"
+log = "0.4.14"
 log4rs = "1.0.0"
 serde = "1.0"
 serde_derive = "1.0"
@@ -35,9 +36,8 @@ candid = "0.6.15"
 dfn_macro = {path = "../rust_canisters/dfn_macro"}
 on_wire = {path = "../rust_canisters/on_wire"}
 lazy_static = "1.4.0"
-ledger-canister = {path = "canister"}
-cycles_minting_canister = {path = "cycles_minting_canister"}
-cycles_minting_client = {path = "cycles_minting_client"}
+ledger-canister = {path = "ledger_canister"}
+cycles-minting-canister = {path = "cycles_minting_canister"}
 rand = "0.7"
 structopt = "0.3.20"
 async-trait = "0.1.41"
@@ -51,3 +51,15 @@ actix-rt = "*"
 
 [build-dependencies]
 shadow-rs = { version = "0.5", default-features = false, features = [] }
+
+[[bin]]
+name = "utils"
+path = "src/utils.rs"
+
+[dev-dependencies]
+tempfile = "3.1.0"
+ic-rosetta-test-utils = { path = "test_utils" }
+
+[[test]]
+name = "rosetta-api-tests"
+path = "test/test_utils.rs"

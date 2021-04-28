@@ -6,7 +6,7 @@ pub use zeroize::Zeroize;
 mod conversions;
 mod generic_traits;
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Zeroize)]
+#[derive(Copy, Clone, Eq, PartialEq, Zeroize)]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 pub struct SecretKeyBytes(pub [u8; SecretKeyBytes::SIZE]);
 ic_crypto_internal_types::derive_serde!(SecretKeyBytes, SecretKeyBytes::SIZE);

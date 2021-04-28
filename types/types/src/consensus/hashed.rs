@@ -96,6 +96,7 @@ impl<H, V> Hashed<H, V> {
         (self.hash, self.value)
     }
 
+    /// Create a `Hashed<H, V>` from a hash and value
     pub fn recompose(hash: H, value: V) -> Self {
         Self { hash, value }
     }

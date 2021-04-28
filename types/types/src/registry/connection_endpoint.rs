@@ -1,3 +1,4 @@
+//! Defines `ConnectionEndpoint` as a URL.
 use std::{
     convert::TryFrom,
     fmt::Display,
@@ -39,7 +40,36 @@ impl From<&pbProtocol> for Protocol {
 ///
 /// Protobuf encoding is proto:registry.node.v1.ConnectionEndpoint.
 ///
-/// See https://docs.google.com/document/d/1gr4l1NrVnA2LKbnDXqRPqV5zMNqAu2lhqIhqIing7CE/edit#
+/// An endpoint has at least three pieces of information associated with it:
+///  - An IP address
+///  - A port
+///  - The (application layer) protocol served on that endpoint
+///
+/// We can use URIs to encode all of the above information in the
+/// `ConnectionEndpoint`.
+///
+/// E.g. for endpoints that use HTTP or HTTPS this would result in:
+/// ```text
+///    http://w.x.y.z:port
+///    https://[w::x::..::y::z]:port
+/// ```
+///
+/// For endpoints that use custom protocols (e.g. P2P), we can define a custom
+/// URI scheme as per https://tools.ietf.org/html/rfc7595#section-3.8.
+///
+/// For example:
+/// ```text
+///     org.dfinity.p2p1://w.x.y.z:port
+/// ```
+///
+/// Any additional parameters required by the endpoint can be passed
+/// in as URI parameters after the "?", e.g.
+/// ```text
+///    org.dfinity.p2p1://w.x.y.z:port?flow_tag=1234
+/// ```
+//
+// Note: "org.dfinity" can be changed once the Internet Computer has its own domain or set of
+// domains.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct ConnectionEndpoint {
@@ -121,6 +151,9 @@ impl TryFrom<Url> for ConnectionEndpoint {
         let protocol = match url.scheme().as_ref() {
             "http" => Ok(pbProtocol::Http1),
             "https" => Ok(pbProtocol::Http1Tls13),
+            // Using 'org.dfinity' as the protocol domain as per https://tools.ietf.org/html/rfc7595#section-3.8.
+            // This can be changed once the Internet Computer has its own domain or set of
+            // domains.
             "org.dfinity.p2p1" => Ok(pbProtocol::P2p1Tls13),
             scheme => Err(ConnectionEndpointTryFromError::InvalidScheme {
                 scheme: scheme.to_string(),
@@ -176,16 +209,16 @@ impl TryFrom<Url> for ConnectionEndpoint {
 /// `ConnectionEndpoint` type.
 #[derive(Error, Debug, Clone, Serialize)]
 pub enum ConnectionEndpointTryFromProtoError {
-    #[error("invalid scheme for endpoint: {scheme:}")]
+    #[error("invalid scheme for endpoint: {scheme}")]
     InvalidScheme { scheme: String },
 
-    #[error("port does not convert to u16: {port:}")]
+    #[error("port does not convert to u16: {port}")]
     InvalidPort { port: String },
 
-    #[error("IP address does not parse: {ip_addr:}")]
+    #[error("IP address does not parse: {ip_addr}")]
     InvalidIpAddr { ip_addr: String },
 
-    #[error("final url does not parse: {source:}")]
+    #[error("final url does not parse: {source}")]
     InvalidUrl {
         source: ConnectionEndpointTryFromStringError,
     },
@@ -227,7 +260,7 @@ impl TryFrom<pbConnectionEndpoint> for ConnectionEndpoint {
 }
 
 /// Errors that can occur when converting from a string to a
-/// `ConnectionEndpoint`.
+/// [`ConnectionEndpoint`].
 #[derive(Error, Debug, Clone, Serialize)]
 pub enum ConnectionEndpointTryFromStringError {
     #[error("string {url} does not parse as url: {error}")]
@@ -237,7 +270,7 @@ pub enum ConnectionEndpointTryFromStringError {
         error: String,
     },
 
-    #[error("invalid scheme for endpoint: {scheme:}")]
+    #[error("invalid scheme for endpoint: {scheme}")]
     InvalidScheme { scheme: String },
 }
 
@@ -296,27 +329,29 @@ impl<'de> Deserialize<'de> for ConnectionEndpoint {
     }
 }
 
+/// Errors that can occur when converting from a URL to a
+/// [`ConnectionEndpoint`].
 #[derive(Error, Debug)]
 pub enum ConnectionEndpointTryFromError {
-    #[error("invalid scheme for endpoint: {scheme:}")]
+    #[error("invalid scheme for endpoint: {scheme}")]
     InvalidScheme { scheme: String },
 
-    #[error("endpoint URL does not have a host component: {url:}")]
+    #[error("endpoint URL does not have a host component: {url}")]
     MissingHost { url: Url },
 
-    #[error("endpoint host component {host:} is not an IP address: {url:}")]
+    #[error("endpoint host component {host} is not an IP address: {url}")]
     HostIsNotIpAddr { url: Url, host: String },
 
-    #[error("endpoint URL does not have a port component: {url:}")]
+    #[error("endpoint URL does not have a port component: {url}")]
     MissingPort { url: Url },
 
-    #[error("port does not convert to u16: {port:}")]
+    #[error("port does not convert to u16: {port}")]
     InvalidPort { port: String },
 
-    #[error("IP address does not parse: {ip_addr:}")]
+    #[error("IP address does not parse: {ip_addr}")]
     InvalidIpAddr { ip_addr: String },
 
-    #[error("final url does not parse: {url:}: {source:}")]
+    #[error("final url does not parse: {url}: {source}")]
     InvalidUrl {
         url: String,
         source: url::ParseError,

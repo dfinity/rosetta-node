@@ -18,6 +18,7 @@ ic-crypto-internal-basic-sig-der-utils = { path = "../crypto_lib/basic_sig/der_u
 ic-crypto-internal-basic-sig-ecdsa-secp256k1 = { path = "../crypto_lib/basic_sig/ecdsa_secp256k1" }
 ic-crypto-internal-basic-sig-ecdsa-secp256r1 = { path = "../crypto_lib/basic_sig/ecdsa_secp256r1" }
 ic-crypto-internal-basic-sig-ed25519 = { path = "../crypto_lib/basic_sig/ed25519" }
+ic-crypto-internal-basic-sig-iccsa = { path = "../crypto_lib/basic_sig/iccsa" }
 ic-crypto-internal-bls12381-common = { path = "../crypto_lib/bls12_381/common" }
 ic-crypto-internal-bls12381-serde-miracl = { path = "../crypto_lib/bls12_381/serde/miracl" }
 ic-crypto-internal-fs-ni-dkg = { path = "../crypto_lib/fs_ni_dkg" }

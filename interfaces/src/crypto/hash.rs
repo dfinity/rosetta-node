@@ -9,7 +9,7 @@ use ic_types::consensus::{
     ThresholdSignature, ThresholdSignatureShare,
 };
 use ic_types::crypto::Signed;
-use ic_types::messages::{HttpCanisterUpdate, MessageId, SignedIngress};
+use ic_types::messages::{HttpCanisterUpdate, MessageId, SignedRequestBytes};
 use std::hash::Hash;
 
 /// The domain separator to be used when calculating the sender signature for a
@@ -43,7 +43,7 @@ const DOMAIN_DKG_MESSAGE: &str = "dkg_message_non_interactive";
 
 const DOMAIN_HTTP_CANISTER_UPDATE: &str = "http_canister_update_domain";
 
-const DOMAIN_SIGNED_INGRESS: &str = "signed_ingress_domain";
+const DOMAIN_SIGNED_REQUEST_BYTES: &str = "signed_request_bytes_domain";
 
 const DOMAIN_MESSAGEID: &str = "messageid_domain";
 
@@ -61,8 +61,7 @@ const DOMAIN_STATE_SYNC_MESSAGE: &str = "state_sync_message_domain";
 const DOMAIN_CONSENSUS_MESSAGE: &str = "consensus_message_domain";
 const DOMAIN_CERTIFICATION_MESSAGE: &str = "certification_message_domain";
 
-// In the near future, likely some trait providing a _protocol version_ will be
-// required in addition to `CryptoHashDomain` for a type to be `CryptoHashable`.
+/// A cryptographically hashable type.
 pub trait CryptoHashable: CryptoHashDomain + Hash {}
 impl<T> CryptoHashable for T where T: CryptoHashDomain + Hash {}
 
@@ -116,7 +115,7 @@ mod private {
 
     impl CryptoHashDomainSeal for HttpCanisterUpdate {}
 
-    impl CryptoHashDomainSeal for SignedIngress {}
+    impl CryptoHashDomainSeal for SignedRequestBytes {}
 
     impl CryptoHashDomainSeal for RandomTapeContent {}
     impl CryptoHashDomainSeal for Signed<RandomTapeContent, ThresholdSignature<RandomTapeContent>> {}
@@ -249,9 +248,9 @@ impl CryptoHashDomain for HttpCanisterUpdate {
     }
 }
 
-impl CryptoHashDomain for SignedIngress {
+impl CryptoHashDomain for SignedRequestBytes {
     fn domain(&self) -> String {
-        DOMAIN_SIGNED_INGRESS.to_string()
+        DOMAIN_SIGNED_REQUEST_BYTES.to_string()
     }
 }
 
@@ -333,11 +332,12 @@ impl CryptoHashDomain for CryptoHashableTestDummy {
     }
 }
 
-// This struct is needed so that hashing in the crypto crate can be tested.
-// It is defined here because the struct must implement the `CryptoHashDomain`
-// trait, which is _sealed_ and must only be implemented here in this crate.
-// Ideally, this struct would be annotated with `#[cfg(test)]` so that it is
-// only available in test code, however, then it would not be visible outside
-// of this crate where it is needed.
+/// A helper struct for testing that implements `CryptoHashable`.
+///
+/// It is defined here because the struct must implement the `CryptoHashDomain`
+/// trait, which is _sealed_ and must only be implemented here in this crate.
+/// Ideally, this struct would be annotated with `#[cfg(test)]` so that it is
+/// only available in test code, however, then it would not be visible outside
+/// of this crate where it is needed.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct CryptoHashableTestDummy(pub Vec<u8>);

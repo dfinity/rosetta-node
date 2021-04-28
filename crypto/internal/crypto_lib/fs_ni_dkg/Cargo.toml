@@ -8,6 +8,10 @@ hex = "0.4.2"
 miracl_core = { version = "4.1.0", package = "miracl_core_bls12381" }
 rand_chacha = "0.2.2"
 zeroize = "1.1.1"
+ic-crypto-internal-bls12381-common ={path ="../bls12_381/common"}
 ic-crypto-internal-bls12381-serde-miracl = { path = "../bls12_381/serde/miracl" }
 ic-crypto-internal-types = { path = "../types" }
 ic-crypto-sha256 = { path = "../../../sha256" }
+
+[dev-dependencies]
+proptest = "0.9.4"

@@ -1,19 +1,18 @@
-/// Correct way of running async task in sync context without starving other
-/// independently spawned tasks.
+use core::future::Future;
+
+///  Executes async task in sync context without starving other independently
+///  spawned tasks.
 ///
-/// You must call the function from tokio, the only allowed runtime in the
-/// codebase, context. You must be in multi-threaded tokio runtime to use the
-/// function.
+///  You must call the function from multi-threaded tokio context.
 ///
-/// Often times we want to run an async function and wait for its results. We
-/// want this without having to think about async calls, runtimes, executors,
-/// joining, etc. This can be challenging and subtle.
+///  Often times we want to run an async function and wait for its results. We
+///  want this without having to think about async calls, runtimes, executors,
+///  joining, etc. This can be challenging and subtle.
 ///
-/// Keep in mind that spawn_and_wait is correct but may have performance
-/// implications.
+///  Keep in mind that `spawn_and_wait` is correct but may have performance
+///  implications.
 ///
-///
-/// Examples:
+///  Examples:
 ///
 /// ```
 ///     use ic_base_thread::spawn_and_wait;
@@ -23,8 +22,6 @@
 ///         assert_eq!(spawn_and_wait(my_fut), 2);
 ///     }
 /// ```
-use core::future::Future;
-
 pub fn spawn_and_wait<T>(task: T) -> T::Output
 where
     T: Future + Send + 'static,
@@ -40,8 +37,9 @@ where
         sender.send(res).unwrap();
     });
     tokio::task::block_in_place(|| {
-        // Although, this call is blocking, it won't block the executor so it can drive
-        // other futures forward. It won't panic since a message is sent.
+        // Although, this call is blocking, it won't block the executor so it
+        // can drive other futures forward. It won't panic since a message is
+        // sent.
         receiver.recv().unwrap()
     })
 }

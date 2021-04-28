@@ -1,8 +1,5 @@
 use ic_protobuf::crypto::v1::NodePublicKeys;
-use ic_types::crypto::{
-    CommitteeMemberPublicKey, CryptoError, CryptoResult, IcpPublicKey, KeyId, NodePublicKey,
-    UserPublicKey,
-};
+use ic_types::crypto::{CommitteeMemberPublicKey, CryptoError, CryptoResult, KeyId, UserPublicKey};
 use ic_types::RegistryVersion;
 
 /// Functions to generate key material.
@@ -12,12 +9,6 @@ pub trait Keygen {
     /// Returns the public key and a handle to the secret key, which is
     /// persisted in the secret key store.
     fn generate_user_keys_ed25519(&self) -> Result<(KeyId, UserPublicKey), CryptoError>;
-
-    /// Generates key material for an internet compute provider (ICP).
-    ///
-    /// Returns the public key and a handle to the secret key, which is
-    /// persisted in the secret key store.
-    fn generate_icp_keys(&self) -> Result<(KeyId, IcpPublicKey), CryptoError>;
 
     /// Generates key material for a member of a committee.
     ///
@@ -29,14 +20,6 @@ pub trait Keygen {
     fn generate_committee_member_keys(
         &self,
     ) -> Result<(KeyId, CommitteeMemberPublicKey), CryptoError>;
-
-    /// Generates key material for an Internet Computer node.
-    ///
-    /// Returns the public key and a handle to the secret key, which is
-    /// persisted in the secret key store.
-    fn generate_node_keys(&self) -> Result<(KeyId, NodePublicKey), CryptoError>;
-
-    fn remove(&self, key_id: KeyId);
 }
 
 /// Methods for checking and retrieving key material.

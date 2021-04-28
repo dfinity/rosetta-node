@@ -9,12 +9,12 @@ use ic_crypto_internal_threshold_sig_bls12381::api::dkg_errors;
 use ic_crypto_internal_threshold_sig_bls12381::api::ni_dkg_errors;
 use ic_crypto_internal_types::sign::threshold_sig::dkg::encryption_public_key::CspEncryptionPublicKey;
 use ic_crypto_internal_types::sign::threshold_sig::ni_dkg::{
-    CspFsEncryptionPok, CspFsEncryptionPublicKey, CspNiDkgDealing, CspNiDkgTranscript, Epoch,
+    CspFsEncryptionPop, CspFsEncryptionPublicKey, CspNiDkgDealing, CspNiDkgTranscript, Epoch,
 };
 use ic_crypto_internal_types::sign::threshold_sig::public_key::CspThresholdSigPublicKey;
 use ic_types::crypto::threshold_sig::ni_dkg::NiDkgId;
 use ic_types::crypto::{AlgorithmId, CryptoResult, KeyId};
-use ic_types::{IDkgId, NodeIndex, NumberOfNodes};
+use ic_types::{IDkgId, NodeId, NodeIndex, NumberOfNodes};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -634,11 +634,13 @@ pub trait NiDkgCspClient {
     ///
     /// The secret key is stored in the secret key store.  It is not returned by
     /// the method as that would violate the principle that secret keys never
-    /// leave the CSP.  The public key and the proof of knowledge are returned.
+    /// leave the CSP.  The public key and the proof of possession are returned.
     /// The public key can be used to verify signatures, it also needs to be
     /// provided when signing as it is used to retrieve the secret key from the
     /// key store.
     ///
+    /// # Arguments
+    /// * `node_id` is the identity of the node generating the public key.
     /// # Panics
     /// This method MUST panic if it is unable to store the secret key.
     /// # Errors
@@ -647,25 +649,27 @@ pub trait NiDkgCspClient {
     fn create_forward_secure_key_pair(
         &mut self,
         algorithm_id: AlgorithmId,
-    ) -> Result<(CspFsEncryptionPublicKey, CspFsEncryptionPok), ni_dkg_errors::CspDkgCreateFsKeyError>;
+        node_id: NodeId,
+    ) -> Result<(CspFsEncryptionPublicKey, CspFsEncryptionPop), ni_dkg_errors::CspDkgCreateFsKeyError>;
 
-    /// Verifies that a forward secure public key and PoK is valid.
+    /// Verifies that a forward secure public key and PoP is valid.
     ///
     /// # Arguments
-    /// * `(public_key, pok)` is a public key and the corresponding proof of
+    /// * `(public_key, pop)` is a public key and the corresponding proof of
     ///   possession.
+    /// * `node_id` is the identity of the node that generated the public key.
     /// # Panics
     /// This method is not expected to panic.
     /// # Errors
     /// This method SHALL return an error if:
-    /// * the public key is not well formed. (`MalformedPublicKeyWithPokError`)
-    /// * the CspPok is not consistent with all other arguments.
-    ///   (`InvalidPokError`)
+    /// * the public key is not well formed. (`MalformedPublicKeyWithPopError`)
+    /// * the CspPop is not consistent with all other arguments. (`InvalidPop`)
     fn verify_forward_secure_key(
         &self,
         algorithm_id: AlgorithmId,
         public_key: CspFsEncryptionPublicKey,
-        pok: CspFsEncryptionPok,
+        pop: CspFsEncryptionPop,
+        node_id: NodeId,
     ) -> Result<(), ni_dkg_errors::CspDkgVerifyFsKeyError>;
 
     /// Updates the secret key corresponding to public_key so that it cannot be
@@ -696,6 +700,7 @@ pub trait NiDkgCspClient {
     /// # Arguments
     /// * `algorithm_id` selects the algorithm suite to use for the scheme.
     /// * `dkg_id` is the identifier for the distributed key being generated.
+    /// * `dealer_index` the index associated with the dealer.
     /// * `threshold` is the minimum number of nodes required to generate a
     ///   valid threshold signature.
     /// * `epoch` is a monotonic increasing counter used to select forward
@@ -719,6 +724,7 @@ pub trait NiDkgCspClient {
         &self,
         algorithm_id: AlgorithmId,
         dkg_id: NiDkgId,
+        dealer_index: NodeIndex,
         threshold: NumberOfNodes,
         epoch: Epoch,
         receiver_keys: BTreeMap<NodeIndex, CspFsEncryptionPublicKey>,
@@ -733,6 +739,8 @@ pub trait NiDkgCspClient {
     /// # Arguments
     /// * `algorithm_id` selects the algorithm suite to use for the scheme.
     /// * `dkg_id` is the new DKG identifier.
+    /// * `dealer_resharing_index` the index associated with the dealer in the
+    ///   resharing committee.
     /// * `threshold` is the minimum number of nodes required to generate a
     ///   valid threshold signature using the new keys; this may differ from the
     ///   preceding threshold.
@@ -756,10 +764,12 @@ pub trait NiDkgCspClient {
     ///   (`ReshareKeyNotFoundError`, `MalformedReshareSecretKeyError`)
     /// * the number of public coefficients or receiver keys is unsupported by
     ///   this machine. (`SizeError`)
+    #[allow(clippy::too_many_arguments)]
     fn create_resharing_dealing(
         &self,
         algorithm_id: AlgorithmId,
         dkg_id: NiDkgId,
+        dealer_resharing_index: NodeIndex,
         threshold: NumberOfNodes,
         epoch: Epoch,
         receiver_keys: BTreeMap<NodeIndex, CspFsEncryptionPublicKey>,
@@ -774,6 +784,7 @@ pub trait NiDkgCspClient {
     /// # Arguments
     /// * `algorithm_id` selects the algorithm suite to use for the scheme.
     /// * `dkg_id` is a unique identifier for the DKG.
+    /// * `dealer_index` the index associated with the dealer.
     /// * `threshold` is the minimum number of nodes required to generate a
     ///   valid threshold signature.
     /// * `epoch` is a monotonic increasing counter used to select forward
@@ -800,10 +811,12 @@ pub trait NiDkgCspClient {
     ///   error. (`InvalidDealingError`)
     /// * the number of receiver keys is unsupported by this machine.
     ///   (`SizeError`)
+    #[allow(clippy::too_many_arguments)]
     fn verify_dealing(
         &self,
         algorithm_id: AlgorithmId,
         dkg_id: NiDkgId,
+        dealer_index: NodeIndex,
         threshold: NumberOfNodes,
         epoch: Epoch,
         receiver_keys: BTreeMap<NodeIndex, CspFsEncryptionPublicKey>,
@@ -819,6 +832,8 @@ pub trait NiDkgCspClient {
     /// # Arguments
     /// * `algorithm_id` selects the algorithm suite to use for the scheme.
     /// * `dkg_id` is the new DKG identifier.
+    /// * `dealer_resharing_index` the index associated with the dealer in the
+    ///   resharing committee.
     /// * `threshold` is the minimum number of nodes required to generate a
     ///   valid threshold signature using the new keys; this may differ from the
     ///   preceding threshold.
@@ -829,8 +844,6 @@ pub trait NiDkgCspClient {
     /// * `dealing` is the dealing to be verified.
     /// * `resharing_public_coefficients` are the public coefficients of the
     ///   previous threshold key.
-    /// * `resharing_dealer_index` is the current dealer's index in the
-    ///   preceding threshold key being reshared.
     /// # Panics
     /// This method is not expected to panic.
     /// # Errors
@@ -858,12 +871,12 @@ pub trait NiDkgCspClient {
         &self,
         algorithm_id: AlgorithmId,
         dkg_id: NiDkgId,
+        dealer_resharing_index: NodeIndex,
         threshold: NumberOfNodes,
         epoch: Epoch,
         receiver_keys: BTreeMap<NodeIndex, CspFsEncryptionPublicKey>,
         dealing: CspNiDkgDealing,
         resharing_public_coefficients: CspPublicCoefficients,
-        resharing_dealer_index: NodeIndex,
     ) -> Result<(), ni_dkg_errors::CspDkgVerifyReshareDealingError>;
 
     /// Assembles all valid dealings into a single record.

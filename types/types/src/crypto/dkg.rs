@@ -1,7 +1,7 @@
+//! Defines interactive distributed key generation (DKG) types.
 use crate::{IDkgId, NodeId};
 use serde::{Deserialize, Serialize};
 
-#[allow(unused)] // TODO (CRP-311) remove once used
 mod config;
 mod encryption_public_key;
 pub use config::{Config, Dealers, DkgConfig, DkgConfigData, Receivers};
@@ -30,8 +30,7 @@ pub struct EncryptionPublicKeyWithPop {
 }
 
 impl Default for EncryptionPublicKeyWithPop {
-    // TODO (CRP-328): This is a temporary to make the code consuming the crypto
-    // interfaces compile.
+    // TODO (CRP-328)
     fn default() -> Self {
         EncryptionPublicKeyWithPop {
             key: Default::default(),

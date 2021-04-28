@@ -1,9 +1,9 @@
 //! This module contains a collection of types and structs that define the
 //! various types of methods in the IC.
 
-use crate::messages::CallContextId;
+use crate::{messages::CallContextId, Cycles};
 use ic_protobuf::proxy::{try_from_option_field, ProxyDecodeError};
-use ic_protobuf::state::canister_state_bits::v1 as pb;
+use ic_protobuf::state::{canister_state_bits::v1 as pb, queues::v1::Cycles as PbCycles};
 use serde::{Deserialize, Serialize};
 use std::{
     convert::{From, TryFrom},
@@ -89,6 +89,7 @@ impl From<&WasmMethod> for pb::WasmMethod {
                     SystemMethod::CanisterPostUpgrade => PbSystemMethod::CanisterPostUpgrade,
                     SystemMethod::CanisterInspectMessage => PbSystemMethod::CanisterInspectMessage,
                     SystemMethod::CanisterHeartbeat => PbSystemMethod::CanisterHeartbeat,
+                    SystemMethod::Empty => PbSystemMethod::Empty,
                 } as i32)),
             },
         }
@@ -121,12 +122,14 @@ impl TryFrom<pb::WasmMethod> for WasmMethod {
                     PbSystemMethod::CanisterPostUpgrade => SystemMethod::CanisterPostUpgrade,
                     PbSystemMethod::CanisterInspectMessage => SystemMethod::CanisterInspectMessage,
                     PbSystemMethod::CanisterHeartbeat => SystemMethod::CanisterHeartbeat,
+                    PbSystemMethod::Empty => SystemMethod::Empty,
                 }))
             }
         }
     }
 }
 
+/// The various system methods available to canisters.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum SystemMethod {
     /// A system method for initializing a Wasm module.
@@ -142,6 +145,12 @@ pub enum SystemMethod {
     CanisterInspectMessage,
     /// A system method that is run at regular intervals for cron support.
     CanisterHeartbeat,
+    /// This is introduced as temporary scaffolding to aid in construction of
+    /// the initial ExecutionState. This isn't used to execute any actual wasm
+    /// but as a way to get to the wasm embedder from execution. Eventually, we
+    /// need to rethink some of the API between execution and wasm embedder so
+    /// that this is not needed.
+    Empty,
 }
 
 impl TryFrom<&str> for SystemMethod {
@@ -155,6 +164,7 @@ impl TryFrom<&str> for SystemMethod {
             "canister_start" => Ok(SystemMethod::CanisterStart),
             "canister_inspect_message" => Ok(SystemMethod::CanisterInspectMessage),
             "canister_heartbeat" => Ok(SystemMethod::CanisterHeartbeat),
+            "empty" => Ok(SystemMethod::Empty),
             _ => Err(format!("Cannot convert {} to SystemMethod.", value)),
         }
     }
@@ -169,10 +179,12 @@ impl fmt::Display for SystemMethod {
             Self::CanisterStart => write!(f, "canister_start"),
             Self::CanisterInspectMessage => write!(f, "canister_inspect_message"),
             Self::CanisterHeartbeat => write!(f, "canister_heartbeat"),
+            Self::Empty => write!(f, "empty"),
         }
     }
 }
 
+/// A Wasm closure pointing to the Wasm function table.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WasmClosure {
     pub func_idx: u32,
@@ -185,26 +197,35 @@ impl WasmClosure {
     }
 }
 
-/// Every callback references the call context it belongs to. The callback
-/// parameters are references to the success & error functions, plus their
-/// arguments.
+/// References to functions executed when a response is received.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Callback {
     pub call_context_id: CallContextId,
+    /// The number of cycles that were sent in the original request.
+    pub cycles_sent: Cycles,
+    /// A closure to be executed if the call succeeded.
     pub on_reply: WasmClosure,
+    /// A closure to be executed if the call was rejected.
     pub on_reject: WasmClosure,
+    /// An optional closure to be executed if the execution of `on_reply` or
+    /// `on_reject` traps.
+    pub on_cleanup: Option<WasmClosure>,
 }
 
 impl Callback {
     pub fn new(
         call_context_id: CallContextId,
+        cycles_sent: Cycles,
         on_reply: WasmClosure,
         on_reject: WasmClosure,
+        on_cleanup: Option<WasmClosure>,
     ) -> Self {
         Self {
             call_context_id,
+            cycles_sent,
             on_reply,
             on_reject,
+            on_cleanup,
         }
     }
 }
@@ -213,6 +234,7 @@ impl From<&Callback> for pb::Callback {
     fn from(item: &Callback) -> Self {
         Self {
             call_context_id: item.call_context_id.get(),
+            cycles_sent: Some(item.cycles_sent.into()),
             on_reply: Some(pb::WasmClosure {
                 func_idx: item.on_reply.func_idx,
                 env: item.on_reply.env,
@@ -220,6 +242,10 @@ impl From<&Callback> for pb::Callback {
             on_reject: Some(pb::WasmClosure {
                 func_idx: item.on_reject.func_idx,
                 env: item.on_reject.env,
+            }),
+            on_cleanup: item.on_cleanup.clone().map(|on_cleanup| pb::WasmClosure {
+                func_idx: on_cleanup.func_idx,
+                env: on_cleanup.env,
             }),
         }
     }
@@ -233,9 +259,12 @@ impl TryFrom<pb::Callback> for Callback {
             try_from_option_field(value.on_reply, "Callback::on_reply")?;
         let on_reject: pb::WasmClosure =
             try_from_option_field(value.on_reject, "Callback::on_reject")?;
+        let cycles_sent: PbCycles =
+            try_from_option_field(value.cycles_sent, "Callback::cycles_sent")?;
 
         Ok(Self {
             call_context_id: CallContextId::from(value.call_context_id),
+            cycles_sent: Cycles::from(cycles_sent),
             on_reply: WasmClosure {
                 func_idx: on_reply.func_idx,
                 env: on_reply.env,
@@ -244,6 +273,10 @@ impl TryFrom<pb::Callback> for Callback {
                 func_idx: on_reject.func_idx,
                 env: on_reject.env,
             },
+            on_cleanup: value.on_cleanup.map(|on_cleanup| WasmClosure {
+                func_idx: on_cleanup.func_idx,
+                env: on_cleanup.env,
+            }),
         })
     }
 }
@@ -277,6 +310,7 @@ impl FuncRef {
             | Self::UpdateClosure(_) => true,
             Self::QueryClosure(_)
             | Self::Method(WasmMethod::Query(_))
+            | Self::Method(WasmMethod::System(SystemMethod::Empty))
             | Self::Method(WasmMethod::System(SystemMethod::CanisterInspectMessage)) => false,
         }
     }

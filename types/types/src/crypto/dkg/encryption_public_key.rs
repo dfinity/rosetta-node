@@ -7,8 +7,7 @@ pub struct EncryptionPublicKey {
 }
 
 impl Default for EncryptionPublicKey {
-    // TODO (CRP-328): This is a temporary to make the code consuming the crypto
-    // interfaces compile.
+    // TODO (CRP-328)
     fn default() -> Self {
         EncryptionPublicKey::from(&CspEncryptionPublicKey::default())
     }

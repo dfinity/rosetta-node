@@ -1,10 +1,6 @@
 //! Implementation of the registry client. Calls to the API always return
 //! immediately. The provided data provider is polled periodically in the
 //! background when start_polling() is called.
-//!
-//! TODO(DFN-1567):
-//! * Logging
-//! * Metrics
 pub use ic_config::registry_client::DataProviderConfig;
 pub use ic_interfaces::registry::{
     empty_zero_registry_record, RegistryClient, RegistryClientVersionedResult,
@@ -23,14 +19,13 @@ pub use ic_types::{
     registry::{RegistryClientError, RegistryDataProviderError},
     RegistryVersion,
 };
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, RwLock, RwLockReadGuard};
 use std::time::Duration;
 use url::Url;
 
 use crate::metrics::Metrics;
 
-// TODO(RPL-20): Make this configurable
 const POLLING_PERIOD: Duration = Duration::from_secs(10);
 
 #[derive(Clone)]
@@ -38,8 +33,8 @@ pub struct RegistryClientImpl {
     cache: Arc<RwLock<CacheState>>,
     data_provider: Arc<dyn RegistryDataProvider>,
     metrics: Arc<Metrics>,
-    poll_lock: Arc<Mutex<()>>,
-    polling_thread_id: Arc<AtomicUsize>,
+    started: Arc<AtomicBool>,
+    cancelled: Arc<AtomicBool>,
 }
 
 /// RegistryClientImpl polls the registry on the NNS subnet and caches the
@@ -59,37 +54,34 @@ impl RegistryClientImpl {
             cache: Arc::new(RwLock::new(CacheState::new())),
             data_provider,
             metrics,
-            poll_lock: Arc::new(Mutex::new(())),
-            polling_thread_id: Arc::new(AtomicUsize::new(0)),
+            started: Arc::new(AtomicBool::new(false)),
+            cancelled: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    /// Calls `poll_once()` synchronously and, if that call succeeds, spawns a
-    /// background thread that continuously polls data provider for updates.
-    /// Any running background thread can be stopped by calling
-    /// `stop_polling()`. For any sequence of calls to `start_polling()` and
-    /// `stop_polling()`, at any point in time, at most one background
-    /// thread is active.
-    ///
-    /// TODO(DFN-1566): Make polling frequency configurable.
-    pub fn start_polling(&self) -> Result<(), RegistryClientError> {
+    /// Calls `poll_once()` synchronously, if it succeeds a background task is
+    /// spawned that continuously polls for updates.
+    /// The background task is stopped when the object is dropped.
+    pub fn fetch_and_start_polling(&self) -> Result<(), RegistryClientError> {
+        if self
+            .started
+            .compare_and_swap(false, true, Ordering::Relaxed)
+        {
+            return Err(RegistryClientError::PollLockFailed {
+                error: "'fetch_and_start_polling' already called".to_string(),
+            });
+        }
         self.poll_once()?;
+        let cancelled = Arc::clone(&self.cancelled);
         let self_ = self.clone();
         tokio::spawn(async move {
-            let my_id = self_.polling_thread_id.fetch_add(1, Ordering::Relaxed) + 1;
-            while self_.polling_thread_id.load(Ordering::Relaxed) == my_id {
-                if let Ok(()) = self_.poll_once() {}
-                // TODO: Consider logging / instrumenting poll errors.
+            while !cancelled.load(Ordering::Relaxed) {
                 tokio::time::delay_for(POLLING_PERIOD).await;
+                if let Ok(()) = self_.poll_once() {}
             }
         });
 
         Ok(())
-    }
-
-    /// Stops any currently running background thread.
-    pub fn stop_polling(&self) {
-        self.polling_thread_id.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Fetches the newest updates from the registry data provider.
@@ -99,13 +91,6 @@ impl RegistryClientImpl {
     /// regardless of whether a newer registry version was available or not.
     pub fn poll_once(&self) -> Result<(), RegistryClientError> {
         let (records, version) = {
-            let _lock =
-                self.poll_lock
-                    .try_lock()
-                    .map_err(|e| RegistryClientError::PollLockFailed {
-                        error: e.to_string(),
-                    })?;
-
             let latest_version = self.cache.read().unwrap().latest_version;
             match self
                 .data_provider
@@ -144,6 +129,17 @@ impl RegistryClientImpl {
     }
 }
 
+impl Drop for RegistryClientImpl {
+    fn drop(&mut self) {
+        self.cancelled.fetch_or(true, Ordering::Relaxed);
+    }
+}
+
+/// Instantiate a data provider from a `DataProviderConfig`. In case of
+/// `DataProviderConfig::Bootstrap` and
+/// `DataProviderConfig::RegistryCanisterUrl`, a corresponding
+/// `ThresholdSigPublicKey` can be provided to verify certified updates provided
+/// by the registry canister.
 pub fn create_data_provider(
     data_provider_config: &DataProviderConfig,
     optional_nns_public_key: Option<ThresholdSigPublicKey>,
@@ -325,6 +321,7 @@ mod tests {
         test_proto::TestProtoHelper,
     };
     use std::collections::HashSet;
+    use std::sync::atomic::AtomicUsize;
     use std::sync::{Arc, RwLock};
     use std::time::Duration;
 
@@ -485,11 +482,11 @@ mod tests {
         });
         let registry = RegistryClientImpl::new(data_provider.clone(), None);
 
-        if let Err(e) = registry.start_polling() {
-            panic!("start_polling failed: {}", e);
+        if let Err(e) = registry.fetch_and_start_polling() {
+            panic!("fetch_and_start_polling failed: {}", e);
         }
         tokio::time::delay_for(Duration::from_secs(1)).await;
-        registry.stop_polling();
+        std::mem::drop(registry);
 
         assert!(data_provider.poll_counter.load(Ordering::Relaxed) > 0);
     }

@@ -1,3 +1,4 @@
+use ic_protobuf::registry::crypto::v1::X509PublicKeyCert;
 use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, path::PathBuf};
 
@@ -18,7 +19,10 @@ impl Default for Exporter {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     pub exporter: Exporter,
+    /// Clients X509 certificate used for establishing TLS protocol. The field
+    /// is base64 encoded DER certificate.
+    pub clients_x509_cert: Option<X509PublicKeyCert>,
 }

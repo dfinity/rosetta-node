@@ -1,6 +1,8 @@
+use ic_types::messages::{
+    HttpCanisterUpdate, HttpReadContent, HttpRequestEnvelope, HttpSubmitContent,
+};
 use ledger_canister::BlockHeight;
 use serde::{Deserialize, Serialize, Serializer};
-use serde_json::json;
 
 // This file is generated from https://github.com/coinbase/rosetta-specifications using openapi-generator
 // Then heavily tweaked because openapi-generator no longer generates valid rust
@@ -479,7 +481,7 @@ pub struct ConstructionCombineRequest {
     pub network_identifier: NetworkIdentifier,
 
     #[serde(rename = "unsigned_transaction")]
-    pub unsigned_transaction: String,
+    pub unsigned_transaction: String, // = CBOR+hex-encoded 'UnsignedTransaction'
 
     #[serde(rename = "signatures")]
     pub signatures: Vec<Signature>,
@@ -505,7 +507,7 @@ impl ConstructionCombineRequest {
 #[cfg_attr(feature = "conversion", derive(LabelledGeneric))]
 pub struct ConstructionCombineResponse {
     #[serde(rename = "signed_transaction")]
-    pub signed_transaction: String,
+    pub signed_transaction: String, // = CBOR+hex-encoded 'Envelopes'
 }
 
 impl ConstructionCombineResponse {
@@ -513,6 +515,13 @@ impl ConstructionCombineResponse {
         ConstructionCombineResponse { signed_transaction }
     }
 }
+
+/// The type (encoded as CBOR) returned by /construction/combine, containing the
+/// IC calls to submit the transaction and to check the result.
+pub type Envelopes = Vec<(
+    HttpRequestEnvelope<HttpSubmitContent>,
+    HttpRequestEnvelope<HttpReadContent>,
+)>;
 
 /// ConstructionDeriveRequest is passed to the `/construction/derive` endpoint.
 /// Network is provided in the request because some blockchains have different
@@ -780,7 +789,7 @@ impl ConstructionPayloadsRequest {
 #[cfg_attr(feature = "conversion", derive(LabelledGeneric))]
 pub struct ConstructionPayloadsResponse {
     #[serde(rename = "unsigned_transaction")]
-    pub unsigned_transaction: String,
+    pub unsigned_transaction: String, // = CBOR+hex-encoded 'UnsignedTransaction'
 
     #[serde(rename = "payloads")]
     pub payloads: Vec<SigningPayload>,
@@ -796,6 +805,12 @@ impl ConstructionPayloadsResponse {
             payloads,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnsignedTransaction {
+    pub update: HttpCanisterUpdate,
+    pub ingress_expiries: Vec<u64>,
 }
 
 /// ConstructionPreprocessRequest is passed to the `/construction/preprocess`
@@ -1033,6 +1048,7 @@ impl Error {
             }
             ApiError::ICError(r, d) => (740, "Internet Computer error", r, d),
             ApiError::TransactionRejected(r, d) => (750, "Transaction rejected", r, d),
+            ApiError::TransactionExpired => (760, "Transaction expired", &false, &None),
         };
         Self {
             code,
@@ -1042,15 +1058,9 @@ impl Error {
         }
     }
 
-    pub fn serialization_error_json_str(details: Option<Object>) -> String {
-        // This needs to match ApiError::InternalError code and message
-        json!({
-                "code": 700,
-                "message": "Internal server error",
-                "retriable": true,
-                "details": details
-        })
-        .to_string()
+    pub fn serialization_error_json_str() -> String {
+        "{\"code\":700,\"message\":\"Internal server error\",\"retriable\":true,\"details\":null}"
+            .to_string()
     }
 }
 
@@ -1069,6 +1079,7 @@ pub enum ApiError {
     NotAvailableOffline(bool, Option<Object>),
     ICError(bool, Option<Object>),
     TransactionRejected(bool, Option<Object>),
+    TransactionExpired,
 }
 
 impl serde::Serialize for ApiError {
@@ -1808,6 +1819,82 @@ impl TransactionIdentifierResponse {
         TransactionIdentifierResponse {
             transaction_identifier,
             metadata: None,
+        }
+    }
+}
+
+/// SearchTransactionsRequest models a small subset of the /search/transactions
+/// endpoint. Currently we only support looking up a transaction given its hash;
+/// this functionality is desired by our crypto exchanges partners.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "conversion", derive(LabelledGeneric))]
+pub struct SearchTransactionsRequest {
+    #[serde(rename = "network_identifier")]
+    pub network_identifier: NetworkIdentifier,
+
+    #[serde(rename = "transaction_identifier")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transaction_identifier: Option<TransactionIdentifier>,
+
+    #[serde(rename = "account_identifier")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_identifier: Option<AccountIdentifier>,
+}
+
+impl SearchTransactionsRequest {
+    pub fn new(
+        network_identifier: NetworkIdentifier,
+        transaction_identifier: Option<TransactionIdentifier>,
+        account_identifier: Option<AccountIdentifier>,
+    ) -> SearchTransactionsRequest {
+        SearchTransactionsRequest {
+            network_identifier,
+            transaction_identifier,
+            account_identifier,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "conversion", derive(LabelledGeneric))]
+pub struct BlockTransaction {
+    #[serde(rename = "block_identifier")]
+    pub block_identifier: BlockIdentifier,
+
+    #[serde(rename = "transaction")]
+    pub transaction: Transaction,
+}
+
+impl BlockTransaction {
+    pub fn new(block_identifier: BlockIdentifier, transaction: Transaction) -> BlockTransaction {
+        BlockTransaction {
+            block_identifier,
+            transaction,
+        }
+    }
+}
+
+/// SearchTransactionsResponse is the result of the /search/transactions
+/// endpoint. Currently we only return either 0 or 1 transactions, based on
+/// whether the given transaction hash is found.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "conversion", derive(LabelledGeneric))]
+pub struct SearchTransactionsResponse {
+    #[serde(rename = "transactions")]
+    pub transactions: Vec<BlockTransaction>,
+
+    #[serde(rename = "total_count")]
+    pub total_count: i64,
+}
+
+impl SearchTransactionsResponse {
+    pub fn new(
+        transactions: Vec<BlockTransaction>,
+        total_count: i64,
+    ) -> SearchTransactionsResponse {
+        SearchTransactionsResponse {
+            transactions,
+            total_count,
         }
     }
 }

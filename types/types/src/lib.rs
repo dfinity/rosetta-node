@@ -83,6 +83,7 @@ pub use crate::replica_version::ReplicaVersion;
 pub use crate::time::Time;
 pub use funds::icp::{ICPError, ICP};
 pub use funds::*;
+use ic_base_types::NumSeconds;
 pub use ic_base_types::{
     subnet_id_into_protobuf, subnet_id_try_from_protobuf, CanisterId, CanisterIdBlobParseError,
     CanisterIdError, CanisterStatusType, NodeId, NodeTag, NumBytes, PrincipalId,
@@ -100,6 +101,7 @@ use std::fmt;
 use std::fmt::Display;
 
 pub struct UserTag {}
+/// An end-user's [`PrincipalId`].
 pub type UserId = Id<UserTag, PrincipalId>;
 
 /// Converts a UserId into its protobuf definition.  Normally, we would use
@@ -144,9 +146,11 @@ impl IDkgId {
     }
 }
 
+/// A non-negative amount of nodes, typically used in DKG.
 pub type NumberOfNodes = AmountOf<NodeTag, NodeIndex>;
 
 pub struct HeightTag {}
+/// The block height.
 // Note [ExecutionRound vs Height]
 pub type Height = AmountOf<HeightTag, u64>;
 
@@ -169,10 +173,10 @@ pub fn node_id_try_from_protobuf(value: pb::NodeId) -> Result<NodeId, PrincipalI
     Ok(NodeId::from(principal_id))
 }
 
+pub struct NumInstructionsTag;
 /// Represents an amount of weighted instructions that can be used as the
 /// execution cutoff point for messages. This amount can be used to charge the
 /// respective amount of `Cycles` on a canister's balance for message execution.
-pub struct NumInstructionsTag;
 pub type NumInstructions = AmountOf<NumInstructionsTag, u64>;
 
 pub struct QueueIndexTag;
@@ -181,9 +185,12 @@ pub struct QueueIndexTag;
 pub type QueueIndex = AmountOf<QueueIndexTag, u64>;
 
 pub struct RandomnessTag;
+/// Randomness produced by Consensus which is used in the
+/// deterministic state machine (Message Routing and Execution Environment).
 pub type Randomness = Id<RandomnessTag, [u8; 32]>;
 
 pub struct ExecutionRoundTag {}
+/// The id of an execution round in the scheduler.
 // Note [ExecutionRound vs Height]
 pub type ExecutionRound = Id<ExecutionRoundTag, u64>;
 
@@ -196,9 +203,10 @@ pub enum CanonicalStateTag {}
 /// A cryptographic hash of a full canonical replicated state at some height.
 pub type CryptoHashOfState = crypto::CryptoHashOf<CanonicalStateTag>;
 
-/// `AccumulatedPriority` is a part of the SchedulerState. Kept by each
-/// canister, it corresponds to their entry in vector 'd' in the Scheduler
-/// Analysis document.
+/// `AccumulatedPriority` is a part of the SchedulerState. It is the value by
+/// which we prioritize canisters for execution. It is reset to 0 in the round
+/// where a canister is scheduled and incremented by the canister allocation in
+/// each round where the canister is not scheduled.
 // Note [Scheduler and AccumulatedPriority]
 #[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AccumulatedPriority(i64);
@@ -209,7 +217,7 @@ impl AccumulatedPriority {
     }
 }
 
-// According to the Scheduler Analysis document, the initial Priority is 0.
+// The initial accumulated priority is 0.
 impl Default for AccumulatedPriority {
     fn default() -> Self {
         AccumulatedPriority(0)
@@ -236,7 +244,7 @@ impl QueryAllocation {
 
     /// Returns the maximum allowed query allocation per message.
     pub fn max_per_message() -> QueryAllocation {
-        QueryAllocation(MAX_QUERY_ALLOCATION / 1000)
+        QueryAllocation(10_000_000_000)
     }
 
     pub fn get(&self) -> u64 {
@@ -262,7 +270,7 @@ impl std::ops::Sub for QueryAllocation {
     type Output = Self;
 
     fn sub(self, other: Self) -> Self {
-        Self(self.0 - other.0)
+        Self(self.0.saturating_sub(other.0))
     }
 }
 
@@ -278,6 +286,8 @@ impl From<NumInstructions> for QueryAllocation {
     }
 }
 
+/// The error returned when an invalid [`QueryAllocation`] is specified by the
+/// end-user.
 #[derive(Clone, Debug)]
 pub struct InvalidQueryAllocationError {
     pub min: u64,
@@ -286,7 +296,6 @@ pub struct InvalidQueryAllocationError {
 }
 
 const MIN_QUERY_ALLOCATION: u64 = 0;
-// TODO(EXE-63): Reduce query call prices and this number as well
 const MAX_QUERY_ALLOCATION: u64 = 1_000_000_000_000_000;
 
 impl InvalidQueryAllocationError {
@@ -334,14 +343,15 @@ impl ComputeAllocation {
     }
 }
 
-// According to the Internet Computer's public spec the default
-// `ComputeAllocation` is 0.
+// The default `ComputeAllocation` is 0: https://sdk.dfinity.org/docs/interface-spec/index.html#ic-install_code.
 impl Default for ComputeAllocation {
     fn default() -> Self {
         ComputeAllocation(0)
     }
 }
 
+/// The error that occurs when an end-user specifies an invalid
+/// [`ComputeAllocation`].
 #[derive(Clone, Debug)]
 pub struct InvalidComputeAllocationError {
     min: u64,
@@ -417,104 +427,48 @@ fn display_canister_id() {
 #[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq, Serialize, Hash)]
 pub struct MemoryAllocation(NumBytes);
 
-// The default memory allocation is set to 10MiB so that we allow for (best
-// case) in the order of thousands (~3000) canisters to exist in a subnet given
-// the `SUBNET_MEMORY_CAPACITY` is set to 30GiB.
-impl Default for MemoryAllocation {
-    fn default() -> Self {
-        MemoryAllocation(NumBytes::from(10 * 1024 * 1024))
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct InvalidMemoryAllocationError {
-    min: u64,
-    max: u64,
-    given: u64,
-}
-
-const MIN_MEMORY_ALLOCATION: u64 = 0;
-// Set the maximum allowed memory allocation to 8GB to ensure that no single
-// canister can claim the full subnet's capacity (set to 30GiB, see
-// `SUBNET_MEMORY_CAPACITY`).
-const MAX_MEMORY_ALLOCATION: u64 = 8 * 1024 * 1024 * 1024;
-
-impl InvalidMemoryAllocationError {
-    pub fn new(given: u64) -> Self {
-        Self {
-            min: MIN_MEMORY_ALLOCATION,
-            max: MAX_MEMORY_ALLOCATION,
-            given,
-        }
-    }
-
-    pub fn min(&self) -> u64 {
-        self.min
-    }
-
-    pub fn max(&self) -> u64 {
-        self.max
-    }
-
-    pub fn given(&self) -> u64 {
-        self.given
-    }
-}
-
-impl TryFrom<u64> for MemoryAllocation {
-    type Error = InvalidMemoryAllocationError;
-
-    // Constructs a `MemoryAllocation` from a u64 in the range [0..2^48].
-    //
-    // # Errors
-    //
-    // Returns an `InvalidMemoryAllocationError` if the input u64 is not in
-    // the expected range.
-    fn try_from(num: u64) -> Result<Self, Self::Error> {
-        if num > MAX_MEMORY_ALLOCATION {
-            return Err(InvalidMemoryAllocationError::new(num));
-        }
-        Ok(MemoryAllocation(NumBytes::from(num)))
-    }
-}
-
-impl Into<NumBytes> for MemoryAllocation {
-    fn into(self) -> NumBytes {
+impl MemoryAllocation {
+    pub fn get(&self) -> NumBytes {
         self.0
     }
 }
 
 impl fmt::Display for MemoryAllocation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}B", self.0)
+        write!(f, "{}B", self.0.get())
     }
 }
 
-// Note [Unit].
-pub const CYCLES_UNIT: &str = "00";
-pub const ICP_UNIT: &str = "01";
-
-/// Indicates the unit of different tokens on the canister. Only Cycles and ICP
-/// tokens are supported currently.
-///
-/// Note that this struct does not implement `(De)Serialize`. If you need to
-/// perform any (de)serialization consider converting to a `ic00::Unit` instead.
-#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum Unit {
-    Cycles,
-    ICP,
+/// The error that occurs when an end-user specifies an invalid
+/// [`MemoryAllocation`].
+#[derive(Clone, Debug)]
+pub struct InvalidMemoryAllocationError {
+    pub min: NumBytes,
+    pub max: NumBytes,
+    pub given: NumBytes,
 }
 
-impl TryFrom<&[u8]> for Unit {
-    type Error = ();
+const MIN_MEMORY_ALLOCATION: NumBytes = NumBytes::new(0);
+const MAX_MEMORY_ALLOCATION: NumBytes = NumBytes::new(8 * 1024 * 1024 * 1024);
 
-    fn try_from(input: &[u8]) -> Result<Self, Self::Error> {
-        let encoded = hex::encode(input);
-        match encoded.as_str() {
-            CYCLES_UNIT => Ok(Unit::Cycles),
-            ICP_UNIT => Ok(Unit::ICP),
-            _ => Err(()),
+impl InvalidMemoryAllocationError {
+    pub fn new(given: NumBytes) -> Self {
+        Self {
+            min: MIN_MEMORY_ALLOCATION,
+            max: MAX_MEMORY_ALLOCATION,
+            given,
         }
+    }
+}
+
+impl TryFrom<NumBytes> for MemoryAllocation {
+    type Error = InvalidMemoryAllocationError;
+
+    fn try_from(bytes: NumBytes) -> Result<Self, Self::Error> {
+        if bytes > MAX_MEMORY_ALLOCATION {
+            return Err(InvalidMemoryAllocationError::new(bytes));
+        }
+        Ok(MemoryAllocation(bytes))
     }
 }
 
@@ -525,11 +479,13 @@ pub struct InstallCodeContext {
     pub canister_id: CanisterId,
     pub wasm_module: Vec<u8>,
     pub arg: Vec<u8>,
-    pub compute_allocation: ComputeAllocation,
+    pub compute_allocation: Option<ComputeAllocation>,
     pub memory_allocation: Option<MemoryAllocation>,
     pub query_allocation: QueryAllocation,
 }
 
+/// Errors that can occur when converting from (sender, [`InstallCodeArgs`]) to
+/// an [`InstallCodeContext`].
 #[derive(Debug)]
 pub enum InstallCodeContextError {
     ComputeAllocation(InvalidComputeAllocationError),
@@ -561,9 +517,7 @@ impl From<InstallCodeContextError> for UserError {
                 ErrorCode::CanisterContractViolation,
                 format!(
                     "MemoryAllocation expected to be in the range [{}..{}], got {}",
-                    err.min(),
-                    err.max(),
-                    err.given()
+                    err.min, err.max, err.given
                 ),
             ),
             InstallCodeContextError::InvalidCanisterId(bytes) => UserError::new(
@@ -607,11 +561,13 @@ impl TryFrom<(PrincipalId, InstallCodeArgs)> for InstallCodeContext {
             ))
         })?;
         let compute_allocation = match args.compute_allocation {
-            Some(ca) => ComputeAllocation::try_from(ca.0.to_u64().unwrap())?,
-            None => ComputeAllocation::default(),
+            Some(ca) => Some(ComputeAllocation::try_from(ca.0.to_u64().unwrap())?),
+            None => None,
         };
         let memory_allocation = match args.memory_allocation {
-            Some(ma) => Some(MemoryAllocation::try_from(ma.0.to_u64().unwrap())?),
+            Some(ma) => Some(MemoryAllocation::try_from(NumBytes::from(
+                ma.0.to_u64().unwrap(),
+            ))?),
             None => None,
         };
         let query_allocation = match args.query_allocation {
@@ -643,4 +599,20 @@ impl CountBytes for Time {
     fn count_bytes(&self) -> usize {
         8
     }
+}
+
+/// Figure out how many cycles a canister should have so that it can support the
+/// given amount of storage for the given amount of time, given the storage fee.
+pub fn freeze_threshold_cycles(
+    freeze_threshold: NumSeconds,
+    gib_storage_per_second_fee: Cycles,
+    expected_canister_size: NumBytes,
+) -> Cycles {
+    let one_gib = 1024 * 1024 * 1024;
+    Cycles::from(
+        expected_canister_size.get() as u128
+            * gib_storage_per_second_fee.get()
+            * freeze_threshold.get() as u128
+            / one_gib,
+    )
 }

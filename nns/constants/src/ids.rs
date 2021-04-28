@@ -47,15 +47,15 @@ lazy_static! {
         ed25519_dalek::Keypair::generate(&mut rng)
     };
     pub static ref TEST_USER1_PUBKEY : UserPublicKey = UserPublicKey {
-         key: TEST_NEURON_2_OWNER_KEYPAIR.public.to_bytes().to_vec(),
+         key: TEST_USER1_KEYPAIR.public.to_bytes().to_vec(),
          algorithm_id: AlgorithmId::Ed25519,
     };
     pub static ref TEST_USER1_PRINCIPAL: PrincipalId = PrincipalId::new_self_authenticating(
-        &ed25519_public_key_to_der(TEST_NEURON_2_OWNER_PUBKEY.key.clone()));
+        &ed25519_public_key_to_der(TEST_USER1_PUBKEY.key.clone()));
 
 }
 
-/// This is copyed from ic_canister_client::agent::ed25519_public_key_to_der to
+/// This is copied from ic_canister_client::agent::ed25519_public_key_to_der to
 /// avoid having to import that crate.
 pub fn ed25519_public_key_to_der(mut key: Vec<u8>) -> Vec<u8> {
     let mut encoded: Vec<u8> = vec![

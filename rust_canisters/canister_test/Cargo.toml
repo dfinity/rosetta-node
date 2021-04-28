@@ -1,0 +1,22 @@
+[package]
+name = "canister-test"
+version = "0.1.0"
+authors = ["The Internet Computer Project Developers"]
+edition = "2018"
+
+[dependencies]
+candid = "0.6.15"
+cargo_metadata = "0.9.1"
+dfn_candid={path="../dfn_candid"}
+ic-canister-client = { path = "../../canister_client" }
+ic-config = { path = "../../config" }
+ic-registry-transport = { path = "../../registry/transport" }
+ic-replica-tests = { path = "../../replica_tests" }
+ic-test-utilities = { path = "../../test_utilities" }
+ic-types = { path = "../../types/types" }
+escargot = "0.5"
+on_wire = { path = "../on_wire" }
+rand = "0.7.3"
+reqwest = "0.10.10"
+# TODO(EXC-220)
+wabt = { git = "https://github.com/dfinity-lab/wabt-rs", rev = "b4d778802976f10494411388e48a784d4d015bbb" }

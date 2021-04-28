@@ -19,4 +19,7 @@ message NodeOperatorRecord {
   // The remaining number of nodes that could be added by this node operator.
   // This number should never go below 0.
   uint64 node_allowance = 2;
+
+  // The principal id of this node operator's provider.
+  bytes node_provider_principal_id = 3;
 }

@@ -355,6 +355,40 @@ pub fn recompute_digest(
     }
 }
 
+/// Returns the direct sub-witness with the given label, if present.
+///
+/// This is the equivalent of looking up the label in the `LabeledTree::SubTree`
+/// that this `Witness` was created from, pruned children excluded.
+pub fn sub_witness<'a>(witness: &'a Witness, lbl: &Label) -> Option<&'a Witness> {
+    match witness {
+        Witness::Fork {
+            left_tree,
+            right_tree,
+        } => sub_witness(left_tree, lbl).or_else(|| sub_witness(right_tree, lbl)),
+
+        Witness::Node { label, sub_witness } if label == lbl => Some(sub_witness),
+
+        _ => None,
+    }
+}
+
+/// Returns the leftmost direct labeled sub-witness, if any, and its label.
+///
+/// This is the equivalent of returning the first not-pruned child of the
+/// `LabeledTree::SubTree` that this `Witness` was created from.
+pub fn first_sub_witness(witness: &Witness) -> Option<(&Label, &Witness)> {
+    match witness {
+        Witness::Fork {
+            left_tree,
+            right_tree,
+        } => first_sub_witness(left_tree).or_else(|| first_sub_witness(right_tree)),
+
+        Witness::Node { label, sub_witness } => Some((label, sub_witness)),
+
+        _ => None,
+    }
+}
+
 #[derive(PartialEq, Eq, Clone)]
 pub struct WitnessGeneratorImpl {
     orig_tree: LabeledTree<Digest>,

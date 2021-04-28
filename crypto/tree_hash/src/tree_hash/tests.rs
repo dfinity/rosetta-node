@@ -2043,3 +2043,94 @@ fn prune_witness_prune_inexistent_leaf_from_empty_subtree() {
         res
     );
 }
+
+#[test]
+fn sub_witness_test() {
+    let l1 = Label::from("1");
+    let l2 = Label::from("2");
+    let l3 = Label::from("3");
+
+    let witness = Witness::make_fork(
+        Witness::make_fork(
+            Witness::make_pruned(leaf_digest("")),
+            Witness::make_node(l2.clone(), Witness::make_leaf(b"")),
+        ),
+        Witness::make_node(l3, Witness::make_leaf(b"")),
+    );
+
+    // Pruned / inexistent node.
+    assert!(sub_witness(&witness, &l1).is_none());
+
+    // Existing node.
+    assert_eq!(Some(&Witness::Known()), sub_witness(&witness, &l2));
+
+    // `Known` has no sub-witness.
+    let known = Witness::Known();
+    assert!(sub_witness(&known, &l1).is_none());
+
+    // `Pruned` has no sub-witness.
+    let pruned = Witness::make_pruned(leaf_digest(""));
+    assert!(sub_witness(&pruned, &l1).is_none());
+
+    // `Node` has a single sub-witness.
+    let node = Witness::make_node(l2.clone(), Witness::Known());
+    assert!(sub_witness(&node, &l1).is_none());
+    assert_eq!(Some(&Witness::Known()), sub_witness(&node, &l2));
+}
+
+#[test]
+fn first_sub_witness_test() {
+    let l2 = Label::from("2");
+    let l3 = Label::from("3");
+
+    let witness = Witness::make_fork(
+        Witness::make_fork(
+            Witness::make_pruned(leaf_digest("")),
+            Witness::make_node(l2.clone(), Witness::Known()),
+        ),
+        Witness::make_node(l3, Witness::Known()),
+    );
+
+    // First label is `l2`, the one before it was pruned.
+    assert_eq!(Some((&l2, &Witness::Known())), first_sub_witness(&witness));
+
+    // `Known` has no first child.
+    let known = Witness::Known();
+    assert!(first_sub_witness(&known).is_none());
+
+    // `Pruned` has no first child.
+    let pruned = Witness::make_pruned(leaf_digest(""));
+    assert!(first_sub_witness(&pruned).is_none());
+
+    // `Node` has a first child (it is the equivalent of a `LabeledTree::SubTree`
+    // with a single child).
+    let node = Witness::make_node(l2.clone(), Witness::Known());
+    assert_eq!(Some((&l2, &Witness::Known())), first_sub_witness(&node));
+}
+
+#[test]
+fn labeled_tree_lookup() {
+    use LabeledTree::{Leaf, SubTree};
+    let t: LabeledTree<Vec<u8>> = SubTree(flatmap! {
+        Label::from("sig") => SubTree(flatmap!{
+                Label::from("a") => SubTree(flatmap!{
+                        Label::from("b") => Leaf(b"leaf_b".to_vec())
+                }),
+                Label::from("c") => Leaf(b"leaf_c".to_vec()),
+        })
+    });
+
+    assert_eq!(
+        lookup_path(&t, &[&b"sig"[..], &b"a"[..], &b"b"[..]]),
+        Some(&Leaf(b"leaf_b".to_vec()))
+    );
+
+    assert_eq!(
+        lookup_path(&t, &[&b"sig"[..], &b"c"[..]]),
+        Some(&Leaf(b"leaf_c".to_vec()))
+    );
+
+    assert!(lookup_path(&t, &[&b"sig"[..], &b"d"[..]]).is_none());
+    assert!(lookup_path(&t, &[&b"sieg"[..]]).is_none());
+    assert!(lookup_path(&t, &[&b"sig"[..], &b"a"[..], &b"d"[..]]).is_none());
+}

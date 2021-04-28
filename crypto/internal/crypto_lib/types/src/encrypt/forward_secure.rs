@@ -14,20 +14,17 @@ mod tests;
 /// Forward secure encryption public key
 #[derive(Copy, Clone, Debug, Eq, IntoStaticStr, PartialEq, Serialize, Deserialize)]
 #[allow(non_camel_case_types)]
-pub enum FsEncryptionPublicKey {
+pub enum CspFsEncryptionPublicKey {
     Groth20_Bls12_381(groth20_bls12_381::FsEncryptionPublicKey),
 }
 
-/// Forward secure encryption proof of knowledge
+/// Forward secure encryption proof of possession.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, IntoStaticStr, Serialize, Deserialize)]
 #[allow(non_camel_case_types)]
-pub enum FsEncryptionPok {
+pub enum CspFsEncryptionPop {
     Groth20_Bls12_381(groth20_bls12_381::FsEncryptionPok),
+    Groth20WithPop_Bls12_381(groth20_bls12_381::FsEncryptionPop),
 }
-
-// CSP types are no different:
-pub type CspFsEncryptionPublicKey = FsEncryptionPublicKey;
-pub type CspFsEncryptionPok = FsEncryptionPok;
 
 impl TryFrom<PublicKeyProto> for CspFsEncryptionPublicKey {
     type Error = MalformedFsEncryptionPublicKeyError;
@@ -74,13 +71,13 @@ impl fmt::Display for MalformedFsEncryptionPublicKeyError {
     }
 }
 
-impl TryFrom<&PublicKeyProto> for CspFsEncryptionPok {
-    type Error = CspFsEncryptionPokFromPublicKeyProtoError;
+impl TryFrom<&PublicKeyProto> for CspFsEncryptionPop {
+    type Error = CspFsEncryptionPopFromPublicKeyProtoError;
 
     fn try_from(pk_proto: &PublicKeyProto) -> Result<Self, Self::Error> {
         if pk_proto.algorithm != AlgorithmIdProto::Groth20Bls12381 as i32 {
             return Err(
-                CspFsEncryptionPokFromPublicKeyProtoError::UnknownAlgorithm {
+                CspFsEncryptionPopFromPublicKeyProtoError::UnknownAlgorithm {
                     algorithm: pk_proto.algorithm,
                 },
             );
@@ -88,10 +85,10 @@ impl TryFrom<&PublicKeyProto> for CspFsEncryptionPok {
         let proof_bytes = pk_proto
             .proof_data
             .as_ref()
-            .ok_or(CspFsEncryptionPokFromPublicKeyProtoError::MissingProofData)?;
-        serde_cbor::from_slice::<CspFsEncryptionPok>(proof_bytes).map_err(|e| {
-            CspFsEncryptionPokFromPublicKeyProtoError::MalformedPok {
-                pok_bytes: proof_bytes.clone(),
+            .ok_or(CspFsEncryptionPopFromPublicKeyProtoError::MissingProofData)?;
+        serde_cbor::from_slice::<CspFsEncryptionPop>(proof_bytes).map_err(|e| {
+            CspFsEncryptionPopFromPublicKeyProtoError::MalformedPop {
+                pop_bytes: proof_bytes.clone(),
                 internal_error: format!("{}", e),
             }
         })
@@ -99,36 +96,36 @@ impl TryFrom<&PublicKeyProto> for CspFsEncryptionPok {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum CspFsEncryptionPokFromPublicKeyProtoError {
+pub enum CspFsEncryptionPopFromPublicKeyProtoError {
     UnknownAlgorithm {
         algorithm: i32,
     },
     MissingProofData,
-    MalformedPok {
-        pok_bytes: Vec<u8>,
+    MalformedPop {
+        pop_bytes: Vec<u8>,
         internal_error: String,
     },
 }
 
-impl fmt::Display for CspFsEncryptionPokFromPublicKeyProtoError {
+impl fmt::Display for CspFsEncryptionPopFromPublicKeyProtoError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CspFsEncryptionPokFromPublicKeyProtoError::UnknownAlgorithm { algorithm } => write!(
+            CspFsEncryptionPopFromPublicKeyProtoError::UnknownAlgorithm { algorithm } => write!(
                 f,
                 "Unknown algorithm: {:?}",
                 AlgorithmIdProto::from_i32(*algorithm)
             ),
-            CspFsEncryptionPokFromPublicKeyProtoError::MissingProofData => {
+            CspFsEncryptionPopFromPublicKeyProtoError::MissingProofData => {
                 write!(f, "Missing proof data",)
             }
-            CspFsEncryptionPokFromPublicKeyProtoError::MalformedPok {
-                pok_bytes,
+            CspFsEncryptionPopFromPublicKeyProtoError::MalformedPop {
+                pop_bytes,
                 internal_error,
             } => write!(
                 f,
-                "Malformed proof of knowledge (PoK): {} (0x{})",
+                "Malformed proof of possession (PoP): {} (0x{})",
                 internal_error,
-                hex::encode(pok_bytes),
+                hex::encode(pop_bytes),
             ),
         }
     }
@@ -155,10 +152,19 @@ pub mod groth20_bls12_381 {
         }
     }
 
-    /// Forward secure encryption proof of knowledge
+    //CRP-900: remove the following once the new POP is used
+    /// Old proof of knowledge
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub struct FsEncryptionPok {
         pub blinder: G1Bytes,
+        pub response: FrBytes,
+    }
+
+    /// Forward secure encryption proof of possession.
+    #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    pub struct FsEncryptionPop {
+        pub pop_key: G1Bytes,
+        pub challenge: FrBytes,
         pub response: FrBytes,
     }
 

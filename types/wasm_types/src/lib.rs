@@ -1,3 +1,5 @@
+//! A crate containing types useful for working with Wasm modules on the
+//! Internet Computer.
 mod errors;
 
 pub use errors::{ParityWasmError, WasmInstrumentationError, WasmValidationError};

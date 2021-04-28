@@ -1,7 +1,7 @@
 pub mod canister;
 pub mod conversion_rate;
 pub mod crypto;
-pub mod dc;
+pub mod firewall;
 pub mod nns;
 pub mod node;
 pub mod node_operator;

@@ -9,6 +9,7 @@ use openssl::{
 };
 use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
+use std::fmt;
 use zeroize::Zeroize;
 
 #[cfg(test)]
@@ -32,10 +33,15 @@ pub enum TlsEd25519CertificateDerBytesParseError {
     CertificateParsingError,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Zeroize, Deserialize, Serialize)]
+#[derive(Clone, Eq, PartialEq, Zeroize, Deserialize, Serialize)]
 pub struct TlsEd25519SecretKeyDerBytes {
     #[serde(with = "serde_bytes")]
     pub bytes: Vec<u8>,
+}
+impl fmt::Debug for TlsEd25519SecretKeyDerBytes {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "REDACTED")
+    }
 }
 
 /// Generate a key pair and return the certificate and private key in DER

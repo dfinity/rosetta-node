@@ -3,11 +3,8 @@ name = "ic-registry-client"
 version = "0.1.0"
 edition = "2018"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
-bytes = "1.0.1"
-futures = "0.3.13"
+ic-base-thread = { path = "../../base/thread" }
 ic-config = { path = "../../config" }
 ic-interfaces = { path = "../../interfaces" }
 ic-logger = { path = "../../monitoring/logger" }
@@ -28,13 +25,8 @@ slog = { version = "2.5.2", features = [
     "max_level_trace",
     "release_max_level_debug",
 ] }
-tokio = { version = "0.2.22", features = ["macros"] }
+tokio = { version = "0.2.23", features = ["full"] }
 url = { version = "2.1.1", features = ["serde"] }
 
 [dev-dependencies]
-lazy_static = "1.4.0"
 ic-test-utilities = { path = "../../test_utilities" }
-
-[[test]]
-name = "test"
-path = "tests/registry-test.rs"

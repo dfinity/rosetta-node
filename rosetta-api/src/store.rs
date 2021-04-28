@@ -168,9 +168,8 @@ impl OnDiskStore {
                     serde_json::from_reader(f).map_err(|e| e.to_string())?;
                 let mut balances = Balances::default();
                 balances.icpt_pool = icpt_pool;
-                for (k, v) in bal {
-                    balances.store.0.insert(k, v);
-                }
+                balances.store.0 = immutable_chunkmap::map::Map::new()
+                    .insert_many(bal.iter().map(|(k, v)| (*k, *v)));
                 Ok(Some((hb, balances)))
             }
             Err(std::io::ErrorKind::NotFound) => {
@@ -196,7 +195,8 @@ impl OnDiskStore {
             .map_err(|e| e.to_string())?;
 
         // TODO implement Serialize for Balances
-        let bal: Vec<_> = balances.store.0.iter().collect(); //this is a vec of refs
+        let b = balances.store.0.clone();
+        let bal: Vec<_> = b.into_iter().collect();
         serde_json::to_writer(&file, &(hb, bal, balances.icpt_pool)).map_err(|e| e.to_string())?;
         file.sync_all().map_err(|e| {
             let msg = format!(

@@ -35,20 +35,17 @@ fn should_correctly_generate_committee_member_keys() {
     assert_eq!(
         sk_id,
         KeyId::from(hex_to_32_bytes(
-            "250224d6a3e0edbaafd958bb480dc81255ec8744e36ac5eefa83e747d531272b"
+            "f8782b0bc403eb23770b72bebe9f3efbedb98f7a2fdf2c2b7b312e894bd39a44"
         ))
     );
     assert_eq!(
         pk,
         CommitteeMemberPublicKey {
             key: hex_decode(
-                "8985344664badd2aa2d24167fa478ec03a6fc76eb05ba1c3fa\
-                 c9dd88b74a44ccdd5d088bb6975c06a8df4b1006f8e5350adbf82b3a758613f56d4\
-                 519da62f9075adfdd882b35f35a55f532471191348924a5c3858529f83cfb032cc8\
-                 962f7922"
+                 "986b177ef16c61c633e13769c42b079791cfa9702decd36eeb347be21bd98e8d1c4d9f2a1f16f2e09b995ae7ff856a830d382d0081c6ae253a7d2abf97de945f70a42e677ca30b129bcd08c91f78f8573fe2463a86afacf870e9fe4960f5c55f"
             ),
             proof_of_possession: hex_decode(
-                "9347f963a3d79d07515d4f1c740d2030226d84f626be4b807b1e4f5c8ec3073a34820ec08c63e5cbda02d3b862cb1570"
+"8e1e3a79a9f0bf69b9e256041eedef82db44e7755d9920a17dd07ea9f039a0f0f79013c135678aa355e9695f36886b54"
             ),
         }
     );

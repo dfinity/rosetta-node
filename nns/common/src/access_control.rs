@@ -132,6 +132,18 @@ pub fn check_caller_is_ledger() {
     }
 }
 
+pub fn check_caller_is_gtc() {
+    if caller() != PrincipalId::from(ic_nns_constants::GENESIS_TOKEN_CANISTER_ID) {
+        panic!("Only the GTC is allowed to call this method.");
+    }
+}
+
+pub fn check_caller_is_governance() {
+    if caller() != PrincipalId::from(ic_nns_constants::GOVERNANCE_CANISTER_ID) {
+        panic!("Only the Governance canister is allowed to call this method");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

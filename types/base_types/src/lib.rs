@@ -1,3 +1,5 @@
+//! A crate containing various basic types that are especially useful when
+//! writing Rust canisters.
 mod canister_id;
 mod pb_internal;
 mod principal_id;
@@ -13,13 +15,21 @@ use std::{convert::TryFrom, fmt, slice::Iter};
 use strum_macros::EnumString;
 
 pub struct RegistryVersionTag {}
+/// A type representing the registry's version.
 pub type RegistryVersion = AmountOf<RegistryVersionTag, u64>;
 
 pub struct NodeTag {}
+/// A type representing a node's [`PrincipalId`].
 pub type NodeId = Id<NodeTag, PrincipalId>;
 
 pub struct SubnetTag {}
+/// A type representing a subnet's [`PrincipalId`].
 pub type SubnetId = Id<SubnetTag, PrincipalId>;
+
+pub struct NumSecondsTag;
+
+/// Models a non-negative number of seconds.
+pub type NumSeconds = AmountOf<NumSecondsTag, u64>;
 
 pub struct NumBytesTag;
 /// This type models a non-negative number of bytes.
@@ -105,6 +115,7 @@ impl CanisterInstallMode {
     }
 }
 
+/// A type to represent an error that can occur when installing a canister.
 #[derive(Debug)]
 pub struct CanisterInstallModeError(pub String);
 

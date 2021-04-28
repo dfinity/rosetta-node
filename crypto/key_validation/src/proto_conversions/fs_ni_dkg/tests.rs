@@ -1,4 +1,5 @@
 use super::*;
+use crate::tests::node_id;
 use ic_crypto::utils::generate_dkg_dealing_encryption_keys;
 use ic_protobuf::registry::crypto::v1::PublicKey as PublicKeyProto;
 use ic_test_utilities::crypto::temp_dir::temp_dir;
@@ -16,20 +17,20 @@ fn should_fail_if_pubkey_conversion_fails() {
 }
 
 #[test]
-fn should_fail_if_pok_conversion_fails() {
+fn should_fail_if_pop_conversion_fails() {
     let pubkey_proto_without_proof_data = {
         let mut key = valid_dkg_dealing_encryption_key();
-        if let Some(pok) = key.proof_data.as_mut() {
-            pok.pop();
+        if let Some(pop_bytes) = key.proof_data.as_mut() {
+            pop_bytes.pop();
         }
         key
     };
 
     let result = fs_ni_dkg_pubkey_from_proto(&pubkey_proto_without_proof_data);
 
-    assert_malformed_fs_encryption_pok_error_containing(
+    assert_malformed_fs_encryption_pop_error_containing(
         &result,
-        "Malformed proof of knowledge (PoK)",
+        "Malformed proof of possession (PoP)",
     );
 }
 
@@ -48,7 +49,8 @@ fn should_fail_if_internal_conversion_fails() {
 
 fn valid_dkg_dealing_encryption_key() -> PublicKeyProto {
     let temp_dir = temp_dir();
-    generate_dkg_dealing_encryption_keys(temp_dir.path())
+    let node_id = node_id(1);
+    generate_dkg_dealing_encryption_keys(temp_dir.path(), node_id)
 }
 
 fn assert_malformed_fs_encryption_pubkey_error_containing(
@@ -66,15 +68,15 @@ fn assert_malformed_fs_encryption_pubkey_error_containing(
     }
 }
 
-fn assert_malformed_fs_encryption_pok_error_containing(
+fn assert_malformed_fs_encryption_pop_error_containing(
     result: &Result<ClibFsNiDkgPublicKey, FsNiDkgPubkeyFromPubkeyProtoError>,
     substring: &str,
 ) {
     let error = result.clone().unwrap_err();
-    if let FsNiDkgPubkeyFromPubkeyProtoError::PokConversion { error } = error {
+    if let FsNiDkgPubkeyFromPubkeyProtoError::PopConversion { error } = error {
         assert!(error.contains(substring))
     } else {
-        panic!("expected MalformedFsEncryptionPok error, but got {}", error)
+        panic!("expected MalformedFsEncryptionPop error, but got {}", error)
     }
 }
 

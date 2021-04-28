@@ -20,20 +20,26 @@ pub const REGISTRY_CANISTER_INDEX_IN_NNS_SUBNET: u64 = 0;
 pub const GOVERNANCE_CANISTER_INDEX_IN_NNS_SUBNET: u64 = 1;
 pub const LEDGER_CANISTER_INDEX_IN_NNS_SUBNET: u64 = 2;
 pub const ROOT_CANISTER_INDEX_IN_NNS_SUBNET: u64 = 3;
-pub const LIFELINE_CANISTER_INDEX_IN_NNS_SUBNET: u64 = 4;
-pub const GENESIS_TOKEN_CANISTER_INDEX_IN_NNS_SUBNET: u64 = 5;
+pub const CYCLES_MINTING_CANISTER_INDEX_IN_NNS_SUBNET: u64 = 4;
+pub const LIFELINE_CANISTER_INDEX_IN_NNS_SUBNET: u64 = 5;
+pub const GENESIS_TOKEN_CANISTER_INDEX_IN_NNS_SUBNET: u64 = 6;
+pub const IDENTITY_CANISTER_INDEX_IN_NNS_SUBNET: u64 = 7;
+pub const NNS_UI_CANISTER_INDEX_IN_NNS_SUBNET: u64 = 8;
 
 /// The names of all expected .wasm files to set up the NNS.
-pub const NNS_CANISTER_WASMS: [&str; 6] = [
+pub const NNS_CANISTER_WASMS: [&str; 9] = [
     // The lifeline is not present! Because its wasm is embedded in the source code using
     // include_bytes, it is not provided on the path. We want to change that, though.
     "registry-canister",
     "governance-canister",
     "ledger-canister",
     "root-canister",
+    "cycles-minting-canister",
     // The lifeline is built differently, which explains why its wasm has a different name pattern.
     "lifeline",
     "genesis-token-canister",
+    "identity-canister",
+    "nns-ui-canister",
 ];
 
 pub const NUM_NNS_CANISTERS: usize = NNS_CANISTER_WASMS.len();
@@ -45,18 +51,27 @@ pub const GOVERNANCE_CANISTER_ID: CanisterId =
 pub const LEDGER_CANISTER_ID: CanisterId =
     CanisterId::from_u64(LEDGER_CANISTER_INDEX_IN_NNS_SUBNET);
 pub const ROOT_CANISTER_ID: CanisterId = CanisterId::from_u64(ROOT_CANISTER_INDEX_IN_NNS_SUBNET);
+pub const CYCLES_MINTING_CANISTER_ID: CanisterId =
+    CanisterId::from_u64(CYCLES_MINTING_CANISTER_INDEX_IN_NNS_SUBNET);
 pub const LIFELINE_CANISTER_ID: CanisterId =
     CanisterId::from_u64(LIFELINE_CANISTER_INDEX_IN_NNS_SUBNET);
 pub const GENESIS_TOKEN_CANISTER_ID: CanisterId =
     CanisterId::from_u64(GENESIS_TOKEN_CANISTER_INDEX_IN_NNS_SUBNET);
+pub const IDENTITY_CANISTER_ID: CanisterId =
+    CanisterId::from_u64(IDENTITY_CANISTER_INDEX_IN_NNS_SUBNET);
+pub const NNS_UI_CANISTER_ID: CanisterId =
+    CanisterId::from_u64(NNS_UI_CANISTER_INDEX_IN_NNS_SUBNET);
 
-pub const ALL_NNS_CANISTER_IDS: [&CanisterId; 6] = [
+pub const ALL_NNS_CANISTER_IDS: [&CanisterId; 9] = [
     &REGISTRY_CANISTER_ID,
     &GOVERNANCE_CANISTER_ID,
     &LEDGER_CANISTER_ID,
     &ROOT_CANISTER_ID,
+    &CYCLES_MINTING_CANISTER_ID,
     &LIFELINE_CANISTER_ID,
     &GENESIS_TOKEN_CANISTER_ID,
+    &IDENTITY_CANISTER_ID,
+    &NNS_UI_CANISTER_ID,
 ];
 
 // The memory allocation for the ledger, governance and registry canisters

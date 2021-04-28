@@ -82,7 +82,6 @@ pub mod ic0 {
             reject_env: u32,
         );
         pub fn call_data_append(src: u32, size: u32);
-        pub fn call_funds_add(unit_src: u32, unit_size: u32, amount: u64);
         pub fn call_cycles_add(amount: u64);
         pub fn call_perform() -> i32;
         pub fn stable_size() -> u32;
@@ -90,7 +89,6 @@ pub mod ic0 {
         pub fn stable_read(dst: u32, offset: u32, size: u32);
         pub fn stable_write(offset: u32, src: u32, size: u32);
         pub fn time() -> u64;
-        pub fn canister_balance(unit_src: u32, unit_size: u32) -> u64;
         pub fn canister_cycle_balance() -> u64;
         pub fn msg_cycles_available() -> u64;
         pub fn msg_cycles_refunded() -> u64;
@@ -201,10 +199,6 @@ pub mod ic0 {
         wrong_arch("call_data_append")
     }
 
-    pub unsafe fn call_funds_add(_unit_src: u32, _unit_size: u32, _amount: u64) {
-        wrong_arch("call_funds_add")
-    }
-
     pub unsafe fn call_cycles_add(_amount: u64) {
         wrong_arch("call_cycles_add")
     }
@@ -234,10 +228,6 @@ pub mod ic0 {
             .duration_since(std::time::SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_nanos() as u64
-    }
-
-    pub unsafe fn canister_balance(_unit_src: u32, _unit_size: u32) -> u64 {
-        wrong_arch("canister_balance")
     }
 
     pub unsafe fn canister_cycle_balance() -> u64 {
@@ -474,13 +464,6 @@ where
     Ok(res.into_inner())
 }
 
-pub fn call_funds_add(unit: TokenUnit, amount: u64) {
-    let unit_blob: Vec<u8> = unit.into();
-    unsafe {
-        ic0::call_funds_add(unit_blob.as_ptr() as u32, unit_blob.len() as u32, amount);
-    }
-}
-
 pub fn call_cycles_add(amount: u64) {
     unsafe {
         ic0::call_cycles_add(amount);
@@ -599,12 +582,6 @@ impl Into<Vec<u8>> for TokenUnit {
             TokenUnit::ICP => hex::decode("01").unwrap(),
         }
     }
-}
-
-/// Returns the amount of cycles in the canister's account.
-pub fn canister_balance(unit: TokenUnit) -> u64 {
-    let unit_blob: Vec<u8> = unit.into();
-    unsafe { ic0::canister_balance(unit_blob.as_ptr() as u32, unit_blob.len() as u32) }
 }
 
 /// Returns the amount of cycles in the canister's account.

@@ -86,7 +86,7 @@ pub const SAMPLE_CONFIG: &str = r#"
     // ============================================
     registry_client: {
         // Alternatives:
-        //   * EXAMPLE: registry_canister_url: "https://registry.dfinity.org/",
+        //   * EXAMPLE: registry_canister_url: "https://registry.ic.org/",
         //     fetch updates from node at given url
         //     DEPRECATED (use local_store)
         //   * EXAMPLE: protobuf_file: "/tmp/registry.proto"
@@ -188,10 +188,50 @@ pub const SAMPLE_CONFIG: &str = r#"
     // Configuration of the logging setup.
     // ===================================
     logger: {
-        // The node id to append to log lines.
+        // The node id to append to log lines. [deprecated]
         node_id: 100,
 
-        // The datacenter id to append to log lines.
+        // The datacenter id to append to log lines. [deprecated]
+        dc_id: 200,
+
+        // The log level to use.
+        // EXAMPLE: level: "critical",
+        // EXAMPLE: level: "error",
+        // EXAMPLE: level: "warning",
+        // EXAMPLE: level: "info",
+        // EXAMPLE: level: "debug",
+        // EXAMPLE: level: "trace",
+        level: "info",
+
+        // The format of emitted log lines
+        // EXAMPLE: format: "text_full",
+        // EXAMPLE: format: "json",
+        format: "text_full",
+
+        // Output debug logs for these module paths
+        // EXAMPLE: debug_overrides: ["ic_consensus::finalizer", "ic_messaging::coordinator"],
+        debug_overrides: [],
+
+        // Output logs for these tags
+        // EXAMPLE: enabled_tags: ["artifact_tracing"],
+        enabled_tags: [],
+
+        // If `true` the async channel for low-priority messages will block instead of drop messages.
+        // This behavior is required for instrumentation in System Testing until we have a
+        // dedicated solution for instrumentation.
+        //
+        // The default for this value is `false` and thus matches the previously expected behavior in
+        // production use cases.
+        block_on_overflow: false,
+    },
+    // ===================================
+    // Configuration of the logging setup for the nodemanager.
+    // ===================================
+    nodemanager_logger: {
+        // The node id to append to log lines. [deprecated]
+        node_id: 100,
+
+        // The datacenter id to append to log lines. [deprecated]
         dc_id: 200,
 
         // The log level to use.
@@ -252,18 +292,15 @@ pub const SAMPLE_CONFIG: &str = r#"
          maliciously_malfunctioning_xnet_endpoint: false,
          maliciously_disable_execution: false,
          maliciously_disable_http_handler_ingress_validation: false,
+         maliciously_corrupt_own_state_at_heights: [],
        },
     },
 
     firewall: {
-        config_file: "/var/lib/dfinity-node/nftables-ruleset",
-        ipv4_config: "table ip ip4-firewall {\n  chain incoming {\n    type filter hook input priority 0; policy accept;\n  }\n}\n",
-        ipv6_config: "table ip6 ip6-firewall {\n  chain incoming {\n    type filter hook input priority 0; policy drop;\n\n    ct state established,related accept\n\n    ct state invalid drop\n\n    iifname lo accept\n\n    icmpv6 type != { 137, 139 } accept\n\n    ip6 saddr $DCs accept\n  }\n}\n",
-        dcs_var_name: "DCs",
-        data_centers: [
-            { dcop_principal_id: [1], ipv6_prefixes: "2607:fb58:9000:8::/64,2607:fb58:9005::/48" }, // SF
-            { dcop_principal_id: [2], ipv6_prefixes: "2a00:fb01:400::/56" }, // ZH
-        ],
+        config_file: "/path/to/nftables/config",
+        firewall_config: "",
+        ipv4_prefixes: [],
+        ipv6_prefixes: [],
     },
 
     // =================================
@@ -275,8 +312,6 @@ pub const SAMPLE_CONFIG: &str = r#"
     // =================================
     // NNS Registry Replicator
     // =================================
-    // TODO(VER-277): This is a parameter that should not be under the control of the operator.
-    // Hence it is in the wrong place and should be removed again.
     nns_registry_replicator: {
       poll_delay_duration_ms: 5000
     },

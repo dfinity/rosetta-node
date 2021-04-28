@@ -1,6 +1,6 @@
-// blynn: I've tried to follow the notation in the paper.
-//   * Clippy complains about too many single-character variable names, so we
-//     prefix `spec_` to some of them.
+// We follow the notation of the paper to the extent possible.
+//   * As Clippy warns about single-character variable names, we prefix some of
+//     them with `spec_`.
 //   * We replace uppercase single-character variables with two copies of its
 //     lowercase version, e.g. `A` -> `aa`.
 //   * Greek letters are replaced by their names in English, e.g. `tau`.
@@ -16,11 +16,8 @@
 //   BIG   Holds integers modulo `p`; also integers modulo MODULUS.
 //   ECP   The group G_1.
 //   ECP2  The group G_2.
-//
-// I wrote barebones serialization and deserialization functions, in case
-// we want to use this code as soon as possible.
-// I assume these will eventually be replaced by fancy serde versions.
 
+pub mod encryption_key_pop;
 pub mod forward_secure;
 pub mod nizk_chunking;
 pub mod nizk_sharing;

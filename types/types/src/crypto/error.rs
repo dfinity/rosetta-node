@@ -1,9 +1,10 @@
-//! Crypto error types
+//! Defines crypto error types.
 pub mod conversions;
 pub use super::CryptoError;
 use crate::crypto::{AlgorithmId, KeyId};
 use std::fmt; // Probably move all the errors into this file
 
+/// Occurs if an argument is invalid.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct InvalidArgumentError {
     pub message: String,
@@ -15,6 +16,7 @@ impl fmt::Display for InvalidArgumentError {
     }
 }
 
+/// Occurs if a public key is malformed.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct MalformedPublicKeyError {
     pub algorithm: AlgorithmId,

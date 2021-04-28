@@ -1,3 +1,4 @@
+//! The ingress pool public interface.
 use crate::artifact_pool::{UnvalidatedArtifact, ValidatedArtifact};
 use ic_types::{
     artifact::{IngressMessageAttribute, IngressMessageId},

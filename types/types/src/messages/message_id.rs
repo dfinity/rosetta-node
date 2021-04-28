@@ -1,5 +1,5 @@
-use super::{CountBytes, RawHttpRequestVal};
-use crate::crypto::SignedBytesWithoutDomainSeparator;
+use super::RawHttpRequestVal;
+use crate::{crypto::SignedBytesWithoutDomainSeparator, CountBytes};
 use ic_crypto_sha256::Sha256;
 use ic_protobuf::proxy::ProxyDecodeError;
 use serde::{de::Deserializer, ser::Serializer, Deserialize, Serialize};
@@ -10,13 +10,11 @@ use std::{
     fmt,
 };
 
-/// Note: According to the [public
-/// spec](https://docs.dfinity.systems/dfinity/spec/public/index.html#api-request-id),
-/// the `MessageId` should have a length of 32 bytes.
+/// The length of a [`MessageId`] is 32: https://sdk.dfinity.org/docs/interface-spec/index.html#api-request-id)
 pub const EXPECTED_MESSAGE_ID_LENGTH: usize = 32;
 
+/// The ID used to uniquely identify a user's ingress message.
 #[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Ord, Hash)]
-/// Represents the id used to uniquely identify a user's ingress message.
 pub struct MessageId([u8; EXPECTED_MESSAGE_ID_LENGTH]);
 
 // Because we can't use #[serde(with = "serde_bytes")] with derive(Deserialize)
@@ -168,8 +166,8 @@ fn hash_key_val(key: String, val: RawHttpRequestVal) -> Vec<u8> {
 }
 
 /// Describes `hash_of_map` as specified in the public spec.
-/// TODO(ielashi): Generalize this method and move to a more appropriate
-///                location.
+// TODO(EXC-234): Generalize this method and move to a more appropriate
+// location.
 pub(crate) fn hash_of_map<S: ToString>(map: &BTreeMap<S, RawHttpRequestVal>) -> [u8; 32] {
     let mut hashes: Vec<Vec<u8>> = Vec::new();
     for (key, val) in map.iter() {
@@ -199,6 +197,7 @@ impl From<&MessageId> for u32 {
     }
 }
 
+/// Errors returned when converting to a [`MessageId`] from a blob.
 #[derive(Clone, Debug, Serialize)]
 pub enum MessageIdError {
     /// Conversion to MessageId failed because the source did not contain the
@@ -243,8 +242,8 @@ impl From<MessageIdError> for ProxyDecodeError {
 #[cfg(test)]
 mod tests {
     use super::super::{
-        Blob, HttpCanisterUpdate, HttpRequest, HttpRequestEnvelope, HttpSubmitContent,
-        RawHttpRequestVal, SignedIngress,
+        Blob, HttpCanisterUpdate, HttpRequestEnvelope, HttpSubmitContent, RawHttpRequestVal,
+        SignedIngress,
     };
     use super::*;
     use crate::{time::current_time_and_expiry_time, CanisterId, PrincipalId, Time};
@@ -443,7 +442,7 @@ mod tests {
             sender_sig: Some(Blob(sender_sig)),
             sender_delegation: None,
         };
-        HttpRequest::try_from(envelope).unwrap()
+        SignedIngress::try_from(envelope).unwrap()
     }
 
     #[test]

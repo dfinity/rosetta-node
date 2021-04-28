@@ -60,7 +60,7 @@ mod tls_private_key {
         let error = TlsPrivateKey::new_from_pem(empty_pem).unwrap_err();
 
         assert!(matches!(error, TlsPemParsingError { internal_error }
-            if internal_error.contains("Expecting: ANY PRIVATE KEY")
+            if internal_error.contains("Error parsing PEM via OpenSSL")
         ));
     }
 
@@ -71,7 +71,7 @@ mod tls_private_key {
         let error = TlsPrivateKey::new_from_pem(malformed_pem).unwrap_err();
 
         assert!(matches!(error, TlsPemParsingError { internal_error }
-            if internal_error.contains("Expecting: ANY PRIVATE KEY")
+            if internal_error.contains("Error parsing PEM via OpenSSL")
         ));
     }
 }

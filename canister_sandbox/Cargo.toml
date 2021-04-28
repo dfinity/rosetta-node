@@ -1,0 +1,32 @@
+[package]
+name = "canister_sandbox"
+version = "0.0.1"
+edition = "2018"
+
+[dependencies]
+ic-canister-sandbox-common  = { path = "common" }
+ic-config = { path = "../config" }
+ic-cow-state = { path = "../cow_state" }
+ic-embedders = { path = "../embedders" }
+ic-logger = { path = "../monitoring/logger" }
+ic-types = { path = "../types/types" }
+ic-registry-routing-table = { path = "../registry/routing_table" }
+ic-registry-subnet-type = { path = "../registry/subnet_type" }
+ic-replicated-state = { path = "../replicated_state"}
+ic-interfaces = { path = "../interfaces" }
+ic-wasm-utils = { path = "../wasm_utils" }
+ic-wasm-types = { path = "../types/wasm_types" }
+ic-utils = { path = "../utils"}
+ic-sys = { path = "../sys"}
+ic-system-api = { path = "../system_api" }
+threadpool = "1.8.1"
+bytes = "1.0.1"
+serde_cbor = "0.11.1"
+serde = { version = "1.0.99", features = ["derive", "rc"] }
+
+[dev-dependencies]
+lazy_static = "1.4.0"
+mockall = "0.7.2"
+tempfile = "3.1.0"
+# TODO(EXC-220)
+wabt = { git = "https://github.com/dfinity-lab/wabt-rs", rev = "b4d778802976f10494411388e48a784d4d015bbb" }

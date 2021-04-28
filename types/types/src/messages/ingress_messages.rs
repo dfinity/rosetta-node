@@ -2,9 +2,13 @@
 
 use super::{HttpHandlerError, MessageId, RawHttpRequestVal};
 use crate::{
+    ic00::IC_00,
     messages::message_id::hash_of_map,
-    messages::{HasCanisterId, HttpCanisterUpdate, HttpRequest, HttpRequestContent},
-    CanisterId, CountBytes, PrincipalId, Time, UserId,
+    messages::{
+        Authentication, HasCanisterId, HttpCanisterUpdate, HttpRequest, HttpRequestContent,
+        HttpRequestEnvelope, HttpSubmitContent, SignedRequestBytes,
+    },
+    CanisterId, CountBytes, PrincipalId, SubnetId, Time, UserId,
 };
 use ic_protobuf::{
     log::ingress_message_log_entry::v1::IngressMessageLogEntry,
@@ -16,6 +20,7 @@ use maplit::btreemap;
 use serde::{Deserialize, Serialize};
 use std::convert::{From, TryFrom, TryInto};
 
+/// The contents of a signed ingress message.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct SignedIngressContent {
     sender: UserId,
@@ -54,19 +59,9 @@ impl HasCanisterId for SignedIngressContent {
     }
 }
 
-impl CountBytes for SignedIngressContent {
-    fn count_bytes(&self) -> usize {
-        self.sender.get().as_slice().len()
-            + self.canister_id.get().as_slice().len()
-            + self.method_name.len()
-            + self.arg.len()
-            + self.nonce.as_ref().map(|n| n.len()).unwrap_or(0)
-    }
-}
-
 impl HttpRequestContent for SignedIngressContent {
-    // TODO: Avoid the duplication between this method and the one in
-    // `HttpUpdateContent`.
+    // TODO(EXC-236): Avoid the duplication between this method and the one in
+    // `HttpCanisterUpdate`.
     fn id(&self) -> MessageId {
         use RawHttpRequestVal::*;
         let mut map = btreemap! {
@@ -121,8 +116,75 @@ impl TryFrom<HttpCanisterUpdate> for SignedIngressContent {
     }
 }
 
-/// Describes the ingress message that was received from the end user.
-pub type SignedIngress = HttpRequest<SignedIngressContent>;
+/// Describes the signed ingress message that was received from the end user.
+/// To construct a `SignedIngress`, either use `TryFrom<SignedRequestBytes>`
+/// or directly deserialize from bytes. This guarantees that the correct
+/// byte sequence is remembered as part of `SignedIngress`, which will always
+/// serialize to the same sequence.
+#[derive(Clone, Debug)]
+pub struct SignedIngress {
+    signed: HttpRequest<SignedIngressContent>,
+    binary: SignedRequestBytes,
+}
+
+impl PartialEq for SignedIngress {
+    fn eq(&self, other: &Self) -> bool {
+        self.binary.eq(&other.binary)
+    }
+}
+
+impl Eq for SignedIngress {}
+
+impl std::hash::Hash for SignedIngress {
+    fn hash<Hasher: std::hash::Hasher>(&self, state: &mut Hasher) {
+        self.binary.hash(state);
+    }
+}
+
+impl From<SignedIngress> for SignedRequestBytes {
+    fn from(ingress: SignedIngress) -> Self {
+        ingress.binary
+    }
+}
+
+impl AsRef<HttpRequest<SignedIngressContent>> for SignedIngress {
+    fn as_ref(&self) -> &HttpRequest<SignedIngressContent> {
+        &self.signed
+    }
+}
+
+impl From<SignedIngress> for SignedIngressContent {
+    fn from(ingress: SignedIngress) -> SignedIngressContent {
+        ingress.signed.take_content()
+    }
+}
+
+impl Serialize for SignedIngress {
+    fn serialize<S: serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bytes(self.binary.as_ref())
+    }
+}
+
+impl<'de> Deserialize<'de> for SignedIngress {
+    fn deserialize<D: serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct BytesVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for BytesVisitor {
+            type Value = Vec<u8>;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(formatter, "Expectiong a sequence of bytes")
+            }
+
+            fn visit_bytes<E: serde::de::Error>(self, v: &[u8]) -> Result<Self::Value, E> {
+                Ok(v.to_vec())
+            }
+        }
+
+        let bytes = deserializer.deserialize_bytes(BytesVisitor)?;
+        SignedIngress::try_from(SignedRequestBytes::from(bytes)).map_err(serde::de::Error::custom)
+    }
+}
 
 impl From<&SignedIngress> for IngressMessageLogEntry {
     fn from(ingress: &SignedIngress) -> Self {
@@ -130,14 +192,14 @@ impl From<&SignedIngress> for IngressMessageLogEntry {
             canister_id: Some(ingress.canister_id().to_string()),
             compute_allocation: None,
             desired_id: None,
-            expiry_time: Some(ingress.expiry_time().as_nanos_since_unix_epoch()),
+            expiry_time: Some(ingress.signed.ingress_expiry()),
             memory_allocation: None,
-            message_id: Some(format!("{}", ingress.id())),
+            message_id: Some(format!("{}", ingress.signed.id())),
             method_name: Some(ingress.method_name()),
             mode: None,
             reason: None,
             request_type: Some(String::from("call")),
-            sender: Some(ingress.sender().to_string()),
+            sender: Some(ingress.signed.sender().to_string()),
             size: None,
             batch_time: None,
             batch_time_plus_ttl: None,
@@ -146,6 +208,18 @@ impl From<&SignedIngress> for IngressMessageLogEntry {
 }
 
 impl SignedIngress {
+    pub fn binary(&self) -> &SignedRequestBytes {
+        &self.binary
+    }
+
+    pub fn content(&self) -> &SignedIngressContent {
+        self.signed.content()
+    }
+
+    pub fn authentication(&self) -> &Authentication {
+        self.signed.authentication()
+    }
+
     pub fn canister_id(&self) -> CanisterId {
         self.content().canister_id
     }
@@ -165,15 +239,52 @@ impl SignedIngress {
     pub fn expiry_time(&self) -> Time {
         Time::from_nanos_since_unix_epoch(self.content().ingress_expiry)
     }
+
+    pub fn id(&self) -> MessageId {
+        self.signed.id()
+    }
+
+    pub fn sender(&self) -> UserId {
+        self.signed.sender()
+    }
+
+    pub fn nonce(&self) -> Option<Vec<u8>> {
+        self.signed.nonce()
+    }
+}
+
+impl TryFrom<SignedRequestBytes> for SignedIngress {
+    type Error = HttpHandlerError;
+
+    fn try_from(binary: SignedRequestBytes) -> Result<Self, Self::Error> {
+        let request: HttpRequestEnvelope<HttpSubmitContent> = (&binary).try_into()?;
+        let signed = request.try_into()?;
+        Ok(SignedIngress { signed, binary })
+    }
+}
+
+/// The conversion from 'HttpRequestEnvelope<HttpSubmitContent>' to
+/// 'SignedIngress' goes through serialization first, because the
+/// actual encoded bytes has to be part of 'SignedIngress'.
+impl TryFrom<HttpRequestEnvelope<HttpSubmitContent>> for SignedIngress {
+    type Error = HttpHandlerError;
+
+    fn try_from(request: HttpRequestEnvelope<HttpSubmitContent>) -> Result<Self, Self::Error> {
+        let bytes = SignedRequestBytes::try_from(request)?;
+        SignedIngress::try_from(bytes)
+    }
 }
 
 impl CountBytes for SignedIngress {
     fn count_bytes(&self) -> usize {
-        self.content().count_bytes() + self.authentication().count_bytes()
+        self.binary().len()
     }
 }
 
 /// A message sent from an end user to a canister.
+///
+/// Used internally by the InternetComputer. See related [`SignedIngress`] for
+/// the message as it was received from the `HttpHandler`.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, Eq, Hash)]
 pub struct Ingress {
     pub source: UserId,
@@ -240,4 +351,11 @@ impl TryFrom<pb_ingress::Ingress> for Ingress {
             expiry_time: Time::from_nanos_since_unix_epoch(item.expiry_time_nanos),
         })
     }
+}
+
+// Tests whether the given ingress message is addressed to the subnet (rather
+// than to a canister).
+pub fn is_subnet_message(msg: &SignedIngressContent, own_subnet_id: SubnetId) -> bool {
+    let canister_id = msg.canister_id();
+    canister_id == IC_00 || canister_id.get_ref() == own_subnet_id.get_ref()
 }

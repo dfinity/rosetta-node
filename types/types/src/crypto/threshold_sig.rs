@@ -1,3 +1,4 @@
+//! Defines threshold signature types.
 use crate::crypto::threshold_sig::ni_dkg::NiDkgTranscript;
 use crate::crypto::AlgorithmId;
 use ic_crypto_internal_types::sign::threshold_sig::ni_dkg::CspNiDkgTranscript;

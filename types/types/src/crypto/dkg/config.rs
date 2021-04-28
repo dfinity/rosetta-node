@@ -2,7 +2,7 @@ use super::*;
 use crate::consensus::Threshold;
 
 use crate::{NodeIndex, NumberOfNodes};
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::slice::Iter;
 
@@ -268,7 +268,7 @@ pub struct DkgThreshold {
     threshold: NumberOfNodes,
 }
 
-// TODO (CRP-311): maybe replace `Threshold` with DkgThreshold?
+// TODO (CRP-311): Consider replacing `Threshold` with DkgThreshold.
 impl DkgThreshold {
     /// A `DkgThreshold` can only be created if the following invariants hold:
     /// * The threshold is at least 1 (error: `ThresholdIsZero`)

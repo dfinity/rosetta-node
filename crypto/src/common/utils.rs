@@ -58,7 +58,8 @@ pub fn generate_initial_dkg_encryption_keys(
     crypto_component.generate_encryption_keys(dkg_config.get(), node_id)
 }
 
-/// Generates (forward-secure) NI-DKG dealing encryption key material.
+/// Generates (forward-secure) NI-DKG dealing encryption key material given the
+/// `node_id` of the node.
 ///
 /// Stores the secret key in the key store at `crypto_root` and returns the
 /// corresponding public key.
@@ -66,12 +67,12 @@ pub fn generate_initial_dkg_encryption_keys(
 /// If the `crypto_root` directory does not exist, it is created with the
 /// required permissions. If there exists no key store in `crypto_root`, a new
 /// one is created.
-pub fn generate_dkg_dealing_encryption_keys(crypto_root: &Path) -> PublicKeyProto {
+pub fn generate_dkg_dealing_encryption_keys(crypto_root: &Path, node_id: NodeId) -> PublicKeyProto {
     let mut csp = csp_at_root(crypto_root);
-    let (pubkey, pok) = csp
-        .create_forward_secure_key_pair(AlgorithmId::NiDkg_Groth20_Bls12_381)
+    let (pubkey, pop) = csp
+        .create_forward_secure_key_pair(AlgorithmId::NiDkg_Groth20_Bls12_381, node_id)
         .expect("Failed to generate DKG dealing encryption keys");
-    ic_crypto_internal_csp::keygen::utils::dkg_dealing_encryption_pk_to_proto(pubkey, pok)
+    ic_crypto_internal_csp::keygen::utils::dkg_dealing_encryption_pk_to_proto(pubkey, pop)
 }
 
 /// Retrieves the node's public keys from `crypto_root`, and checks their
@@ -108,7 +109,8 @@ pub fn get_node_keys_or_generate_if_missing_for_node_id(
             // Generate new keys.
             let committee_signing_pk = generate_committee_signing_keys(crypto_root);
             let node_signing_pk = generate_node_signing_keys(crypto_root);
-            let dkg_dealing_encryption_pk = generate_dkg_dealing_encryption_keys(crypto_root);
+            let dkg_dealing_encryption_pk =
+                generate_dkg_dealing_encryption_keys(crypto_root, node_id);
             let tls_certificate = generate_tls_keys(crypto_root, node_id);
             let node_pks = NodePublicKeys {
                 version: 0,
@@ -139,7 +141,8 @@ pub fn get_node_keys_or_generate_if_missing(crypto_root: &Path) -> (NodePublicKe
             let committee_signing_pk = generate_committee_signing_keys(crypto_root);
             let node_signing_pk = generate_node_signing_keys(crypto_root);
             let node_id = derive_node_id(&node_signing_pk);
-            let dkg_dealing_encryption_pk = generate_dkg_dealing_encryption_keys(crypto_root);
+            let dkg_dealing_encryption_pk =
+                generate_dkg_dealing_encryption_keys(crypto_root, node_id);
             let tls_certificate = generate_tls_keys(crypto_root, node_id);
             let node_pks = NodePublicKeys {
                 version: 0,

@@ -1,23 +1,23 @@
-/// Artifact related types.
-///
-/// Notable it includes the following definitions and their sub-types:
-///
-/// - Artifact
-/// - ArtifactTag
-/// - ArtifactId
-/// - ArtifactAttribute
-/// - ArtifactFilter
-///
-/// An ArtifactKind trait is provided for convenience to carry multiple type
-/// definitions that belong to the same "artifact kind".
-///
-/// All Artifact sub-types must also implement ChunkableArtifact trait defined
-/// in the chunkable crate.
+//! Artifact related types.
+//!
+//! Notably it includes the following definitions and their sub-types:
+//!
+//! - [`Artifact`]
+//! - [`ArtifactTag`]
+//! - [`ArtifactId`]
+//! - [`ArtifactAttribute`]
+//! - [`ArtifactFilter`]
+//!
+//! An [`ArtifactKind`] trait is provided for convenience to carry multiple type
+//! definitions that belong to the same "artifact kind".
+//!
+//! All [`Artifact`] sub-types must also implement [`ChunkableArtifact`] trait
+//! defined in the chunkable module.
 use crate::{
     consensus::{certification::CertificationMessageHash, ConsensusMessageHash},
     crypto::{CryptoHash, CryptoHashOf},
     filetree_sync::{FileTreeSyncArtifact, FileTreeSyncId},
-    messages::MessageId,
+    messages::{MessageId, SignedRequestBytes},
     p2p::GossipAdvert,
     CryptoHashOfState, Height, Time,
 };
@@ -42,7 +42,7 @@ pub use crate::{
 #[allow(clippy::large_enum_variant)]
 pub enum Artifact {
     ConsensusMessage(ConsensusMessage),
-    IngressMessage(SignedIngress),
+    IngressMessage(SignedRequestBytes),
     CertificationMessage(CertificationMessage),
     DkgMessage(DkgMessage),
     FileTreeSync(FileTreeSyncArtifact),
@@ -165,11 +165,12 @@ pub enum Priority {
     FetchNow,
 }
 
-/// Priority function used by the artifact manager clients
+/// Priority function used by `ArtifactClient`.
 pub type PriorityFn<Id, Attribute> =
     Box<dyn Fn(&Id, &Attribute) -> Priority + Send + Sync + 'static>;
 
-pub type GenericPriorityFn =
+/// Wraps individual `PriorityFn`s, used by `ArtifactManager`.
+pub type ArtifactPriorityFn =
     Box<dyn Fn(&ArtifactId, &ArtifactAttribute) -> Priority + Send + Sync + 'static>;
 
 /// Related artifact sub-types (Message/Id/Attribute/Filter) are
@@ -182,13 +183,14 @@ pub trait ArtifactKind: Sized {
     const TAG: ArtifactTag;
     type Id;
     type Message: Unpin;
+    type SerializeAs;
     type Attribute;
     type Filter: Default;
 
-    /// Return the advert of the given message.
+    /// Returns the advert of the given message.
     fn to_advert(msg: &<Self as ArtifactKind>::Message) -> Advert<Self>;
 
-    /// Check if the given advert matches what is computed from the message.
+    /// Checks if the given advert matches what is computed from the message.
     /// Returns the advert derived from artifact on mismatch.
     fn check_advert(
         msg: &<Self as ArtifactKind>::Message,
@@ -295,7 +297,7 @@ pub struct ConsensusMessageFilter {
 // -----------------------------------------------------------------------------
 // Ingress artifacts
 
-/// IngressMessageId includes expiry time in addition to MessageId.
+/// [`IngressMessageId`] includes expiry time in addition to [`MessageId`].
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct IngressMessageId {
     expiry: Time,
@@ -385,6 +387,7 @@ pub struct CertificationMessageFilter {
 // -----------------------------------------------------------------------------
 // DKG artifacts
 
+/// Identifier of a DKG message.
 pub type DkgMessageId = CryptoHashOf<DkgMessage>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -395,6 +398,7 @@ pub struct DkgMessageAttribute {
 // ------------------------------------------------------------------------------
 // StateSync artifacts.
 
+/// Identifier of a state sync artifact.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct StateSyncArtifactId {
     pub height: Height,
@@ -404,6 +408,8 @@ pub struct StateSyncArtifactId {
 type GetStateSyncChunk =
     fn(file_path: std::path::PathBuf, offset: u64, len: u32) -> std::io::Result<Vec<u8>>;
 
+/// State sync message.
+//
 // NOTE: StateSyncMessage is never persisted or transferred over the wire
 // (despite the Serialize/Deserialize bounds imposed by P2P interfaces), that's
 // why it's fine to include an absolute path into it.
@@ -443,6 +449,7 @@ impl std::hash::Hash for StateSyncMessage {
     }
 }
 
+/// State sync atrribute.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct StateSyncAttribute {
     pub height: Height,
@@ -459,8 +466,9 @@ pub struct StateSyncFilter {
 }
 
 // ------------------------------------------------------------------------------
-// FileTreeSync artifacts (to be filled in)
+// FileTreeSync artifacts
 
+/// File tree sync attribute.
 pub type FileTreeSyncAttribute = String;
 
 // ------------------------------------------------------------------------------

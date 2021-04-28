@@ -49,9 +49,10 @@ pub trait SecretKeyStore: Send + Sync {
     /// Retrieves the key with the given `id`.
     ///
     /// Returns `None` if the store does not contain a key with the given `id`.
-    fn get(&self, id: &KeyId) -> Option<CspSecretKey>; // The database memory is safe only for the duration of the transaction, so the
-                                                       // key must be copied out.  As such it is doubtful that returning the key by
-                                                       // reference is constructive.  Also, the key should be scrubbed on removal.
+    // The database memory is safe only for the duration of the transaction, so the
+    // key must be copied out.  As such it is doubtful that returning the key by
+    // reference is constructive.  Also, the key should be scrubbed on removal.
+    fn get(&self, id: &KeyId) -> Option<CspSecretKey>;
 
     /// Checks if the store contains a key with the given `id`.
     fn contains(&self, id: &KeyId) -> bool;
@@ -74,7 +75,17 @@ pub trait SecretKeyStore: Send + Sync {
     /// # Panics
     /// This MAY panic if the predicate panics.
     ///
-    /// Details: Unlike e.g. `HashMap::filter_drain(..)` this does not (handle the case where the filter panics)[https://doc.rust-lang.org/std/collections/struct.HashMap.html#method.drain_filter].  If the filter panics, the panic is likely to cause the secret key store to crash.  Thus lambdas MUST NEVER be taken from untrusted sources.  If panics are to be handled the predicate can be run in a separate thread and panics handles with (`thread::Result`)[https://doc.rust-lang.org/std/thread/type.Result.html] (depending on whether we are run from inside a suitable runtime), or (`panic::catch_unwind(..)`)[https://doc.rust-lang.org/nightly/std/panic/fn.catch_unwind.html] can be added to this implementation and we may require `panic="unwind"`.  See the (book)[https://doc.rust-lang.org/edition-guide/rust-2018/error-handling-and-panics/controlling-panics-with-std-panic.html] and function documentation for more details.
+    /// Details: Unlike e.g. `HashMap::filter_drain(..)` this does not
+    /// (handle the case where the filter panics)[https://doc.rust-lang.org/std/collections/struct.HashMap.html#method.drain_filter].
+    /// If the filter panics, the panic is likely to cause the secret key store
+    /// to crash. Thus lambdas MUST NEVER be taken from untrusted sources.
+    /// If panics are to be handled the predicate can be run in a separate
+    /// thread and panics handles with (`thread::Result`)[https://doc.rust-lang.org/std/thread/type.Result.html]
+    /// (depending on whether we are run from inside a suitable runtime), or
+    /// (`panic::catch_unwind(..)`)[https://doc.rust-lang.org/nightly/std/panic/fn.catch_unwind.html]
+    /// can be added to this implementation and we may require `panic="unwind"`.
+    /// See the (book)[https://doc.rust-lang.org/edition-guide/rust-2018/error-handling-and-panics/controlling-panics-with-std-panic.html]
+    /// and function documentation for more details.
     fn retain<F>(&mut self, _filter: F, _scope: Scope)
     where
         F: Fn(&KeyId, &CspSecretKey) -> bool,

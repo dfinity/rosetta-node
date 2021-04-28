@@ -2,7 +2,7 @@ use super::*;
 use async_trait::async_trait;
 use ic_crypto_tls_interfaces::{
     AllowedClients, AuthenticatedPeer, MalformedPeerCertificateError, Peer, PeerNotAllowedError,
-    TlsClientHandshakeError, TlsHandshake, TlsServerHandshakeError, TlsStream, TlsStreamInsecure,
+    TlsClientHandshakeError, TlsHandshake, TlsServerHandshakeError, TlsStream,
 };
 use ic_logger::{debug, new_logger};
 use ic_protobuf::registry::crypto::v1::X509PublicKeyCert;
@@ -45,32 +45,6 @@ where
             registry_version,
         )
         .await;
-        debug!(logger;
-            crypto.description => "end",
-            crypto.is_ok => result.is_ok(),
-            crypto.error => log_err(result.as_ref().err()),
-        );
-        result
-    }
-
-    /// This method will be removed once the P2P team finished integrating the
-    /// new TLS handshake API. Removal is tracked in CRP-775.
-    async fn perform_tls_server_handshake_insecure(
-        &self,
-        tcp_stream: TcpStream,
-        allowed_clients: AllowedClients,
-        registry_version: RegistryVersion,
-    ) -> Result<(TlsStreamInsecure, AuthenticatedPeer), TlsServerHandshakeError> {
-        let logger = new_logger!(&self.logger;
-            crypto.trait_name => "TlsHandshake",
-            crypto.method_name => "perform_tls_server_handshake_insecure",
-            crypto.registry_version => registry_version.get(),
-            crypto.allowed_tls_clients => format!("{:?}", allowed_clients),
-        );
-        debug!(logger; crypto.description => "start",);
-        let result =
-            server_handshake::perform_tls_server_handshake_insecure(tcp_stream, allowed_clients)
-                .await;
         debug!(logger;
             crypto.description => "end",
             crypto.is_ok => result.is_ok(),

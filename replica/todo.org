@@ -1,0 +1,31 @@
+#+TODO: TODO THOUGHT/DESIGNED CODED TESTED DRAFT_PR PR_OPEN ADDRESSED | MERGED
+* Mocks to substitute with real
+** TODO [#A] HTTP Handler
+** TODO [#A] Wasm embedder
+** TODO [#A] Hypervisor + rest
+** TODO [#A] remove execution simulator/use testing framework
+** TODO [#B] Execution tests
+** TODO [#A] pool pass I
+(see the issues and add tasks: Do we need thread safety for iterators)
+** TODO [#B] transport
+   (sync with Rahul)
+** TODO [#B] coordinator/messaging
+   (sync with Roman)
+** TODO [#B] consensus (with dummy pool)
+   (sync with Paul)
+** TODO [#B] p2p gossip (no progression) pt I
+   (sync with Khushboo)
+** TODO [#A] pool pass II (deal with the issues)
+** TODO pool pass III
+** TODO consensus revisited
+* Polishing
+** MERGED thread ids
+   CLOSED: [2020-04-29 Wed 17:26]
+** THOUGHT/DESIGNED thread configuration per actor (typed)
+** system runtime
+*** TODO panics
+*** THOUGHT/DESIGNED signal handling
+** TODO Sync with Ryan about measurements
+** UUID
+   (sync with Ryan)
+** jaeger distributed tracing

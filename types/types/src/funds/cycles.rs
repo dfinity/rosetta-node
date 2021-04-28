@@ -1,3 +1,4 @@
+use candid::CandidType;
 use ic_protobuf::state::queues::v1::Cycles as PbCycles;
 use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
@@ -9,7 +10,9 @@ use std::{
 /// Struct to handle cycles on the IC. They are maintained as a
 /// simple u128. We implement our own arithmetic functions on them so that we
 /// can ensure that they never overflow or underflow.
-#[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize, CandidType,
+)]
 pub struct Cycles(u128);
 
 impl Cycles {

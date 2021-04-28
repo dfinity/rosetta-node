@@ -6,6 +6,7 @@ use ic_types::{
 use ic_wasm_types::{WasmInstrumentationError, WasmValidationError};
 use serde::{Deserialize, Serialize};
 
+/// Various traps that a canister can create.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum TrapCode {
     StackOverflow,
@@ -74,6 +75,7 @@ pub enum MessageAcceptanceError {
     CanisterExecutionFailed(HypervisorError),
 }
 
+/// Errors returned by the Hypervisor.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum HypervisorError {
     /// The message sent to the canister refers a function not found in the

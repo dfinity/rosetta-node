@@ -1,3 +1,4 @@
+//! The consensus pool public interface.
 use crate::{
     artifact_pool::{UnvalidatedArtifact, ValidatedArtifact},
     time_source::TimeSource,
@@ -19,7 +20,7 @@ use serde::{Deserialize, Serialize};
 // tag::change_set[]
 pub type ChangeSet = Vec<ChangeAction>;
 
-// TODO(CON-272): Remove this clippy exception
+/// Change actions applicable to the consensus pool.
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ChangeAction {
@@ -33,12 +34,13 @@ pub enum ChangeAction {
 }
 // end::change_set[]
 
-impl ChangeAction {
-    pub fn into_change_set(self) -> ChangeSet {
-        vec![self]
+impl From<ChangeAction> for ChangeSet {
+    fn from(action: ChangeAction) -> Self {
+        vec![action]
     }
 }
 
+/// A trait with common methods for change sets.
 pub trait ChangeSetOperation: Sized {
     /// Conditional composition when self is empty. Similar to Option::or_else.
     fn or_else<F: FnOnce() -> Self>(self, f: F) -> Self;
@@ -167,7 +169,7 @@ pub trait PoolSection<T> {
 
     /// Return the HeightIndexedPool for CatchUpPackage in protobuf form.
     fn highest_catch_up_package_proto(&self) -> pb::CatchUpPackage {
-        // XXX: This default implementation is not the actual implementation
+        // NOTE: This default implementation is not the actual implementation
         // that will be used for this code path. It simply avoids the need to implement
         // this function on other things implementing PoolSection
         pb::CatchUpPackage::from(

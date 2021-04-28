@@ -10,6 +10,6 @@ mod arithmetic;
 pub use arithmetic::{scalar_multiply, sum};
 
 mod hash;
-pub use hash::{hash_to_fr, hash_to_g1};
+pub use hash::{hash_to_fr, hash_to_g1, hash_to_miracl_g1, MiraclG1};
 
 pub mod test_utils;

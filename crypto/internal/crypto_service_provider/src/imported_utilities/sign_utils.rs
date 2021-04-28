@@ -3,6 +3,7 @@ use ic_crypto_internal_basic_sig_der_utils as der_utils;
 use ic_crypto_internal_basic_sig_ecdsa_secp256k1 as ecdsa_secp256k1;
 use ic_crypto_internal_basic_sig_ecdsa_secp256r1 as ecdsa_secp256r1;
 use ic_crypto_internal_basic_sig_ed25519 as ed25519;
+use ic_crypto_internal_basic_sig_iccsa as iccsa;
 use ic_crypto_internal_threshold_sig_bls12381 as bls12_381;
 use ic_crypto_internal_types::sign::threshold_sig::public_key::bls12_381::PublicKeyBytes as BlsPublicKeyBytes;
 use ic_crypto_internal_types::sign::threshold_sig::public_key::CspThresholdSigPublicKey;
@@ -25,6 +26,7 @@ pub enum KeyBytesContentType {
     EcdsaP256PublicKeyDer,
     EcdsaSecp256k1PublicKeyDer,
     EcdsaP256PublicKeyDerWrappedCose,
+    IcCanisterSignatureAlgPublicKeyDer,
 }
 
 /// Parses the given `bytes` as a DER- or COSE-encoded public key, and returns,
@@ -43,6 +45,28 @@ pub fn user_public_key_from_bytes(
             },
             KeyBytesContentType::Ed25519PublicKeyDer,
         ));
+    }
+    // Try DER-encoded ICCSA public key.
+    if let Ok(iccsa_pk) = iccsa::api::public_key_bytes_from_der(bytes) {
+        return Ok((
+            UserPublicKey {
+                key: iccsa_pk.0,
+                algorithm_id: AlgorithmId::IcCanisterSignature,
+            },
+            KeyBytesContentType::IcCanisterSignatureAlgPublicKeyDer,
+        ));
+    }
+    // Try DER-wrapped COSE ECDSA-P256 public key.
+    if let Ok(pk_cose) = der_utils::public_key_bytes_from_der_wrapped_cose(bytes) {
+        if let Ok(ecdsa_pk) = ecdsa_secp256r1::api::public_key_from_cose(&pk_cose) {
+            return Ok((
+                UserPublicKey {
+                    key: ecdsa_pk.0,
+                    algorithm_id: AlgorithmId::EcdsaP256,
+                },
+                KeyBytesContentType::EcdsaP256PublicKeyDerWrappedCose,
+            ));
+        }
     }
     // Try DER-encoded ECDSA-P256 public key.
     if let Ok(ecdsa_pk) = ecdsa_secp256r1::api::public_key_from_der(bytes) {
@@ -63,19 +87,6 @@ pub fn user_public_key_from_bytes(
             },
             KeyBytesContentType::EcdsaSecp256k1PublicKeyDer,
         ));
-    }
-
-    // Try DER-wrapped COSE ECDSA-P256 public key.
-    if let Ok(pk_cose) = der_utils::public_key_bytes_from_der_wrapping(bytes) {
-        if let Ok(ecdsa_pk) = ecdsa_secp256r1::api::public_key_from_cose(&pk_cose) {
-            return Ok((
-                UserPublicKey {
-                    key: ecdsa_pk.0,
-                    algorithm_id: AlgorithmId::EcdsaP256,
-                },
-                KeyBytesContentType::EcdsaP256PublicKeyDerWrappedCose,
-            ));
-        }
     }
 
     Err(CryptoError::AlgorithmNotSupported {

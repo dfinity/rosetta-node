@@ -1,7 +1,4 @@
 //! Serialisation and deserialisation of the MIRACL BLS12-381 types.
-//!
-//! Note: On import to the dfinity repo this file is to be deleted and
-//! ic-crypto-internal-types used instead.
 
 #[cfg(test)]
 mod tests;
@@ -45,13 +42,6 @@ pub fn miracl_fr_from_bytes(bytes: &[u8; FrBytes::SIZE]) -> Result<BIG, ()> {
     } else {
         Ok(result)
     }
-}
-
-// TODO(CRP-757): Remove this
-pub fn miracl_fr_from_bytes_unchecked(bytes: &[u8; FrBytes::SIZE]) -> BIG {
-    let mut buffer = [0u8; BIG_SIZE];
-    buffer[BIG_SIZE - FrBytes::SIZE..].copy_from_slice(bytes);
-    BIG::frombytes(&buffer[..])
 }
 
 /// Serialises a miracl G1 == ECP to a standard, library-independent form.

@@ -51,6 +51,9 @@ message SubnetRecord {
 
   // If `true`, the subnet will be halted: it will no longer create or execute blocks.
   bool is_halted = 17;
+
+  // Max number of ingress messages per block.
+  uint64 max_ingress_messages_per_block = 18;
 }
 
 // Contains the initial DKG transcripts for the subnet and materials to construct a base CUP (i.e.
@@ -71,6 +74,20 @@ message CatchUpPackageContents {
 
   // The hash of the state that the subnet should use
   bytes state_hash = 5;
+
+  // A uri from which data to replace the registry local store should be downloaded
+  RegistryStoreUri registry_store_uri = 6;
+}
+
+message RegistryStoreUri {
+	/// The uri at which the registry store data should be retrieved. The data
+	/// must be provided as gzipped tar archive
+	string uri = 1;
+	/// A SHA-265, hex encoded hash of the contents of the data stored at the
+	/// provided URI
+	string hash = 2;
+	/// The registry version that should be used for the catch up package contents
+	uint64 registry_version = 3;
 }
 
 // A list of subnet ids of all subnets present in this instance of the IC.
@@ -139,4 +156,9 @@ enum SubnetType {
     // like not charging for cycles or restricting who can create and
     // install canisters on it.
     SUBNET_TYPE_SYSTEM = 2;
+    reserved 3;
+    reserved "SUBNET_TYPE_PREMIUM_APPLICATION";
+    // A subnet type that is like application subnets but can have some
+    // additional features.
+    SUBNET_TYPE_VERIFIED_APPLICATION = 4;
 }

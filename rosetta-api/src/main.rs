@@ -1,12 +1,10 @@
 use structopt::StructOpt;
 
+use ic_crypto_utils_threshold_sig::parse_threshold_sig_key;
 use ic_rosetta_api::rosetta_server::RosettaApiServer;
 use ic_rosetta_api::{ledger_client, RosettaRequestHandler};
 use ic_types::{CanisterId, PrincipalId};
-
-use ic_crypto::threshold_sig_public_key_from_der;
-use ic_types::crypto::threshold_sig::ThresholdSigPublicKey;
-use std::{path::Path, path::PathBuf, str::FromStr, sync::Arc};
+use std::{path::PathBuf, str::FromStr, sync::Arc};
 
 shadow_rs::shadow!(build);
 
@@ -19,7 +17,7 @@ struct Opt {
     #[structopt(
         short = "c",
         long = "canister-id",
-        default_value = "5s2ji-faaaa-aaaaa-qaaaq-cai"
+        default_value = "5o6tz-saaaa-aaaaa-qaacq-cai"
     )]
     ic_canister_id: String,
     #[structopt(long = "ic-url", default_value = "https://exchanges.dfinity.network")]
@@ -30,8 +28,8 @@ struct Opt {
         default_value = "log_config.yml"
     )]
     log_config_file: PathBuf,
-    #[structopt(long = "nns-public-key")]
-    nns_public_key: Option<PathBuf>,
+    #[structopt(long = "root-key")]
+    root_key: Option<PathBuf>,
     #[structopt(long = "store-location", default_value = "./data")]
     store_location: PathBuf,
     #[structopt(long = "store-max-blocks")]
@@ -40,38 +38,6 @@ struct Opt {
     exit_on_sync: bool,
     #[structopt(long = "offline")]
     offline: bool,
-}
-
-fn parse_threshold_sig_key(pem_file: &Path) -> std::io::Result<ThresholdSigPublicKey> {
-    fn invalid_data_err(msg: impl std::string::ToString) -> std::io::Error {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, msg.to_string())
-    }
-
-    let buf = std::fs::read(pem_file)?;
-    let s = String::from_utf8_lossy(&buf);
-    let lines: Vec<_> = s.trim_end().lines().collect();
-    let n = lines.len();
-
-    if n < 3 {
-        return Err(invalid_data_err("input file is too short"));
-    }
-
-    if !lines[0].starts_with("-----BEGIN PUBLIC KEY-----") {
-        return Err(invalid_data_err(
-            "PEM file doesn't start with BEGIN PK block",
-        ));
-    }
-    if !lines[n - 1].starts_with("-----END PUBLIC KEY-----") {
-        return Err(invalid_data_err("PEM file doesn't end with END PK block"));
-    }
-
-    let decoded = base64::decode(&lines[1..n - 1].join(""))
-        .map_err(|err| invalid_data_err(format!("failed to decode base64: {}", err)))?;
-
-    let public_key = threshold_sig_public_key_from_der(&decoded)
-        .map_err(|err| invalid_data_err(format!("failed to decode public key: {}", err)))?;
-
-    Ok(public_key)
 }
 
 #[actix_web::main]
@@ -92,9 +58,17 @@ async fn main() -> std::io::Result<()> {
         build::PKG_VERSION,
     );
 
-    let public_key = match opt.nns_public_key {
-        Some(nns_public_key_path) => Some(parse_threshold_sig_key(nns_public_key_path.as_path())?),
-        None => None,
+    let root_key = match opt.root_key {
+        Some(root_key_path) => Some(parse_threshold_sig_key(root_key_path.as_path())?),
+        None => {
+            if opt.ic_canister_id == ic_nns_constants::LEDGER_CANISTER_ID.to_string() {
+                log::error!("Root key is required when connecting to the mainnet");
+                return Ok(());
+            } else {
+                log::warn!("Data certificate will not be verified due to missing root key");
+            }
+            None
+        }
     };
     log::info!("Listening on {}:{}", opt.listen_address, opt.listen_port);
     let addr = format!("{}:{}", opt.listen_address, opt.listen_port);
@@ -110,7 +84,7 @@ async fn main() -> std::io::Result<()> {
         &opt.store_location,
         opt.store_max_blocks,
         opt.offline,
-        public_key,
+        root_key,
     )
     .await
     .expect("Failed to initialize ledger client");

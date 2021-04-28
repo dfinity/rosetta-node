@@ -3,7 +3,7 @@
 //! This file translates to and from an external library that does the
 //! mathematics.
 
-use super::types::{FsEncryptionKeySet, FsEncryptionSecretKey};
+use super::types::{FsEncryptionKeySetWithPop, FsEncryptionSecretKey};
 use super::ALGORITHM_ID;
 use crate::api::ni_dkg_errors::CspDkgVerifyDealingError;
 use crate::api::ni_dkg_errors::{
@@ -18,7 +18,7 @@ use conversions::{
 };
 use ic_crypto_internal_bls12381_serde_miracl::miracl_g1_from_bytes;
 use ic_crypto_internal_types::sign::threshold_sig::ni_dkg::ni_dkg_groth20_bls12_381::{
-    FsEncryptionCiphertext, FsEncryptionPlaintext, FsEncryptionPok, FsEncryptionPublicKey,
+    FsEncryptionCiphertext, FsEncryptionPlaintext, FsEncryptionPop, FsEncryptionPublicKey,
     NodeIndex,
 };
 use ic_crypto_internal_types::sign::threshold_sig::ni_dkg::ni_dkg_groth20_bls12_381::{
@@ -36,9 +36,11 @@ use std::convert::TryFrom;
 pub(crate) mod conversions;
 
 mod crypto {
+    pub use ic_crypto_internal_fs_ni_dkg::encryption_key_pop::EncryptionKeyPop;
     pub use ic_crypto_internal_fs_ni_dkg::forward_secure::{
-        dec_chunks, enc_chunks, kgen, mk_sys_params, verify_ciphertext_integrity, BTENode, Bit,
-        PublicKey, SecretKey, SysParam, ToxicWaste, CRSZ,
+        dec_chunks, enc_chunks, epoch_from_tau_vec, kgen, mk_sys_params,
+        verify_ciphertext_integrity, BTENode, Bit, PublicKeyWithPop, SecretKey, SysParam,
+        ToxicWaste, CRSZ,
     };
     pub use ic_crypto_internal_fs_ni_dkg::nizk_chunking::{
         prove_chunking, verify_chunking, ChunkingInstance, ChunkingWitness, ProofChunking,
@@ -66,14 +68,18 @@ lazy_static! {
 }
 
 /// Generates a forward secure key pair.
-pub fn create_forward_secure_key_pair(seed: Randomness) -> FsEncryptionKeySet {
+pub fn create_forward_secure_key_pair(
+    seed: Randomness,
+    associated_data: &[u8],
+) -> FsEncryptionKeySetWithPop {
     let mut rng = crypto::RAND_ChaCha20::new(seed.get());
-    let (lib_public_key_with_pok, lib_secret_key) = crypto::kgen(&SYS_PARAMS, &mut rng);
-    let (public_key, pok) = public_key_from_miracl(&lib_public_key_with_pok);
+    let (lib_public_key_with_pop, lib_secret_key) =
+        crypto::kgen(associated_data, &SYS_PARAMS, &mut rng);
+    let (public_key, pop) = public_key_from_miracl(&lib_public_key_with_pop);
     let secret_key = secret_key_from_miracl(&lib_secret_key);
-    FsEncryptionKeySet {
+    FsEncryptionKeySetWithPop {
         public_key,
-        pok,
+        pop,
         secret_key,
     }
 }
@@ -82,10 +88,11 @@ pub fn create_forward_secure_key_pair(seed: Randomness) -> FsEncryptionKeySet {
 /// possession holds.
 pub fn verify_forward_secure_key(
     public_key: &FsEncryptionPublicKey,
-    pok: &FsEncryptionPok,
+    pop: &FsEncryptionPop,
+    associated_data: &[u8],
 ) -> Result<(), ()> {
-    let crypto_public_key_with_pop = public_key_into_miracl((public_key, pok))?;
-    if crypto_public_key_with_pop.verify() {
+    let crypto_public_key_with_pop = public_key_into_miracl((public_key, pop))?;
+    if crypto_public_key_with_pop.verify(associated_data) {
         Ok(())
     } else {
         Err(())
@@ -120,6 +127,7 @@ pub fn encrypt_and_prove(
     key_message_pairs: &[(FsEncryptionPublicKey, FsEncryptionPlaintext)],
     epoch: Epoch,
     public_coefficients: &PublicCoefficientsBytes,
+    associated_data: &[u8],
 ) -> Result<(FsEncryptionCiphertext, ZKProofDec, ZKProofShare), EncryptAndZKProveError> {
     let public_keys: Result<Vec<miracl::ECP>, EncryptAndZKProveError> = key_message_pairs
         .as_ref()
@@ -155,11 +163,12 @@ pub fn encrypt_and_prove(
         &plaintext_chunks,
         public_key_pointers,
         &tau.0[..],
+        associated_data,
         &SYS_PARAMS,
         &mut rng,
     )
     .expect(
-        "TODO (CRP-815): I think the result should never be None.  Can the blynn return type be changed?",
+        "TODO (CRP-815): I think the result should never be None.  Can the return type be changed?",
     );
 
     let chunking_proof = prove_chunking(
@@ -188,7 +197,7 @@ pub fn encrypt_and_prove(
                     g1_gen: miracl::ECP::generator(),
                     public_keys: public_keys.clone(),
                     ciphertext_chunks: ciphertext.cc.clone(),
-                    points_r: ciphertext.rr.clone(),
+                    randomizers_r: ciphertext.rr.clone(),
                 },
                 &chunking_proof,
             ),
@@ -208,7 +217,7 @@ pub fn encrypt_and_prove(
                     g2_gen: miracl::ECP2::generator(),
                     public_keys,
                     public_coefficients: miracl_public_coefficients,
-                    combined_rand: util::ecp_from_big_endian_chunks(&ciphertext.rr),
+                    combined_randomizer: util::ecp_from_big_endian_chunks(&ciphertext.rr),
                     combined_ciphertexts,
                 },
                 &sharing_proof,
@@ -237,6 +246,7 @@ pub fn decrypt(
     secret_key: &FsEncryptionSecretKey,
     node_index: NodeIndex,
     epoch: Epoch,
+    associated_data: &[u8],
 ) -> Result<FsEncryptionPlaintext, DecryptError> {
     let index = usize::try_from(node_index).map_err(|_| {
         DecryptError::SizeError(SizeError {
@@ -259,7 +269,15 @@ pub fn decrypt(
     let ciphertext =
         ciphertext_into_miracl(ciphertext).map_err(DecryptError::MalformedCiphertext)?;
     let tau = Tau::from(epoch);
-    let decrypt_maybe = crypto::dec_chunks(&secret_key, index, &ciphertext, &tau.0[..]);
+    let decrypt_maybe = crypto::dec_chunks(
+        &secret_key,
+        index,
+        &ciphertext,
+        &tau.0[..],
+        associated_data,
+        &SYS_PARAMS,
+    );
+
     decrypt_maybe
         .map(|decrypt| plaintext_to_bytes(&decrypt))
         .map_err(|_| DecryptError::InvalidChunk)
@@ -285,7 +303,7 @@ fn prove_chunking(
         g1_gen: miracl::ECP::generator(),
         public_keys: receiver_fs_public_keys.to_vec(),
         ciphertext_chunks: ciphertext.cc.clone(),
-        points_r: ciphertext.rr.clone(),
+        randomizers_r: ciphertext.rr.clone(),
     };
 
     let chunking_witness = crypto::ChunkingWitness {
@@ -332,12 +350,12 @@ fn prove_sharing(
             g2_gen: miracl::ECP2::generator(),
             public_keys: receiver_fs_public_keys.to_vec(),
             public_coefficients: public_coefficients.to_vec(),
-            combined_rand: combined_r,
+            combined_randomizer: combined_r,
             combined_ciphertexts,
         },
         &crypto::SharingWitness {
-            rand_r: combined_r_scalar,
-            rand_s: combined_plaintexts,
+            scalar_r: combined_r_scalar,
+            scalars_s: combined_plaintexts,
         },
         rng,
     )
@@ -350,6 +368,7 @@ pub fn verify_zk_proofs(
     ciphertexts: &FsEncryptionCiphertext,
     chunking_proof: &ZKProofDec,
     sharing_proof: &ZKProofShare,
+    associated_data: &[u8],
 ) -> Result<(), CspDkgVerifyDealingError> {
     // Conversions
     let public_keys: Result<Vec<miracl::ECP>, CspDkgVerifyDealingError> = receiver_fs_public_keys
@@ -378,11 +397,12 @@ pub fn verify_zk_proofs(
     })?;
 
     let tau = Tau::from(epoch);
-    crypto::verify_ciphertext_integrity(&ciphertext, &tau.0[..], &SYS_PARAMS).map_err(|_| {
-        CspDkgVerifyDealingError::InvalidDealingError(InvalidArgumentError {
-            message: "Ciphertext integrity check failed".to_string(),
-        })
-    })?;
+    crypto::verify_ciphertext_integrity(&ciphertext, &tau.0[..], associated_data, &SYS_PARAMS)
+        .map_err(|_| {
+            CspDkgVerifyDealingError::InvalidDealingError(InvalidArgumentError {
+                message: "Ciphertext integrity check failed".to_string(),
+            })
+        })?;
 
     let chunking_proof = chunking_proof_into_miracl(&chunking_proof).map_err(|_| {
         CspDkgVerifyDealingError::MalformedDealingError(InvalidArgumentError {
@@ -396,7 +416,7 @@ pub fn verify_zk_proofs(
             g1_gen: miracl::ECP::generator(),
             public_keys: public_keys.clone(),
             ciphertext_chunks: ciphertext.cc.clone(),
-            points_r: ciphertext.rr.clone(),
+            randomizers_r: ciphertext.rr.clone(),
         },
         &chunking_proof,
     )
@@ -432,7 +452,7 @@ pub fn verify_zk_proofs(
             g2_gen: miracl::ECP2::generator(),
             public_keys,
             public_coefficients: miracl_public_coefficients,
-            combined_rand: combined_r,
+            combined_randomizer: combined_r,
             combined_ciphertexts,
         },
         &sharing_proof,

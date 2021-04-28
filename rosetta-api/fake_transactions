@@ -17,5 +17,5 @@ for i in {1..100}; do
     HEX=$(hexdump -n 16 -e '4/4 "%08X" 1 "\n"' /dev/random)
     # Generate a random canister ID
     CID=$(textual_encode $HEX)
-    dfx canister --network=exchanges call ledger send "($RANDOM, record {doms= $RANDOM}, principal \"$CID\" , null)" &
+    dfx canister --network=exchanges call ledger send "($RANDOM, record {e8s= $RANDOM}, principal \"$CID\" , null)" &
 done

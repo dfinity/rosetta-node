@@ -5,12 +5,17 @@ use serde::de::Error;
 use serde::{Deserialize, Serialize};
 use std::{convert::TryFrom, fmt};
 
+/// A type representing a canister's [`PrincipalId`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, CandidType, Serialize)]
 pub struct CanisterId(PrincipalId);
 
+/// Represents an error that can occur when constructing a [`CanisterId`] from a
+/// [`PrincipalId`].
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum CanisterIdError {
+    /// An invalid [`PrincipalId`] was given.
     InvalidPrincipalId(String),
+    /// The input string could not be parsed into a [`PrincipalId`].
     PrincipalIdParseError(PrincipalIdParseError),
 }
 
@@ -40,9 +45,7 @@ impl CanisterId {
     }
 
     pub const fn new(principal_id: PrincipalId) -> Result<Self, CanisterIdError> {
-        // TODO(akhi): enable this check when canister ids must be just u64.
-        // const LENGTH: usize = std::mem::size_of::<u64>();
-        // assert_eq!(principal_id.as_slice().len(), LENGTH);
+        // TODO(EXC-241)
         Ok(Self(principal_id))
     }
 
@@ -65,7 +68,7 @@ impl CanisterId {
         data[6] = val[6];
         data[7] = val[7];
 
-        // Even though not defined in public spec, add another 0x1 to the array
+        // Even though not defined in the interface spec, add another 0x1 to the array
         // to create a sub category that could be used in future.
         data[8] = 0x01;
 
@@ -101,6 +104,8 @@ impl TryFrom<PrincipalId> for CanisterId {
     }
 }
 
+/// Represents an error that can occur when parsing a blob into a
+/// [`CanisterId`].
 #[derive(Debug, Clone, Serialize)]
 pub enum CanisterIdBlobParseError {
     PrincipalIdBlobParseError(PrincipalIdBlobParseError),
@@ -147,8 +152,7 @@ impl fmt::Display for CanisterIdBlobParseError {
 
 impl std::error::Error for CanisterIdBlobParseError {}
 
-// TODO(akhi): This exists as temporary scaffolding as there are various places
-// in the code currently, where we encode subnet ids as canister ids.
+// TODO(EXC-241)
 impl From<SubnetId> for CanisterId {
     fn from(subnet_id: SubnetId) -> Self {
         CanisterId::new(subnet_id.get()).unwrap()

@@ -1,5 +1,5 @@
 type ICPTs = record {
-     doms : nat64;
+     e8s : nat64;
 };
 
 type BlockHeight = nat64;
@@ -69,8 +69,10 @@ type LedgerCanisterInitPayload = record {
 
 service: (LedgerCanisterInitPayload) -> {
   send : (SendArgs) -> (BlockHeight);
+  send_dfx : (SendArgs) -> (BlockHeight);
   notify: (NotifyCanisterArgs) -> ();
   account_balance : (AccountBalanceArgs) -> (ICPTs) query;
+  account_balance_dfx : (AccountBalanceArgs) -> (ICPTs) query;
   total_supply: (TotalSupplyArgs) -> (ICPTs) query;
   tip_of_chain : () -> (Certification, BlockHeight) query;
   block : (BlockHeight) -> (opt EncodedBlock) query;

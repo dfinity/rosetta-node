@@ -1,17 +1,19 @@
-///  Semaphore with integrated gauge that tracks the outstanding permits. This
-///  is useful pattern if you want to have a limit on the number of events and
-///  track how many permits are consumed.
+use prometheus::core::{Atomic, GenericGauge};
+use std::sync::Arc;
+
+///  Semaphore with integrated gauge that tracks the outstanding permits.
 ///
-/// # You must be within a tokio runtime. Public structs in this module are
-/// # thread-safe.
+///  This is useful pattern if you want to have a limit on the number of events
+///  and track how many permits are consumed.
 ///
-/// # Example usages:
+///  You must be within a Tokio runtime. The type is thread-safe.
 ///
-/// #     1. If you want to execute particular task with limitted concurrency
-/// # but you also want to see how much flow control happens in prometheus. This
-/// # is partucular useful for servers that want to implement some type of flow
-/// # control.
+///  Examples:
 ///```
+///     // If you want to execute particular task with limited concurrency but
+///     // you also want to see how much flow control happens in Prometheus.
+///     // This is particular useful for servers that want to implement some
+///     // type of flow control.
 ///     use std::sync::Arc;
 ///      
 ///     async fn example() {
@@ -33,14 +35,11 @@
 ///         }
 ///     }
 /// ```
-use prometheus::core::{Atomic, GenericGauge};
-use std::sync::Arc;
-
 pub struct ObservableCountingSemaphore<P: Atomic> {
     semaphore: Arc<tokio::sync::Semaphore>,
-    // We require an Arc here because in our codebase the Prometheus metrics are not statically
-    // initialized. Hence, to avoid craziness with lifetimes, especially in concurrent code, we
-    // prefer to use an Arc.
+    // We require an Arc here because in our codebase the Prometheus metrics are
+    // not statically initialized. Hence, to avoid craziness with lifetimes,
+    // especially in concurrent code, we prefer to use an Arc.
     gauge: Arc<GenericGauge<P>>,
 }
 
@@ -50,20 +49,20 @@ impl<P: Atomic> ObservableCountingSemaphore<P> {
         Self { semaphore, gauge }
     }
 
-    // A call to acquire will return a permit that will be valid until being
-    // dropped. Please note the semantics of acquire is different from the
-    // semantics of tokio::sync::Semaphore::{acquire,acquire_owned}.
-    //
-    // 1. Unlike in tokio when acquire_owned is used, the
-    // ObservableCountingSemaphore doesn't need to be wrapped in Arc.
-    // Furthermore, if you want to reuse the semaphore you don't need to clone
-    // it before hand in order to retain ownership.
-    //
-    // 2. Unlike in tokio when acquire is used, you can pass the
-    // permit across different threads without worrying about lifetimes.
+    /// A call to acquire will return a permit that will be valid until being
+    /// dropped. Please note the semantics of acquire is different from the
+    /// semantics of `tokio::sync::Semaphore::{acquire,acquire_owned}`.
+    ///
+    /// 1. Unlike in Tokio when acquire_owned is used, the
+    /// `ObservableCountingSemaphore` doesn't need to be wrapped in Arc.
+    /// Furthermore, if you want to reuse the semaphore you don't need to clone
+    /// it before hand in order to retain ownership.
+    ///
+    /// 2. Unlike in Tokio when acquire is used, you can pass the
+    /// permit across different threads without worrying about lifetimes.
     pub async fn acquire(&self) -> SemaphorePermit<P> {
-        // We need to clone the underlaying semaphore so it is both owned by the current
-        // object and the tokio permit. This way it is safe to drop the
+        // We need to clone the underlying semaphore so it is both owned by the
+        // current object and the Tokio permit. This way it is safe to drop the
         // ObservableCountingSemaphore object before the permit, although not
         // recommended.
         let sem_for_permit = Arc::clone(&self.semaphore);
@@ -76,6 +75,7 @@ impl<P: Atomic> ObservableCountingSemaphore<P> {
     }
 }
 
+/// The semaphore permit type returned from the `ObservableCountingSemaphore`.
 pub struct SemaphorePermit<P: Atomic> {
     gauge: Arc<GenericGauge<P>>,
     _permit: tokio::sync::OwnedSemaphorePermit,

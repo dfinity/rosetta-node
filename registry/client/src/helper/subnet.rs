@@ -30,6 +30,9 @@ pub struct IngressMessageSettings {
     /// Maximum number of bytes per message. This is a hard cap, which means
     /// ingress messages greater than the limit will be dropped.
     pub max_ingress_bytes_per_message: usize,
+    /// Maximum number of messages per block. This is a hard cap, which means
+    /// blocks will never have more than this number of messages.
+    pub max_ingress_messages_per_block: usize,
 }
 
 /// A helper trait that wraps a RegistryClient and provides utility methods for
@@ -205,6 +208,7 @@ impl<T: RegistryClient + ?Sized> SubnetRegistry for T {
                     ingress_bytes_per_block_soft_cap: subnet.ingress_bytes_per_block_soft_cap
                         as usize,
                     max_ingress_bytes_per_message: subnet.max_ingress_bytes_per_message as usize,
+                    max_ingress_messages_per_block: subnet.max_ingress_messages_per_block as usize,
                 }
             }),
         )
@@ -380,9 +384,6 @@ pub fn get_node_ids_from_subnet_record(subnet: &SubnetRecord) -> Vec<NodeId> {
 
 /// A helper trait to access the subnet list; the list of subnets that are part
 /// of the current topology of the IC.
-///
-/// TODO: Remove the subnet list key in the registry and replace with a
-/// semantically equivalent flag on the subnet record itself.
 pub trait SubnetListRegistry {
     fn get_subnet_ids(&self, version: RegistryVersion) -> RegistryClientResult<Vec<SubnetId>>;
 }
@@ -479,8 +480,8 @@ mod tests {
         SubnetId::from(PrincipalId::new_subnet_test_id(id))
     }
 
-    #[test]
-    fn can_get_node_ids_from_subnet() {
+    #[tokio::test]
+    async fn can_get_node_ids_from_subnet() {
         let subnet_id = subnet_id(4);
         let version = RegistryVersion::from(2);
         let data_provider = Arc::new(ProtoRegistryDataProvider::new());
@@ -500,7 +501,7 @@ mod tests {
 
         let registry = Arc::new(RegistryClientImpl::new(data_provider, None));
         // The trait can also "wrap" an arc of registry client.
-        registry.poll_once().unwrap();
+        registry.fetch_and_start_polling().unwrap();
         let registry: Arc<dyn RegistryClient> = registry;
 
         let node_ids = registry.get_node_ids_on_subnet(subnet_id, version).unwrap();
@@ -508,8 +509,8 @@ mod tests {
         assert_eq!(node_ids, Some(vec![node_id(32), node_id(33)]));
     }
 
-    #[test]
-    fn can_get_replica_version_from_subnet() {
+    #[tokio::test]
+    async fn can_get_replica_version_from_subnet() {
         let subnet_id = subnet_id(4);
         let version = RegistryVersion::from(2);
         let data_provider = Arc::new(ProtoRegistryDataProvider::new());
@@ -537,7 +538,7 @@ mod tests {
 
         let registry = Arc::new(RegistryClientImpl::new(data_provider, None));
         // The trait can also "wrap" an arc of registry client.
-        registry.poll_once().unwrap();
+        registry.fetch_and_start_polling().unwrap();
         let registry: Arc<dyn RegistryClient> = registry;
 
         let result = registry.get_replica_version(subnet_id, version).unwrap();

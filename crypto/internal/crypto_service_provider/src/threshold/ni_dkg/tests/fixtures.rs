@@ -61,10 +61,12 @@ impl MockNode {
         Self { node_id, csp }
     }
     /// Deal, resharing or not.
+    #[allow(clippy::too_many_arguments)]
     pub fn create_dealing(
         &mut self,
         algorithm_id: AlgorithmId,
         dkg_id: NiDkgId,
+        dealer_index: NodeIndex,
         threshold: NumberOfNodes,
         epoch: Epoch,
         receiver_keys: BTreeMap<NodeIndex, CspFsEncryptionPublicKey>,
@@ -74,6 +76,7 @@ impl MockNode {
             self.csp.create_resharing_dealing(
                 algorithm_id,
                 dkg_id,
+                dealer_index,
                 threshold,
                 epoch,
                 receiver_keys,
@@ -81,7 +84,14 @@ impl MockNode {
             )
         } else {
             self.csp
-                .create_dealing(algorithm_id, dkg_id, threshold, epoch, receiver_keys)
+                .create_dealing(
+                    algorithm_id,
+                    dkg_id,
+                    dealer_index,
+                    threshold,
+                    epoch,
+                    receiver_keys,
+                )
                 .map_err(ni_dkg_errors::CspDkgCreateReshareDealingError::from)
         }
     }
@@ -109,10 +119,13 @@ impl MockNetwork {
             .iter_mut()
             .map(|(node_id, node)| {
                 println!("Creating fs keys for {}", node_id);
-                let (id, (pubkey, pok)) = (
+                let (id, (pubkey, pop)) = (
                     *node_id,
                     node.csp
-                        .create_forward_secure_key_pair(AlgorithmId::NiDkg_Groth20_Bls12_381)
+                        .create_forward_secure_key_pair(
+                            AlgorithmId::NiDkg_Groth20_Bls12_381,
+                            *node_id,
+                        )
                         .unwrap_or_else(|_| {
                             panic!(
                                 "Failed to create forward secure encryption key for NodeId {}",
@@ -125,7 +138,7 @@ impl MockNetwork {
                     dkg_dealing_encryption_pk: Some(
                         crate::keygen::utils::dkg_dealing_encryption_pk_to_proto(
                             pubkey.to_owned(),
-                            pok,
+                            pop,
                         ),
                     ),
                     ..Default::default()
@@ -275,6 +288,10 @@ impl StateWithDealings {
                 let dealing = node.create_dealing(
                     config.algorithm_id,
                     config.dkg_id,
+                    config
+                        .dealers
+                        .position(node.node_id)
+                        .expect("The node is not in the set of Dealers"),
                     config.threshold.get(),
                     config.epoch,
                     config.receiver_keys.clone(),
@@ -318,17 +335,18 @@ impl StateWithVerifiedDealings {
                     static_api::verify_resharing_dealing(
                         config.algorithm_id,
                         config.dkg_id,
+                        dealer_index,
                         config.threshold.get(),
                         config.epoch,
                         config.receiver_keys.clone(),
                         dealing.clone(),
                         CspPublicCoefficients::from(transcript),
-                        dealer_index,
                     )
                 } else {
                     static_api::verify_dealing(
                         config.algorithm_id,
                         config.dkg_id,
+                        dealer_index,
                         config.threshold.get(),
                         config.epoch,
                         config.receiver_keys.clone(),

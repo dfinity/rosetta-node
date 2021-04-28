@@ -1,20 +1,20 @@
-/// Chunkable Artifact Trait
-///
-/// A de facto trait for P2P assembled/downloadable artifacts. A
-/// chunk able artifact lends itself to be downloaded by the P2P layer.
-/// This trait has functions that abstract functionality of chunk
-/// management for various artifact variants.  P2P needs generic
-/// interfaces to perform the following functions.
-///
-/// - Create Adverts for Artifacts
-/// - Create under-construction object stubs on the receive side
-/// - Iterate/Request/Receive/Collate chunks
-///
-/// All variants of the Artifact should implement the "Chunkable"
-/// interface.
-///
-/// Polymorphism is implemented as static dispatch over enumerated variants
-/// that implement a common trait.
+//! [`Chunkable`] Artifact Trait.
+//!
+//! A de facto trait for P2P assembled/downloadable artifacts. A
+//! chunkable artifact lends itself to be downloaded by the P2P layer.
+//! This trait has functions that abstract functionality of chunk
+//! management for various artifact variants.  P2P needs generic
+//! interfaces to perform the following functions:
+//!
+//! - Create Adverts for Artifacts
+//! - Create under-construction object stubs on the receive side
+//! - Iterate/Request/Receive/Collate chunks
+//!
+//! All variants of the Artifact should implement the [`Chunkable`]
+//! interface.
+//!
+//! Polymorphism is implemented as static dispatch over enumerated variants
+//! that implement a common trait.
 use crate::{
     artifact::{Artifact, StateSyncMessage},
     consensus::{
@@ -29,24 +29,25 @@ use ic_protobuf::proxy::ProxyDecodeError;
 use phantom_newtype::Id;
 use std::convert::TryFrom;
 
-/// Error Codes Returned By Chunkabe interface
+/// Error codes returned by the `Chunkable` interface.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ArtifactErrorCode {
     ChunksMoreNeeded,
     ChunkVerificationFailed,
 }
 
-/// The chunk type
+/// The chunk type.
 pub type ChunkId = Id<ArtifactChunk, u32>;
 const CHUNKID_UNIT_CHUNK: u32 = 0;
 
+/// The data contained in an artifact chunk.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-#[allow(clippy::large_enum_variant)]
 pub enum ArtifactChunkData {
     UnitChunkData(Artifact), // Unit chunk data has 1:1 mapping with real artifacts
-    SemiStructuredChunkData(Vec<u8>), // Let's not convert this to an enum unless needed
+    SemiStructuredChunkData(Vec<u8>),
 }
 
+/// An artifact chunk.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ArtifactChunk {
     // Chunk number/id for this chunk
@@ -59,22 +60,21 @@ pub struct ArtifactChunk {
 
 // Static polymorphic dispatch for chunk tracking.
 //
-// Chunk trackers give a polymorphic interface over per client chunk
-// tracking logic. For artifacts consisting of a single chunk, P2P provides a
-// default "Chunkable" trait implementation. Artifact types for which
-// this default chunking logic is sufficient are marked using the
-// SingleChunked marker trait.
+// Chunk trackers give a polymorphic interface over client chunk tracking logic.
+// For artifacts consisting of a single chunk, P2P provides a default
+// [`Chunkable`] trait implementation. Artifact types for which this default
+// chunking logic is sufficient are marked using the [`SingleChunked`] marker
+// trait.
 //
 // Why Trackers: Rust doesn't allow objects to be partially
-// initialized.  i.e we cannot track a under construction
-// "Consensusartifact" using the same type as assembled
-// Artifact. Tracker types provide an abstract control point implement
-// a polymorphic dispatch to per client tracking logic.
+// initialized, i.e we cannot track an under construction
+// `ConsensusArtifact` using the same type as assembled
+// `Artifact`. Tracker types provide an abstract control point that enables us
+// to implement a polymorphic dispatch to per client tracking logic.
 //
 // Trackers are created from adverts and implement From trait.
 
-// SingleChunked enum to enumerate all variants of artifacts that can
-// are composed of a single chunk.
+/// Artifact types composed of a single chunk.
 pub enum SingleChunked {
     Consensus,
     Ingress,
@@ -82,13 +82,16 @@ pub enum SingleChunked {
     Dkg,
 }
 
-///
-/// Basic chunking impl of SingleChunked artifacts
+/// Interface providing access to artifact chunks.
 pub trait ChunkableArtifact {
+    /// Retrieves the artifact chunk with the given ID.
+    ///
+    /// The chunk ID for single-chunked artifacts must be
+    /// [`CHUNKID_UNIT_CHUNK`].
     fn get_chunk(self: Box<Self>, chunk_id: ChunkId) -> Option<ArtifactChunk>;
 }
 
-/// XXX: FRZ fix repetition use macro
+/// TODO(P2P-482): Fix repetition of implementing `get_chunk` with a macro.
 impl ChunkableArtifact for ConsensusMessage {
     fn get_chunk(self: Box<Self>, chunk_id: ChunkId) -> Option<ArtifactChunk> {
         if chunk_id != ChunkId::from(CHUNKID_UNIT_CHUNK) {
@@ -116,7 +119,7 @@ impl ChunkableArtifact for SignedIngress {
                 chunk_id,
                 witness: Vec::with_capacity(0),
                 artifact_chunk_data: ArtifactChunkData::UnitChunkData(Artifact::IngressMessage(
-                    *self,
+                    (*self).into(),
                 )),
             })
         }
@@ -188,8 +191,7 @@ impl ChunkableArtifact for StateSyncMessage {
 
 // End repetition
 
-///
-/// Basic chunking impl for Singlechunked artifact tracker
+/// Basic chunking interface for [`SingleChunked`] artifact tracker.
 pub trait Chunkable {
     fn get_artifact_hash(&self) -> CryptoHash;
     fn chunks_to_download(&self) -> Box<dyn Iterator<Item = ChunkId>>;
@@ -199,7 +201,7 @@ pub trait Chunkable {
     fn get_chunk_size(&self, chunk_id: ChunkId) -> usize;
 }
 
-// Basic chunking impl for SingleChunked object tracking
+// Basic chunking impl for [`SingleChunked`] object tracking
 impl Chunkable for SingleChunked {
     fn get_artifact_hash(&self) -> CryptoHash {
         unimplemented!("")

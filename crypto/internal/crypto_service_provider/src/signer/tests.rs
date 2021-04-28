@@ -188,17 +188,9 @@ mod verify_secp256k1 {
     use ic_types::crypto::AlgorithmId::EcdsaSecp256k1;
     use std::convert::TryFrom;
 
-    // Thanks to Björn Tackmann for generating this test case:
-    //
-    // $ openssl ecparam -name secp256k1 -genkey -noout -out priv.pem
-    // $ openssl ec -in priv.pem -pubout -outform der -out pub.der
-    // $ echo -n "" | openssl dgst -sha256 -sign priv.pem > sign.der
-    // $ xxd -p < sign.der > sign.hex
-    //
-    // (plus minor massaging with a text editor).
-    const PK: &[u8] = b"3056301006072a8648ce3d020106052b8104000a034200047060f720298ffa0f48d9606abdb013bc82f4ff269f9adc3e7226391af3fad8b30fd6a30deb81d5b4f9e142971085d0ae15b8e222d85af1e17438e630d09b7ef4";
-    const SIG: &[u8] = b"1a39066abe0da4d68a6a682e941c73b0f112b1f1e1766c2c4514591dd640793196c79e9e0d0e9678d72ba421fac9ddde86214d8fbe51e63f8b48f37471b69fbb";
     const EMPTY_MSG: &[u8] = &[0; 0];
+    const PK: &[u8] = test_data::ECDSA_SECP256K1_PK_DER_HEX.as_bytes();
+    const SIG: &[u8] = test_data::ECDSA_SECP256K1_SIG_RAW_HEX.as_bytes();
 
     #[test]
     fn should_correctly_verify_signature() {

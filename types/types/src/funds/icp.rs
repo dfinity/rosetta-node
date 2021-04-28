@@ -1,3 +1,5 @@
+// TODO(EXC-240): The following module is deprecated and should be removed.
+
 use serde::{Deserialize, Serialize};
 
 /// ICP represents the ICP tokens on the IC.
@@ -26,7 +28,6 @@ use serde::{Deserialize, Serialize};
 /// The `must_use` attributes offers additional compile-time warnings if ICP
 /// are accidentally dropped out of scope.
 ///
-/// FIXME(EXE-57): Disallow cloning.
 /// For now, cloning is enabled to not make the change too disruptive.
 /// Disallowing cloning will also make imply that one cannot directly clone a
 /// `SystemState` or a `CanisterState`. The `clone` implementation of these
@@ -113,9 +114,6 @@ impl std::fmt::Display for ICP {
 
 impl Drop for ICP {
     fn drop(&mut self) {
-        // FIXME(EXE-60): Enable this panic once we've also figured out the
-        // related EXE-57.
-        //
         // if self.0 != 0 {
         //     panic!("ICP leakage detected!");
         // }
@@ -149,7 +147,6 @@ impl Sink {
 mod tests {
     use super::*;
 
-    // TODO(dsarlis): Enable test again once EXE-60 is done.
     #[ignore]
     #[test]
     #[should_panic(expected = "leakage detected")]

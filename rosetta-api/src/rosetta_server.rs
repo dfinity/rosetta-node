@@ -21,7 +21,7 @@ fn to_rosetta_response<S: serde::Serialize>(result: Result<S, ApiError>) -> Http
                 .body(resp),
             Err(_) => HttpResponse::InternalServerError()
                 .content_type("application/json")
-                .body(Error::serialization_error_json_str(None)),
+                .body(Error::serialization_error_json_str()),
         },
         Err(err) => match serde_json::to_string(&err) {
             Ok(resp) => HttpResponse::InternalServerError()
@@ -29,7 +29,7 @@ fn to_rosetta_response<S: serde::Serialize>(result: Result<S, ApiError>) -> Http
                 .body(resp),
             Err(_) => HttpResponse::InternalServerError()
                 .content_type("application/json")
-                .body(Error::serialization_error_json_str(None)),
+                .body(Error::serialization_error_json_str()),
         },
     }
 }
@@ -178,6 +178,15 @@ async fn mempool_transaction(
     to_rosetta_response(res)
 }
 
+#[post("/search/transactions")]
+async fn search_transactions(
+    msg: web::Json<SearchTransactionsRequest>,
+    req_handler: web::Data<RosettaRequestHandler>,
+) -> HttpResponse {
+    let res = req_handler.search_transactions(msg.into_inner()).await;
+    to_rosetta_response(res)
+}
+
 pub struct RosettaApiServer {
     stopped: Arc<AtomicBool>,
     ledger: Arc<dyn LedgerAccess + Send + Sync>,
@@ -195,6 +204,7 @@ impl RosettaApiServer {
 
         let server = HttpServer::new(move || {
             App::new()
+                .data(web::JsonConfig::default().limit(4 * 1024 * 1024))
                 .data(req_handler.clone())
                 .service(account_balance)
                 .service(block)
@@ -212,6 +222,7 @@ impl RosettaApiServer {
                 .service(network_list)
                 .service(network_options)
                 .service(network_status)
+                .service(search_transactions)
         })
         .bind(addr)?
         .run();

@@ -14,7 +14,7 @@ use ic_crypto_internal_threshold_sig_bls12381::ni_dkg::groth20_bls12_381::types:
 use ic_crypto_internal_threshold_sig_bls12381::types as threshold_sig_types;
 use ic_crypto_internal_tls::keygen::TlsEd25519SecretKeyDerBytes;
 use ic_crypto_internal_types::encrypt::forward_secure::groth20_bls12_381::{
-    FsEncryptionPok, FsEncryptionPublicKey,
+    FsEncryptionPop, FsEncryptionPublicKey,
 };
 
 impl CspSecretKey {
@@ -215,15 +215,18 @@ pub fn arbitrary_ephemeral_key_set() -> CspSecretKey {
 #[allow(unused)]
 pub fn arbitrary_fs_encryption_key_set() -> CspSecretKey {
     // TODO(CRP-862): produce random values rather than default.
-    let fs_enc_key_set = ni_dkg_types::FsEncryptionKeySet {
+    let fs_enc_key_set = ni_dkg_types::FsEncryptionKeySetWithPop {
         public_key: FsEncryptionPublicKey(Default::default()),
-        pok: FsEncryptionPok {
-            blinder: Default::default(),
+        pop: FsEncryptionPop {
+            pop_key: Default::default(),
+            challenge: Default::default(),
             response: Default::default(),
         },
         secret_key: FsEncryptionSecretKey { bte_nodes: vec![] },
     };
-    CspSecretKey::FsEncryption(CspFsEncryptionKeySet::Groth20_Bls12_381(fs_enc_key_set))
+    CspSecretKey::FsEncryption(CspFsEncryptionKeySet::Groth20WithPop_Bls12_381(
+        fs_enc_key_set,
+    ))
 }
 
 #[allow(unused)]

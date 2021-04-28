@@ -4,7 +4,7 @@ use candid::Decode;
 use ic_base_types::{CanisterId, PrincipalId, SubnetId};
 use ic_ic00_types::{
     CanisterIdRecord, InstallCodeArgs, Method as Ic00Method, Payload, ProvisionalTopUpCanisterArgs,
-    SetControllerArgs,
+    SetControllerArgs, UpdateSettingsArgs,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, convert::TryFrom, str::FromStr, sync::Arc};
@@ -42,6 +42,14 @@ pub fn resolve_destination(
         // It might be cleaner to pipe in the actual NNS subnet id to this
         // function and return that instead.
         Ok(Ic00Method::SetupInitialDKG) => Ok(own_subnet),
+        Ok(Ic00Method::UpdateSettings) => {
+            // Find the destination canister from the payload.
+            let args = Decode!(payload, UpdateSettingsArgs)?;
+            let canister_id = args.get_canister_id();
+            routing_table.route(canister_id.get()).ok_or({
+                ResolveDestinationError::SubnetNotFound(canister_id, Ic00Method::UpdateSettings)
+            })
+        }
         Ok(Ic00Method::InstallCode) => {
             // Find the destination canister from the payload.
             let args = Decode!(payload, InstallCodeArgs)?;
@@ -62,6 +70,7 @@ pub fn resolve_destination(
         | Ok(Ic00Method::StopCanister)
         | Ok(Ic00Method::DeleteCanister)
         | Ok(Ic00Method::DepositFunds)
+        | Ok(Ic00Method::UninstallCode)
         | Ok(Ic00Method::DepositCycles) => {
             let args = Decode!(payload, CanisterIdRecord)?;
             let canister_id = args.get_canister_id();
@@ -267,7 +276,7 @@ impl RoutingTable {
     }
 
     /// Returns true if the routing table is well-formed.
-    fn well_formed(&self) -> Result<(), WellFormedError> {
+    pub fn well_formed(&self) -> Result<(), WellFormedError> {
         use WellFormedError::*;
 
         // Used to track the end of the previous end used to check that the

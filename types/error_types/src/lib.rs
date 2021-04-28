@@ -1,3 +1,5 @@
+//! A crate that groups user-facing and internal error types and codes produced
+//! by the Internet Computer.
 use candid::Error;
 use ic_protobuf::proxy::ProxyDecodeError;
 use serde::{Deserialize, Serialize};
@@ -9,7 +11,7 @@ use strum_macros::EnumIter;
 /// handling, not for end-users. They are also used for classification
 /// of user-facing errors.
 ///
-/// See https://docs.dfinity.systems/spec/public/#reject-codes
+/// See https://sdk.dfinity.org/docs/interface-spec/index.html#reject-codes
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum RejectCode {
     SysFatal = 1,
@@ -88,6 +90,8 @@ impl From<ErrorCode> for RejectCode {
             SubnetNotFound => CanisterReject,
             CanisterRejectedMessage => CanisterReject,
             InterCanisterQueryLoopDetected => CanisterError,
+            UnknownManagementMessage => CanisterReject,
+            InvalidManagementPayload => CanisterReject,
         }
     }
 }
@@ -129,6 +133,8 @@ pub enum ErrorCode {
     CertifiedStateUnavailable = 515,
     CanisterRejectedMessage = 516,
     InterCanisterQueryLoopDetected = 517,
+    UnknownManagementMessage = 518,
+    InvalidManagementPayload = 519,
 }
 
 impl From<candid::Error> for UserError {
@@ -173,6 +179,8 @@ impl TryFrom<u64> for ErrorCode {
             515 => Ok(ErrorCode::CertifiedStateUnavailable),
             516 => Ok(ErrorCode::CanisterRejectedMessage),
             517 => Ok(ErrorCode::InterCanisterQueryLoopDetected),
+            518 => Ok(ErrorCode::UnknownManagementMessage),
+            519 => Ok(ErrorCode::InvalidManagementPayload),
             _ => Err(ProxyDecodeError::ValueOutOfRange {
                 typ: "ErrorCode",
                 err: err.to_string(),

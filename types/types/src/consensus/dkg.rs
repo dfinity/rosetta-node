@@ -1,3 +1,5 @@
+//! Defines types used for distributed key generation.
+
 use super::*;
 use crate::{
     crypto::threshold_sig::ni_dkg::{
@@ -12,14 +14,18 @@ use std::collections::BTreeMap;
 /// Contains a Node's contribution to a DKG dealing.
 pub type Message = BasicSigned<DealingContent>;
 
+/// Holds the content of a DKG dealing
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DealingContent {
     version: ReplicaVersion,
+    /// the cryptographic data of the dealing
     pub dealing: NiDkgDealing,
+    /// The id of the DKG instance this dealing belongs to
     pub dkg_id: NiDkgId,
 }
 
 impl DealingContent {
+    /// Create a new DealingContent
     pub fn new(dealing: NiDkgDealing, dkg_id: NiDkgId) -> Self {
         DealingContent {
             version: ReplicaVersion::default(),
@@ -44,6 +50,25 @@ impl From<&Message> for pb::DkgMessage {
             signature: message.signature.signature.clone().get().0,
             signer: Some(crate::node_id_into_protobuf(message.signature.signer)),
         }
+    }
+}
+
+impl TryFrom<pb::DkgMessage> for Message {
+    type Error = String;
+    fn try_from(message: pb::DkgMessage) -> Result<Self, Self::Error> {
+        Ok(Self {
+            content: DealingContent::new(
+                bincode::deserialize(&message.dealing)
+                    .map_err(|err| format!("Couldn't deserialize the dealing: {:?}", err))?,
+                NiDkgId::try_from(message.dkg_id.expect("No Dkg id found"))
+                    .map_err(|err| format!("Couldn't deserialize the Dkg id: {:?}", err))?,
+            ),
+            signature: BasicSignature {
+                signature: BasicSigOf::from(BasicSig(message.signature)),
+                signer: node_id_try_from_protobuf(message.signer.expect("No signer found"))
+                    .map_err(|err| format!("Couldn't parse the node id: {:?}", err))?,
+            },
+        })
     }
 }
 
@@ -86,6 +111,7 @@ pub struct Summary {
 }
 
 impl Summary {
+    /// Create a new Summary
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         configs: Vec<NiDkgConfig>,
@@ -196,6 +222,7 @@ impl Summary {
         self.height + self.interval_length + Height::from(1)
     }
 
+    /// Returns the transcripts for new subnets
     pub fn transcripts_for_new_subnets(
         &self,
     ) -> &BTreeMap<NiDkgId, Result<NiDkgTranscript, String>> {
@@ -348,16 +375,39 @@ impl TryFrom<pb::Summary> for Summary {
 /// and the set of valid dealings corresponding to the current interval.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Payload {
+    /// DKG Summary payload
     Summary(Summary),
+    /// DKG Dealings payload
     Dealings(Dealings),
 }
 
+/// DealingMessages is a vector of DKG messages
 pub type DealingMessages = Vec<Message>;
 
+/// Dealings contains dealing messages and the height at which this DKG interval
+/// started
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Dealings {
+    /// The height of the DKG interval that this object belongs to
     pub start_height: Height,
+    /// The dealing messages
     pub messages: DealingMessages,
+}
+
+impl TryFrom<pb::Dealings> for Dealings {
+    type Error = String;
+    fn try_from(dealings: pb::Dealings) -> Result<Self, Self::Error> {
+        Ok(Self {
+            start_height: Height::from(dealings.summary_height),
+            messages: dealings
+                .dealings
+                .into_iter()
+                .map(|protobuf_dealing| {
+                    Message::try_from(protobuf_dealing).expect("Couldn't parse the dealing")
+                })
+                .collect(),
+        })
+    }
 }
 
 impl Dealings {
@@ -461,10 +511,9 @@ impl TryFrom<pb::DkgPayload> for Payload {
             pb::dkg_payload::Val::Summary(summary) => {
                 Ok(Payload::Summary(Summary::try_from(summary)?))
             }
-            // TODO: Support dealings, although the protobufs are intended
-            // mostly for use with cups so this may not be necessary since cups
-            // will always have Summary values.
-            _ => Err(String::from("Deserialization of DKG payloads that are not summary blocks is currently not supported"))
+            pb::dkg_payload::Val::Dealings(dealings) => {
+                Ok(Payload::Dealings(Dealings::try_from(dealings)?))
+            }
         }
     }
 }

@@ -19,7 +19,7 @@ pub struct CustomClientBuilder {
     allowed_signature_algorithms: Option<String>,
     expected_error: Option<String>,
     client_auth_data: Option<(PKey<Private>, X509)>,
-    client_ca_cert: Option<X509>,
+    extra_chain_certs: Option<Vec<X509>>,
     msg_expected_from_server: Option<String>,
 }
 
@@ -64,8 +64,8 @@ impl CustomClientBuilder {
         self
     }
 
-    pub fn with_client_ca_cert(mut self, client_ca_cert: X509) -> Self {
-        self.client_ca_cert = Some(client_ca_cert);
+    pub fn with_extra_chain_certs(mut self, extra_chain_certs: Vec<X509>) -> Self {
+        self.extra_chain_certs = Some(extra_chain_certs);
         self
     }
 
@@ -86,7 +86,7 @@ impl CustomClientBuilder {
             X509::from_der(&server_cert.certificate_der).expect("Unable to parse server cert.");
         CustomClient {
             client_auth_data: self.client_auth_data,
-            client_ca_cert: self.client_ca_cert,
+            extra_chain_certs: self.extra_chain_certs,
             server_cert,
             max_proto_version,
             allowed_cipher_suites,
@@ -101,7 +101,7 @@ impl CustomClientBuilder {
 /// implementation. It is purely for testing the server.
 pub struct CustomClient {
     client_auth_data: Option<(PKey<Private>, X509)>,
-    client_ca_cert: Option<X509>,
+    extra_chain_certs: Option<Vec<X509>>,
     server_cert: X509,
     max_proto_version: SslVersion,
     allowed_cipher_suites: String,
@@ -119,7 +119,7 @@ impl CustomClient {
             allowed_signature_algorithms: None,
             expected_error: None,
             client_auth_data: None,
-            client_ca_cert: None,
+            extra_chain_certs: None,
             msg_expected_from_server: None,
         }
     }
@@ -176,8 +176,10 @@ impl CustomClient {
                 .check_private_key()
                 .expect("Inconsistent private key and certificate.");
         }
-        if let Some(ca_cert) = &self.client_ca_cert {
-            builder.add_extra_chain_cert(ca_cert.clone());
+        if let Some(extra_chain_certs) = &self.extra_chain_certs {
+            for extra_chain_cert in extra_chain_certs {
+                builder.add_extra_chain_cert(extra_chain_cert.clone());
+            }
         }
         let mut connect_config = builder
             .build()

@@ -11,8 +11,6 @@ use ic_crypto_internal_multi_sig_bls12381::types::SecretKeyBytes;
 use ic_crypto_test_utils::tls::x509_certificates::{
     cert_to_der, generate_ed25519_cert, private_key_to_der, x509_public_key_cert,
 };
-use ic_crypto_tls_interfaces::TlsStream;
-use openssl::x509::X509;
 use tokio::net::{TcpListener, TcpStream};
 
 #[test]
@@ -54,7 +52,11 @@ async fn should_return_create_acceptor_error_from_clib() {
         )
         .await;
 
-    assert_create_acceptor_error(result, "The trusted client certs must not be empty.")
+    assert!(
+        matches!(result, Err(CspTlsServerHandshakeError::CreateAcceptorError { description, .. })
+            if description == "The trusted client certs must not be empty."
+        )
+    );
 }
 
 #[tokio::test]
@@ -161,17 +163,6 @@ async fn should_return_error_on_malformed_client_cert() {
         assert!(e.internal_error.contains("bad object header"));
     } else {
         panic!("unexpected error");
-    }
-}
-
-fn assert_create_acceptor_error(
-    result: Result<(TlsStream, Option<X509>), CspTlsServerHandshakeError>,
-    expected_description: &str,
-) {
-    if let Err(CspTlsServerHandshakeError::CreateAcceptorError { description, .. }) = result {
-        assert_eq!(description, expected_description);
-    } else {
-        panic!("Expected CreateAcceptorError");
     }
 }
 

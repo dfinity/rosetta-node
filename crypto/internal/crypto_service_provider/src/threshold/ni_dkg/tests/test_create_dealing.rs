@@ -73,6 +73,10 @@ impl StateWithConfig {
         let dealing = dealer_node.create_dealing(
             incorrect_algorithm_id,
             self.config.dkg_id,
+            self.config
+                .dealers
+                .position(dealer_node.node_id)
+                .expect("The node is not in the set of Dealers"),
             self.config.threshold.get(),
             self.config.epoch,
             self.config.receiver_keys.clone(),
@@ -119,6 +123,10 @@ impl StateWithConfig {
             let dealing = dealer_node.create_dealing(
                 self.config.algorithm_id,
                 self.config.dkg_id,
+                self.config
+                    .dealers
+                    .position(dealer_node.node_id)
+                    .expect("The node is not in the set of Dealers"),
                 NumberOfNodes::from(*incorrect_threshold),
                 self.config.epoch,
                 self.config.receiver_keys.clone(),
@@ -161,6 +169,10 @@ impl StateWithConfig {
         let dealing = dealer_node.create_dealing(
             self.config.algorithm_id,
             self.config.dkg_id,
+            self.config
+                .dealers
+                .position(dealer_node.node_id)
+                .expect("The node is not in the set of Dealers"),
             self.config.threshold.get(),
             self.config.epoch,
             incorrect_receivers,

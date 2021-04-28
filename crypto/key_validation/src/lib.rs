@@ -37,7 +37,7 @@ impl ValidNodePublicKeys {
     pub fn try_from(keys: &NodePublicKeys, node_id: NodeId) -> Result<Self, KeyValidationError> {
         validate_node_signing_key(&keys.node_signing_pk, node_id)?;
         validate_committee_signing_key(&keys.committee_signing_pk)?;
-        validate_dkg_dealing_encryption_key(&keys.dkg_dealing_encryption_pk)?;
+        validate_dkg_dealing_encryption_key(&keys.dkg_dealing_encryption_pk, node_id)?;
         validate_tls_certificate(&keys.tls_certificate, node_id)?;
 
         Ok(ValidNodePublicKeys {
@@ -140,11 +140,12 @@ fn validate_committee_signing_key(
 ///
 /// This includes
 /// * verifying that the key is present and well-formed
-/// * verifying the public key's proof of knowledge (PoK) is valid
+/// * verifying the public key's proof of possession (PoP) is valid
 /// * verifying that the public key is a point on the curve and in the right
 ///   subgroup
 fn validate_dkg_dealing_encryption_key(
     dkg_dealing_encryption_key: &Option<PublicKey>,
+    node_id: NodeId,
 ) -> Result<(), KeyValidationError> {
     let pubkey_proto = dkg_dealing_encryption_key
         .as_ref()
@@ -154,7 +155,7 @@ fn validate_dkg_dealing_encryption_key(
     // public key is a point on the curve and in the right subgroup.
     let fs_ni_dkg_pubkey = fs_ni_dkg_pubkey_from_proto(pubkey_proto)
         .map_err(|e| invalid_dkg_dealing_enc_pubkey_error(format!("{}", e)))?;
-    if !fs_ni_dkg_pubkey.verify() {
+    if !fs_ni_dkg_pubkey.verify(node_id.get().as_slice()) {
         return Err(invalid_dkg_dealing_enc_pubkey_error("verification failed"));
     }
     Ok(())

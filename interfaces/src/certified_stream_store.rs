@@ -1,3 +1,4 @@
+//! The certified stream store public interface.
 use ic_types::{
     xnet::{CertifiedStreamSlice, StreamIndex, StreamSlice},
     RegistryVersion, SubnetId,
@@ -13,6 +14,10 @@ pub enum EncodeStreamError {
         stream_begin: StreamIndex,
         stream_end: StreamIndex,
     },
+    InvalidSliceIndices {
+        witness_begin: Option<StreamIndex>,
+        msg_begin: Option<StreamIndex>,
+    },
 }
 
 impl fmt::Display for EncodeStreamError {
@@ -27,6 +32,14 @@ impl fmt::Display for EncodeStreamError {
                 f,
                 "Requested slice begin {} is outside of stream message bounds [{}, {})",
                 slice_begin, stream_begin, stream_end
+            ),
+            Self::InvalidSliceIndices {
+                witness_begin,
+                msg_begin,
+            } => write!(
+                f,
+                "Invalid requested slice indices: witness_begin: {:?}, msg_begin: {:?}",
+                witness_begin, msg_begin
             ),
         }
     }
@@ -71,13 +84,18 @@ impl std::error::Error for DecodeStreamError {}
 /// arbitrary node of a remote subnet is indeed genuine and agreed upon by a
 /// majority of the replicas constituting that subnet.
 pub trait CertifiedStreamStore: Send + Sync {
-    /// Produces a certified slice of the stream for `remote_subnet` beginning
-    /// at `begin_index`, containing at most `msg_limit` messages totaling at
-    /// most `byte_limit` bytes, using the latest certified state.
+    /// Produces a certified slice of the stream for `remote_subnet` from the
+    /// latest certified state, with a witness beginning at `witness_begin`;
+    /// and messages beginning at `msg_begin` and containing at most `msg_limit`
+    /// messages totaling at most `byte_limit` bytes.
+    ///
+    /// Precondition: `witness_begin.is_none() && msg_begin.is_none() ||
+    /// witness_begin.unwrap() <= msg_begin.unwrap()`.
     fn encode_certified_stream_slice(
         &self,
         remote_subnet: SubnetId,
-        begin_index: Option<StreamIndex>,
+        witness_begin: Option<StreamIndex>,
+        msg_begin: Option<StreamIndex>,
         msg_limit: Option<usize>,
         byte_limit: Option<usize>,
     ) -> Result<CertifiedStreamSlice, EncodeStreamError>;

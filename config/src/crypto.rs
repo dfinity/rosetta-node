@@ -1,6 +1,6 @@
 // We disable clippy warnings for the whole module because they apply to
 // generated code, meaning we can't locally disable the warnings (the code is
-// defined in another module). https://dfinity.atlassian.net/browse/DFN-467
+// defined in another module).
 #![allow(clippy::redundant_closure)]
 #![allow(clippy::unit_arg)]
 
@@ -107,12 +107,10 @@ mod tests {
     proptest! {
         #[test]
         #[ignore]
-        // XXX(dsd): The current json5 implementation is buggy:
+        // TODO(CRP-323): The current json5 implementation is buggy:
         // Unicode code points U+2028 and U+2029 are not escaped/parsed properly.
         // This test is disabled until issue is fixed.
         // https://github.com/callum-oakley/json5-rs/issues/21
-        // Crypto-Project Ticket:
-        // https://dfinity.atlassian.net/browse/CRP-323
         fn arbitrary_config_serializes_and_deserializes(config: CryptoConfig) {
             serde_test(config);
         }

@@ -13,7 +13,10 @@ use std::sync::Arc;
 /// Block payload is either DKG summary or (BatchPayload, DKG Dealings).
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum BlockPayload {
+    /// A BlockPayload::Summary contains only a DKG Summary
     Summary(dkg::Summary),
+    /// A BlockPayload::BatchAndDealings contains batch payload (ingress and
+    /// xnet messages) and DKG dealings
     BatchAndDealings(BatchPayload, dkg::Dealings),
 }
 

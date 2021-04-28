@@ -31,7 +31,7 @@ mod stability {
         assert_eq!(
             bls::g1_to_bytes(&multi_crypto::hash_public_key_to_g1(&public_key_bytes.0[..]))[..],
             hex_to_48_bytes(
-                "8c3361331b64008149f69b05dc166eb18b0964b51e50e8d76b9f9e204163c7053e4ddd9396ab3d7617624a85a8e63906"
+                "8b6db127df1bdc6e0a78c7b1e9539d9c7720cf10f07c5f408d06ad8000538f556f546949c94329a0164fbdc5d8eb1d33"
             )[..]
         );
     }
@@ -65,10 +65,6 @@ mod basic_functionality {
         }
     }
 
-    #[test]
-    fn keypair_from_seed_returns_none_from_zero() {
-        assert_eq!(multi_crypto::keypair_from_seed([0; 4]), None);
-    }
     /// Verifies that different messages yield different points on G1 when
     /// hashed, with high probability
     #[test]
@@ -124,21 +120,21 @@ mod advanced_functionality {
 
     #[test]
     fn single_point_signature_verifies() {
-        let (secret_key, public_key) = multi_crypto::keypair_from_seed([1, 2, 3, 4]).unwrap();
+        let (secret_key, public_key) = multi_crypto::keypair_from_seed([1, 2, 3, 4]);
         let point = multi_crypto::hash_message_to_g1(b"abba");
         multi_test_utils::single_point_signature_verifies(secret_key, public_key, point);
     }
 
     #[test]
     fn individual_multi_signature_contribution_verifies() {
-        let (secret_key, public_key) = multi_crypto::keypair_from_seed([1, 2, 3, 4]).unwrap();
+        let (secret_key, public_key) = multi_crypto::keypair_from_seed([1, 2, 3, 4]);
         multi_test_utils::individual_multi_signature_contribution_verifies(
             secret_key, public_key, b"abba",
         );
     }
     #[test]
     fn pop_verifies() {
-        let (secret_key, public_key) = multi_crypto::keypair_from_seed([1, 2, 3, 4]).unwrap();
+        let (secret_key, public_key) = multi_crypto::keypair_from_seed([1, 2, 3, 4]);
         let pop = multi_crypto::create_pop(public_key, secret_key);
         assert!(multi_crypto::verify_pop(pop, public_key));
     }
@@ -146,8 +142,8 @@ mod advanced_functionality {
     #[test]
     fn double_signature_verifies() {
         let keys = [
-            multi_crypto::keypair_from_seed([1, 2, 3, 4]).unwrap(),
-            multi_crypto::keypair_from_seed([5, 6, 7, 8]).unwrap(),
+            multi_crypto::keypair_from_seed([1, 2, 3, 4]),
+            multi_crypto::keypair_from_seed([5, 6, 7, 8]),
         ];
         multi_test_utils::multi_signature_verifies(&keys, b"abba");
     }

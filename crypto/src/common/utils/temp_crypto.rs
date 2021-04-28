@@ -10,15 +10,15 @@ use ic_crypto_internal_csp::secret_key_store::proto_store::ProtoSecretKeyStore;
 use ic_crypto_internal_csp::{public_key_store, CryptoServiceProvider, Csp};
 use ic_crypto_tls_interfaces::{
     AllowedClients, AuthenticatedPeer, Peer, TlsClientHandshakeError, TlsHandshake,
-    TlsServerHandshakeError, TlsStream, TlsStreamInsecure,
+    TlsServerHandshakeError, TlsStream,
 };
-use ic_interfaces::crypto::{BasicSigVerifierByPublicKey, Signable};
+use ic_interfaces::crypto::{BasicSigVerifierByPublicKey, CanisterSigVerifier, Signable};
 use ic_interfaces::registry::RegistryClient;
 use ic_logger::replica_logger::no_op_logger;
 use ic_protobuf::crypto::v1::NodePublicKeys;
 use ic_protobuf::registry::crypto::v1::PublicKey as PublicKeyProto;
 use ic_protobuf::registry::crypto::v1::X509PublicKeyCert;
-use ic_types::crypto::{BasicSigOf, CryptoResult, UserPublicKey};
+use ic_types::crypto::{BasicSigOf, CanisterSigOf, CryptoResult, UserPublicKey};
 use ic_types::{NodeId, Randomness, RegistryVersion};
 use rand::rngs::OsRng;
 use rand::SeedableRng;
@@ -84,7 +84,8 @@ impl TempCryptoComponent {
     ) -> (Self, PublicKeyProto) {
         let (config, temp_dir) = CryptoConfig::new_in_temp_dir();
         let crypto_root = temp_dir.path().to_path_buf();
-        let dkg_dealing_encryption_pubkey = generate_dkg_dealing_encryption_keys(&crypto_root);
+        let dkg_dealing_encryption_pubkey =
+            generate_dkg_dealing_encryption_keys(&crypto_root, node_id);
         let node_pks = NodePublicKeys {
             version: 0,
             dkg_dealing_encryption_pk: Some(dkg_dealing_encryption_pubkey.to_owned()),
@@ -141,7 +142,10 @@ impl TempCryptoComponent {
             false => None,
         };
         let dkg_dealing_encryption_pk = match selector.generate_dkg_dealing_encryption_keys {
-            true => Some(generate_dkg_dealing_encryption_keys(&temp_dir_path)),
+            true => Some(generate_dkg_dealing_encryption_keys(
+                &temp_dir_path,
+                node_id,
+            )),
             false => None,
         };
         let tls_certificate = match selector.generate_tls_keys_and_certificate {
@@ -267,6 +271,25 @@ impl<C: CryptoServiceProvider, T: Signable> BasicSigVerifierByPublicKey<T>
     }
 }
 
+impl<C: CryptoServiceProvider, T: Signable> CanisterSigVerifier<T>
+    for TempCryptoComponentGeneric<C>
+{
+    fn verify_canister_sig(
+        &self,
+        signature: &CanisterSigOf<T>,
+        signed_bytes: &T,
+        public_key: &UserPublicKey,
+        registry_version: RegistryVersion,
+    ) -> CryptoResult<()> {
+        self.crypto_component.verify_canister_sig(
+            signature,
+            signed_bytes,
+            public_key,
+            registry_version,
+        )
+    }
+}
+
 #[async_trait]
 impl<C: CryptoServiceProvider + Send + Sync> TlsHandshake for TempCryptoComponentGeneric<C> {
     async fn perform_tls_server_handshake(
@@ -277,17 +300,6 @@ impl<C: CryptoServiceProvider + Send + Sync> TlsHandshake for TempCryptoComponen
     ) -> Result<(TlsStream, AuthenticatedPeer), TlsServerHandshakeError> {
         self.crypto_component
             .perform_tls_server_handshake(tcp_stream, allowed_clients, registry_version)
-            .await
-    }
-
-    async fn perform_tls_server_handshake_insecure(
-        &self,
-        tcp_stream: TcpStream,
-        allowed_clients: AllowedClients,
-        registry_version: RegistryVersion,
-    ) -> Result<(TlsStreamInsecure, AuthenticatedPeer), TlsServerHandshakeError> {
-        self.crypto_component
-            .perform_tls_server_handshake_insecure(tcp_stream, allowed_clients, registry_version)
             .await
     }
 

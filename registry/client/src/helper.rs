@@ -4,6 +4,7 @@
 //! to the respective crate/component at some point in the future.
 
 pub mod crypto;
+pub mod firewall;
 pub mod node;
 pub mod provisional_whitelist;
 pub mod routing_table;

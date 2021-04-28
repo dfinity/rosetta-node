@@ -1,3 +1,5 @@
+//! Ingress types.
+
 use crate::{CanisterId, PrincipalId, Time, UserId};
 use ic_error_types::{ErrorCode, UserError};
 use ic_protobuf::{
@@ -20,15 +22,18 @@ use std::time::Duration;
 /// is maintained by the IC before it is deleted from the ingress history.
 pub const MAX_INGRESS_TTL: Duration = Duration::from_secs(5 * 60); // 5 minutes
 
+/// Duration subtracted from `MAX_INGRESS_TTL` by
+/// `current_time_and_expiry_time()`.
+pub const PERMITTED_DRIFT: Duration = Duration::from_secs(60);
+
 /// The status of an ingress message.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum IngressStatus {
     /// The message was successfully inducted into the input queue of
     /// the receiver and should eventually execute.
     ///
-    /// TODO:
-    /// depending on the evolution of the specification, inducted
-    /// messages can expire if they haven't execute within some time.
+    /// Note that inducted messages can expire if they haven't executed within
+    /// some time.
     Received {
         receiver: PrincipalId,
         user_id: UserId,
@@ -84,8 +89,8 @@ impl IngressStatus {
         })
     }
 
-    /// Returns the name of this status as specified in the public spec:
-    /// https://docs.dfinity.systems/spec/public/#api-request-status
+    /// Returns the name of this status as specified in the interface spec:
+    /// https://sdk.dfinity.org/docs/interface-spec/index.html#state-tree-request-status
     pub fn as_str(&self) -> &'static str {
         match self {
             IngressStatus::Received { .. } => "received",

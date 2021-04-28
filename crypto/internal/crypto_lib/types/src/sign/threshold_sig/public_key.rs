@@ -107,7 +107,7 @@ pub mod bls12_381 {
 
     #[derive(Clone, Debug, PartialEq, Eq, Hash, Error)]
     pub enum ThresholdSigPublicKeyError {
-        #[error("malformed threshold signature public key: {internal_error:}")]
+        #[error("malformed threshold signature public key: {internal_error}")]
         Malformed {
             key_bytes: Option<Vec<u8>>,
             internal_error: String,

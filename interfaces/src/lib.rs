@@ -1,3 +1,7 @@
+//! The public interfaces of the various components of the replica.
+//!
+//! Having the public interfaces defined separately from their components
+//! helps reduce unnecessary dependencies between them.
 pub mod artifact_manager;
 pub mod artifact_pool;
 pub mod certification;

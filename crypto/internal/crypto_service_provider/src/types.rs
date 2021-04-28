@@ -76,34 +76,36 @@ impl CspSecretKey {
 impl std::fmt::Debug for CspSecretKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CspSecretKey::Ed25519(sk) => write!(f, "CspSecretKey: {}", hex::encode(&sk.0[..])),
-            CspSecretKey::MultiBls12_381(sk) => {
-                write!(f, "CspSecretKey: {}", hex::encode(&sk.0[..]))
-            }
-            CspSecretKey::ThresBls12_381(sk) => {
-                write!(f, "CspSecretKey: {}", hex::encode(&sk.0[..]))
-            }
+            CspSecretKey::Ed25519(_) => write!(f, "CspSecretKey::Ed25519 - REDACTED"),
+            CspSecretKey::MultiBls12_381(_) => write!(f, "CspSecretKey::MultiBls12_381 - REDACTED"),
+            CspSecretKey::ThresBls12_381(_) => write!(f, "CspSecretKey::ThresBls12_381 - REDACTED"),
             CspSecretKey::Secp256k1WithPublicKey(sk) => write!(
                 f,
-                "CspSecretKey: secret_key: {} public_key: {} pop: {}",
-                hex::encode(&sk.secret_key_bytes.0[..]),
+                "CspSecretKey: secret_key: REDACTED public_key: {} pop: {}",
                 hex::encode(&sk.public_key_bytes.0[..]),
                 hex::encode(&sk.pop_bytes.0[..])
             ),
-            CspSecretKey::TlsEd25519(sk) => {
-                write!(f, "CspSecretKey: {}", hex::encode(&sk.bytes[..]))
-            }
-            CspSecretKey::FsEncryption(sk) => {
-                write!(f, "CspSecretKey: ")?;
-                sk.fmt(f)
-            }
+            CspSecretKey::TlsEd25519(_) => write!(f, "CspSecretKey::TlsEd25519 - REDACTED"),
+            CspSecretKey::FsEncryption(_) => write!(f, "CspSecretKey::FsEncryption - REDACTED"),
         }
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum CspEncryptedSecretKey {
     ThresBls12_381(EncryptedShareBytes),
+}
+
+impl std::fmt::Debug for CspEncryptedSecretKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CspEncryptedSecretKey::ThresBls12_381(bytes) => {
+                // this prints no secret key parts
+                // since Debug for EncryptedShareBytes is redacted:
+                write!(f, "CspEncryptedSecretKey::ThresBls12_381: {:?}", bytes)
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

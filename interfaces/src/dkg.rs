@@ -1,3 +1,4 @@
+//! The DKG public interface.
 use crate::artifact_pool::UnvalidatedArtifact;
 use ic_types::{
     artifact::{DkgMessageAttribute, DkgMessageId, PriorityFn},
@@ -7,10 +8,12 @@ use ic_types::{
 };
 use std::time::Duration;
 
+/// An interface for distributed key generation.
 pub trait Dkg: Send {
     fn on_state_change(&self, dkg_pool: &dyn DkgPool) -> ChangeSet;
 }
 
+/// Methods related to gossiping DKG.
 pub trait DkgGossip: Send + Sync {
     fn get_priority_function(
         &self,
@@ -46,6 +49,7 @@ pub trait MutableDkgPool: DkgPool {
     fn apply_changes(&mut self, change_set: ChangeSet);
 }
 
+/// Various actions that can be perfomed in DKG.
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum ChangeAction {

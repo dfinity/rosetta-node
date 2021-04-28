@@ -1,17 +1,18 @@
 use crate::{
     agent::{sign_read, Agent},
-    sign_submit, to_blob,
+    sign_submit,
 };
 use ic_crypto_tree_hash::{LabeledTree, Path};
 use ic_types::Time;
 use ic_types::{
     messages::{
         Blob, Certificate, HttpCanisterUpdate, HttpReadContent, HttpReadState,
-        HttpReadStateResponse, HttpSubmitContent, HttpUserQuery, MessageId,
+        HttpReadStateResponse, HttpRequestEnvelope, HttpSubmitContent, HttpUserQuery, MessageId,
+        SignedRequestBytes,
     },
     CanisterId,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_cbor::value::Value as CBOR;
 use std::convert::TryFrom;
 use std::error::Error;
@@ -77,9 +78,6 @@ pub fn parse_read_state_response(
 }
 
 /// Given a CBOR response from a `query`, extract the response.
-/// TODO(EXE-119): Use this method in `execute_query` once `request_status` is
-/// dropped.
-#[allow(dead_code)]
 pub(crate) fn parse_canister_query_response(message: &CBOR) -> Result<RequestStatus, String> {
     let content = match message {
         CBOR::Map(content) => Ok(content),
@@ -142,23 +140,16 @@ pub(crate) fn parse_canister_query_response(message: &CBOR) -> Result<RequestSta
     })
 }
 
-pub fn to_self_describing_cbor<T: Serialize>(e: &T) -> serde_cbor::Result<Vec<u8>> {
-    let mut serialized_bytes = Vec::new();
-    let mut serializer = serde_cbor::Serializer::new(&mut serialized_bytes);
-    serializer.self_describe()?;
-    e.serialize(&mut serializer)?;
-    Ok(serialized_bytes)
-}
-
 impl Agent {
-    /// Prepares and serailizes a CBOR update request.
-    pub fn prepare_update<S: ToString>(
+    /// Prepares an update request.
+    pub fn prepare_update_raw<S: ToString>(
         &self,
         canister_id: &CanisterId,
         method: S,
         arguments: Vec<u8>,
         nonce: Vec<u8>,
-    ) -> Result<(Vec<u8>, MessageId), String> {
+        ingress_expiry: Time,
+    ) -> Result<(HttpRequestEnvelope<HttpSubmitContent>, MessageId), Box<dyn Error>> {
         let content = HttpSubmitContent::Call {
             update: HttpCanisterUpdate {
                 canister_id: to_blob(canister_id),
@@ -166,42 +157,57 @@ impl Agent {
                 arg: Blob(arguments),
                 nonce: Some(Blob(nonce)),
                 sender: self.sender_field.clone(),
-                ingress_expiry: self.expiry_time().as_nanos_since_unix_epoch(),
+                ingress_expiry: ingress_expiry.as_nanos_since_unix_epoch(),
             },
         };
 
-        let (submit_request, request_id) = sign_submit(content, &self.sender)?;
-        let http_body = to_self_describing_cbor(&submit_request).map_err(|e| {
-            format!(
-                "Cannot serialize the submit request in CBOR format because of: {}",
-                e
-            )
-        })?;
-        Ok((http_body, request_id))
+        sign_submit(content, &self.sender)
+    }
+
+    /// Prepares and serailizes a CBOR update request.
+    pub fn prepare_update<S: ToString>(
+        &self,
+        canister_id: &CanisterId,
+        method: S,
+        arguments: Vec<u8>,
+        nonce: Vec<u8>,
+    ) -> Result<(Vec<u8>, MessageId), Box<dyn Error>> {
+        let (submit_request, request_id) =
+            self.prepare_update_raw(canister_id, method, arguments, nonce, self.expiry_time())?;
+        let http_body = SignedRequestBytes::try_from(submit_request)?;
+        Ok((http_body.into(), request_id))
     }
 
     /// Prepares and serializes a CBOR query request.
-    pub fn prepare_query(
+    pub(crate) fn prepare_query_raw(
         &self,
-        method: &str,
         canister_id: &CanisterId,
-        arg: Option<Vec<u8>>,
-    ) -> Result<Vec<u8>, Box<dyn Error>> {
+        method: &str,
+        arguments: Vec<u8>,
+    ) -> Result<HttpRequestEnvelope<HttpReadContent>, Box<dyn Error>> {
         let content = HttpReadContent::Query {
             query: HttpUserQuery {
-                canister_id: super::to_blob(canister_id),
+                canister_id: to_blob(canister_id),
                 method_name: method.to_string(),
-                arg: Blob(arg.unwrap_or_else(|| vec![0; 33])),
+                arg: Blob(arguments),
                 sender: self.sender_field.clone(),
                 nonce: None,
                 ingress_expiry: self.expiry_time().as_nanos_since_unix_epoch(),
             },
         };
 
-        let request = sign_read(content, &self.sender)?;
-        let cbor: CBOR = serde_cbor::value::to_value(request).unwrap();
+        sign_read(content, &self.sender)
+    }
 
-        Ok(to_self_describing_cbor(&cbor).unwrap())
+    /// Prepares and serializes a CBOR query request.
+    pub fn prepare_query(
+        &self,
+        canister_id: &CanisterId,
+        method: &str,
+        arguments: Vec<u8>,
+    ) -> Result<Vec<u8>, Box<dyn Error>> {
+        let request = self.prepare_query_raw(canister_id, method, arguments)?;
+        Ok(SignedRequestBytes::try_from(request)?.into())
     }
 
     /// Prepares and serializes a CBOR read_state request, with the given paths
@@ -216,9 +222,7 @@ impl Agent {
         };
 
         let request = sign_read(content, &self.sender)?;
-        let cbor: CBOR = serde_cbor::value::to_value(request).unwrap();
-
-        Ok(to_self_describing_cbor(&cbor).unwrap())
+        Ok(SignedRequestBytes::try_from(request)?.into())
     }
 
     fn expiry_time(&self) -> Time {
@@ -226,11 +230,24 @@ impl Agent {
     }
 }
 
+fn to_blob(canister_id: &CanisterId) -> Blob {
+    Blob(canister_id.get().into_vec())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use ic_crypto_tree_hash::MixedHashTree;
     use ic_types::messages::HttpReadStateResponse;
+    use serde::Serialize;
+
+    fn to_self_describing_cbor<T: Serialize>(e: &T) -> serde_cbor::Result<Vec<u8>> {
+        let mut serialized_bytes = Vec::new();
+        let mut serializer = serde_cbor::Serializer::new(&mut serialized_bytes);
+        serializer.self_describe()?;
+        e.serialize(&mut serializer)?;
+        Ok(serialized_bytes)
+    }
 
     #[test]
     fn test_parse_read_state_response_unknown() {

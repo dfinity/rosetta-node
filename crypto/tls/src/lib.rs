@@ -1,5 +1,6 @@
 use openssl::pkey::{PKey, Private};
 use openssl::x509::X509;
+use std::fmt;
 
 pub use client_handshake::{perform_tls_client_handshake, TlsClientHandshakeError};
 pub use keygen::generate_tls_keys;
@@ -48,7 +49,7 @@ impl TlsPublicKeyCert {
 }
 
 #[allow(unused)]
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct TlsPrivateKey {
     private_key: PKey<Private>,
 }
@@ -57,9 +58,10 @@ pub struct TlsPrivateKey {
 impl TlsPrivateKey {
     // Creates a private key from a PEM encoding
     pub fn new_from_pem(private_key_pem: Vec<u8>) -> Result<Self, TlsPemParsingError> {
+        // nb. Make sure we don't leak sensitive info in the error message.
         let private_key =
-            PKey::private_key_from_pem(&private_key_pem).map_err(|e| TlsPemParsingError {
-                internal_error: format!("Error parsing PEM: {}", e),
+            PKey::private_key_from_pem(&private_key_pem).map_err(|_| TlsPemParsingError {
+                internal_error: "Error parsing PEM via OpenSSL".to_string(),
             })?;
         Ok(Self { private_key })
     }
@@ -72,13 +74,19 @@ impl TlsPrivateKey {
     pub fn to_pem(&self) -> Result<Vec<u8>, TlsEncodingError> {
         self.private_key
             .private_key_to_pem_pkcs8()
-            .map_err(|e| TlsEncodingError {
-                internal_error: format!("Error encoding PEM: {}", e),
+            .map_err(|_| TlsEncodingError {
+                internal_error: "Error encoding PEM via OpenSSL".to_string(),
             })
     }
 
     pub fn as_pkey(&self) -> &PKey<Private> {
         &self.private_key
+    }
+}
+
+impl fmt::Debug for TlsPrivateKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "REDACTED")
     }
 }
 

@@ -1,3 +1,4 @@
+//! Types related to various messages that the Internet Computer handles.
 mod blob;
 mod http;
 mod ingress_messages;
@@ -7,23 +8,21 @@ mod query;
 mod read_state;
 mod webauthn;
 
-use crate::{
-    user_id_into_protobuf, user_id_try_from_protobuf, CountBytes, Funds, NumBytes, UserId,
-};
+use crate::{user_id_into_protobuf, user_id_try_from_protobuf, Funds, NumBytes, UserId};
 pub use blob::Blob;
 pub use http::{
-    validate_ingress_expiry, Authentication, Certificate, CertificateDelegation, Delegation,
-    HasCanisterId, HttpCanisterUpdate, HttpQueryResponse, HttpQueryResponseReply, HttpReadContent,
-    HttpReadState, HttpReadStateResponse, HttpReply, HttpRequest, HttpRequestContent,
-    HttpRequestEnvelope, HttpResponseStatus, HttpStatusResponse, HttpSubmitContent, HttpUserQuery,
-    RawHttpRequestVal, ReadContent, SignedDelegation,
+    Authentication, Certificate, CertificateDelegation, Delegation, HasCanisterId,
+    HttpCanisterUpdate, HttpQueryResponse, HttpQueryResponseReply, HttpReadContent, HttpReadState,
+    HttpReadStateResponse, HttpReply, HttpRequest, HttpRequestContent, HttpRequestEnvelope,
+    HttpResponseStatus, HttpStatusResponse, HttpSubmitContent, HttpUserQuery, RawHttpRequestVal,
+    ReadContent, SignedDelegation,
 };
 pub use ic_base_types::CanisterInstallMode;
 use ic_base_types::{CanisterId, CanisterIdError, PrincipalId};
 use ic_protobuf::proxy::{try_from_option_field, ProxyDecodeError};
 use ic_protobuf::state::canister_state_bits::v1 as pb;
 use ic_protobuf::types::v1 as pb_types;
-pub use ingress_messages::{Ingress, SignedIngress, SignedIngressContent};
+pub use ingress_messages::{is_subnet_message, Ingress, SignedIngress, SignedIngressContent};
 pub use inter_canister::{
     CallContextId, CallbackId, Payload, RejectContext, Request, RequestOrResponse, Response,
 };
@@ -54,31 +53,17 @@ pub const MAX_INTER_CANISTER_PAYLOAD_IN_BYTES: NumBytes = NumBytes::new(2 * 1024
 /// have allocated here is sufficient.
 pub const MAX_XNET_PAYLOAD_IN_BYTES: NumBytes = NumBytes::new(2202009); // 2.1 MiB
 
+/// An end user's signature.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct UserSignature {
-    /// The actual signature.  End users should sign the MessageId computed from
-    /// the message that they are signing.
+    /// The actual signature. End users should sign the `MessageId` computed
+    /// from the message that they are signing.
     pub signature: Vec<u8>,
     /// The user's public key whose corresponding private key should have been
     /// used to sign the MessageId.
     pub signer_pubkey: Vec<u8>,
 
     pub sender_delegation: Option<Vec<SignedDelegation>>,
-}
-
-impl CountBytes for UserSignature {
-    fn count_bytes(&self) -> usize {
-        self.signature.len() + self.signer_pubkey.len()
-    }
-}
-
-impl CountBytes for Option<UserSignature> {
-    fn count_bytes(&self) -> usize {
-        match self {
-            Some(signature) => signature.count_bytes(),
-            None => 0,
-        }
-    }
 }
 
 /// Stores info needed for processing and tracking requests to
@@ -173,12 +158,21 @@ impl TryFrom<pb::StopCanisterContext> for StopCanisterContext {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+/// Errors returned by `HttpHandler` when processing ingress messages.
+#[derive(Debug, Clone, Serialize)]
 pub enum HttpHandlerError {
     InvalidMessageId(String),
     InvalidIngressExpiry(String),
+    InvalidDelegationExpiry(String),
     InvalidPrincipalId(String),
     MissingPubkeyOrSignature(String),
+    InvalidEncoding(String),
+}
+
+impl From<serde_cbor::Error> for HttpHandlerError {
+    fn from(err: serde_cbor::Error) -> Self {
+        HttpHandlerError::InvalidEncoding(format!("{}", err))
+    }
 }
 
 impl fmt::Display for HttpHandlerError {
@@ -186,10 +180,12 @@ impl fmt::Display for HttpHandlerError {
         match self {
             HttpHandlerError::InvalidMessageId(msg) => write!(f, "invalid message ID: {}", msg),
             HttpHandlerError::InvalidIngressExpiry(msg) => write!(f, "{}", msg),
+            HttpHandlerError::InvalidDelegationExpiry(msg) => write!(f, "{}", msg),
             HttpHandlerError::InvalidPrincipalId(msg) => write!(f, "invalid princial id: {}", msg),
             HttpHandlerError::MissingPubkeyOrSignature(msg) => {
                 write!(f, "missing pubkey or signature: {}", msg)
             }
+            HttpHandlerError::InvalidEncoding(err) => write!(f, "Invalid CBOR encoding: {}", err),
         }
     }
 }
@@ -199,6 +195,65 @@ impl Error for HttpHandlerError {}
 impl From<CanisterIdError> for HttpHandlerError {
     fn from(err: CanisterIdError) -> Self {
         Self::InvalidPrincipalId(format!("Converting to canister id failed with {}", err))
+    }
+}
+
+/// Bytes representation of signed HTTP requests, using CBOR as a serialization
+/// format. Use `TryFrom` or `TryInto` to convert between `SignedRequestBytes`
+/// and other types, corresponding to serialization/deserialization.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SignedRequestBytes(#[serde(with = "serde_bytes")] Vec<u8>);
+
+impl AsRef<[u8]> for SignedRequestBytes {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl From<Vec<u8>> for SignedRequestBytes {
+    fn from(bytes: Vec<u8>) -> Self {
+        SignedRequestBytes(bytes)
+    }
+}
+
+impl From<SignedRequestBytes> for Vec<u8> {
+    fn from(bytes: SignedRequestBytes) -> Vec<u8> {
+        bytes.0
+    }
+}
+
+impl<T: Serialize> TryFrom<HttpRequestEnvelope<T>> for SignedRequestBytes {
+    type Error = serde_cbor::Error;
+
+    fn try_from(request: HttpRequestEnvelope<T>) -> Result<Self, Self::Error> {
+        let mut serialized_bytes = Vec::new();
+        let mut serializer = serde_cbor::Serializer::new(&mut serialized_bytes);
+        serializer.self_describe()?;
+        request.serialize(&mut serializer)?;
+        Ok(serialized_bytes.into())
+    }
+}
+
+impl<'a, T> TryFrom<&'a SignedRequestBytes> for HttpRequestEnvelope<T>
+where
+    for<'b> T: Deserialize<'b>,
+{
+    type Error = serde_cbor::Error;
+
+    fn try_from(bytes: &'a SignedRequestBytes) -> Result<Self, Self::Error> {
+        serde_cbor::from_slice::<HttpRequestEnvelope<T>>(bytes.as_ref())
+    }
+}
+
+impl SignedRequestBytes {
+    /// Return true if the bytes is empty or false otherwise.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Return the length (number of bytes).
+    pub fn len(&self) -> usize {
+        self.0.len()
     }
 }
 
@@ -286,6 +341,7 @@ mod tests {
     }
 
     proptest! {
+        #[ignore]
         #[test]
         // The conversion from Submit to HttpRequest is not total so we proptest
         // the hell out of it to make sure no enum constructors are added which are
@@ -293,7 +349,7 @@ mod tests {
         fn request_id_conversion_does_not_panic(
             submit: HttpRequestEnvelope::<HttpSubmitContent>)
         {
-            let _ = HttpRequest::try_from(submit);
+            let _ = HttpRequest::try_from(submit).unwrap();
         }
     }
 
@@ -418,7 +474,7 @@ mod tests {
             sender_sig: Some(Blob(vec![1; 32])),
             sender_delegation: None,
         };
-        let signed_ingress = HttpRequest::try_from(update).unwrap();
+        let signed_ingress = SignedIngress::try_from(update).unwrap();
         let bytes = bincode::serialize(&signed_ingress).unwrap();
         let signed_ingress1 = bincode::deserialize::<SignedIngress>(&bytes);
         assert!(signed_ingress1.is_ok());
@@ -442,7 +498,7 @@ mod tests {
             sender_sig: None,
             sender_delegation: None,
         };
-        let signed_ingress = HttpRequest::try_from(update).unwrap();
+        let signed_ingress = SignedIngress::try_from(update).unwrap();
         let bytes = bincode::serialize(&signed_ingress).unwrap();
         let mut buffer = Cursor::new(&bytes);
         let signed_ingress1: SignedIngress = bincode::deserialize_from(&mut buffer).unwrap();

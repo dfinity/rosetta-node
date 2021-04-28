@@ -3,16 +3,38 @@ use simple_asn1::{ASN1Block, ASN1Class, BigInt, BigUint, OID};
 #[cfg(test)]
 mod tests;
 
+/// Encodes the given `bytes` according to
+/// https://tools.ietf.org/html/rfc8410#section-4 as follows:
+/// SubjectPublicKeyInfo  ::=  SEQUENCE  {
+///    algorithm         AlgorithmIdentifier,
+///    subjectPublicKey  BIT STRING
+/// }
+/// AlgorithmIdentifier  ::=  SEQUENCE  {
+///    algorithm   OBJECT IDENTIFIER,
+///    parameters  ANY DEFINED BY algorithm OPTIONAL
+/// }
+pub fn subject_public_key_info_der(algorithm: OID, key: &[u8]) -> Result<Vec<u8>, String> {
+    let algorithm = ASN1Block::Sequence(0, vec![ASN1Block::ObjectIdentifier(0, algorithm)]);
+    let subject_public_key = ASN1Block::BitString(0, key.len() * 8, key.to_vec());
+    let subject_public_key_info = ASN1Block::Sequence(0, vec![algorithm, subject_public_key]);
+    simple_asn1::to_der(&subject_public_key_info)
+        .map_err(|e| format!("failed to encode as DER: {}", e))
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct KeyDerParsingError {
     pub internal_error: String,
 }
 
-/// Parses `pk_der` as DER-wrapped public key, and returns the unwrapped bytes
-/// of the public key (see https://tools.ietf.org/html/rfc8410).
-pub fn public_key_bytes_from_der_wrapping(pk_der: &[u8]) -> Result<Vec<u8>, KeyDerParsingError> {
+/// Parses `pk_der` as DER-wrapped COSE public key (OID
+/// 1.3.6.1.4.1.56387.1.1), and returns the unwrapped COSE public key bytes. See
+/// * https://sdk.dfinity.org/docs/interface-spec/index.html#webauthn
+/// * https://tools.ietf.org/html/rfc8410#section-4
+pub fn public_key_bytes_from_der_wrapped_cose(
+    pk_der: &[u8],
+) -> Result<Vec<u8>, KeyDerParsingError> {
     let (oid, pk_bytes) = oid_and_public_key_bytes_from_der(pk_der)?;
-    ensure_der_wrapping_oid(oid)?;
+    ensure_der_wrapped_cose_oid(oid)?;
     Ok(pk_bytes)
 }
 
@@ -38,9 +60,7 @@ pub fn oid_and_key_pair_bytes_from_der(sk_der: &[u8]) -> Result<SecretKeyData, K
     der_parser.get_oid_and_key_pair_bytes()
 }
 
-fn ensure_der_wrapping_oid(oid: simple_asn1::OID) -> Result<(), KeyDerParsingError> {
-    // OID for DER wrapping is 1.3.6.1.4.1.56387.1.1,
-    // see https://docs.dfinity.systems/spec/public/#authentication-webauthn
+fn ensure_der_wrapped_cose_oid(oid: simple_asn1::OID) -> Result<(), KeyDerParsingError> {
     if oid != simple_asn1::oid!(1, 3, 6, 1, 4, 1, 56387, 1, 1) {
         return Err(KeyDerParsingError {
             internal_error: format!("Wrong OID: {:?}", oid),

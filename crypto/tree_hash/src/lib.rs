@@ -261,6 +261,24 @@ pub enum LabeledTree<T> {
     SubTree(FlatMap<Label, LabeledTree<T>>),
 }
 
+/// Descends into the subtree of t following the given path.
+/// Returns the reference to the corresponding subtree.
+pub fn lookup_path<'a>(
+    t: &'a LabeledTree<Vec<u8>>,
+    path: &[&[u8]],
+) -> Option<&'a LabeledTree<Vec<u8>>> {
+    let mut tref = t;
+    for l in path.iter() {
+        match tref {
+            LabeledTree::Leaf(_) => return None,
+            LabeledTree::SubTree(children) => {
+                tref = children.get(&Label::from(l))?;
+            }
+        }
+    }
+    Some(tref)
+}
+
 /// A binary tree representation of a `LabeledTree`, with `Digest` leaves.
 ///
 /// A `LabeledTree::SubTree` is converted into a binary tree of zero or more
@@ -593,7 +611,7 @@ pub enum Witness {
     },
     // Represents a HashTree::Node
     Node {
-        label: Label, // TODO: remove when not needed anymore.
+        label: Label,
         sub_witness: Box<Witness>,
     },
     // Represents either a HashTree::Leaf or a pruned subtree of a HashTree

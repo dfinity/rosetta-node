@@ -1,0 +1,50 @@
+[package]
+name = "ic-replica-tests"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+actix = "0.10.0"
+futures = "0.3.13"
+ic-config = { path = "../config" }
+ic-canister-client = { path = "../canister_client" }
+ic-execution-environment = { path = "../execution_environment" }
+ic-replica = { path = "../replica" }
+ic-registry-client = { path = "../registry/client" }
+ic-registry-keys = { path = "../registry/keys" }
+ic-registry-common = { path = "../registry/common" }
+ic-registry-provisional-whitelist = { path = "../registry/provisional_whitelist" }
+ic-registry-subnet-type = { path = "../registry/subnet_type" }
+ic-transport = { path = "../transport" }
+ic-interfaces = { path = "../interfaces" }
+ic-metrics = { path = "../monitoring/metrics" }
+ic-prep = { path = "../prep" }
+ic-protobuf = { path = "../protobuf" }
+ic-replicated-state = { path = "../replicated_state" }
+ic-state-manager = { path = "../state_manager" }
+ic-test-utilities = { path = "../test_utilities" }
+ic-crypto = { path = "../crypto" }
+ic-crypto-tls-interfaces = { path = "../crypto/tls_interfaces" }
+ic-types = { path = "../types/types" }
+ic-base-types = { path = "../types/base_types" }
+slog = { version = "2.5.2", features = ["nested-values", "max_level_trace", "release_max_level_debug"] }
+slog-scope = "4.1.2"
+tempfile = "3.1.0"
+tokio = { version = "0.2", features = ["full"] }
+# TODO(IDX-1825)
+wabt = { git = "https://github.com/dfinity-lab/wabt-rs", rev = "b4d778802976f10494411388e48a784d4d015bbb" }
+prometheus = { version = "0.9.0", features = [ "process" ] }
+ic-utils = { path = "../utils" }
+
+[dev-dependencies]
+assert_matches = "1.3.0"
+candid = "0.6.15"
+canister-test = { path = "../rust_canisters/canister_test" }
+ic-crypto-sha256 = { path = "../crypto/sha256" }
+ic-registry-provisional-whitelist = { path = "../registry/provisional_whitelist" }
+ic-sys = { path = "../sys" }
+ic-test-utilities = { path = "../test_utilities" }
+maplit = "1.0.2"
+predicates = "1.0.1"
+# TODO(EXC-220)
+wabt = { git = "https://github.com/dfinity-lab/wabt-rs", rev = "b4d778802976f10494411388e48a784d4d015bbb" }

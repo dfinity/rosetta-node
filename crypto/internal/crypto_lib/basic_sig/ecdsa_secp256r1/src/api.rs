@@ -285,9 +285,9 @@ fn ecdsa_sig_to_bytes(ecdsa_sig: EcdsaSig) -> CryptoResult<[u8; types::Signature
 //#[cfg(test)]
 pub fn sign(msg: &[u8], sk: &types::SecretKeyBytes) -> CryptoResult<types::SignatureBytes> {
     let signing_key =
-        EcKey::private_key_from_der(&sk.0).map_err(|e| CryptoError::MalformedSecretKey {
+        EcKey::private_key_from_der(&sk.0).map_err(|_| CryptoError::MalformedSecretKey {
             algorithm: AlgorithmId::EcdsaP256,
-            internal_error: e.to_string(),
+            internal_error: "OpenSSL error".to_string(), // don't leak sensitive information
         })?;
     let ecdsa_sig =
         EcdsaSig::sign(msg, &signing_key).map_err(|e| CryptoError::InvalidArgument {

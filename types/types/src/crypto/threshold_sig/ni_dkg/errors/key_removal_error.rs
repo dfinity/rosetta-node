@@ -18,7 +18,6 @@ pub enum DkgKeyRemovalError {
 
 impl fmt::Display for DkgKeyRemovalError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        // TODO (CRP-665): implement display and debug
         write!(f, "{:?}", &self)
     }
 }

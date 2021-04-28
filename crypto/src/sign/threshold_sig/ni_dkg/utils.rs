@@ -4,6 +4,7 @@ use ic_crypto_internal_types::sign::threshold_sig::ni_dkg::CspFsEncryptionPublic
 use ic_crypto_internal_types::sign::threshold_sig::ni_dkg::Epoch;
 use ic_protobuf::registry::crypto::v1::PublicKey as PublicKeyProto;
 use ic_registry_client::helper::crypto::CryptoRegistry;
+use ic_types::crypto::threshold_sig::ni_dkg::config::dealers::NiDkgDealers;
 use ic_types::crypto::threshold_sig::ni_dkg::config::receivers::NiDkgReceivers;
 use ic_types::crypto::threshold_sig::ni_dkg::errors::FsEncryptionPublicKeyNotInRegistryError;
 use ic_types::registry::RegistryClientError;
@@ -22,6 +23,19 @@ pub fn index_in_resharing_committee_or_panic(
         panic!(
             "DKG config invariant violated: node {} not in resharing committee ({:?})",
             node_id, committee
+        )
+    })
+}
+
+/// Computes the dealers index in the set of `NiDkgDealers.
+///
+/// # Panics:
+/// * If the dealer is not included in `NiDkgDealers`.
+pub fn dealer_index_in_dealers_or_panic(dealers: &NiDkgDealers, dealer: NodeId) -> NodeIndex {
+    dealers.position(dealer).unwrap_or_else(|| {
+        panic!(
+            "This operation requires node ({}) to be a dealer, but it is not.",
+            dealer
         )
     })
 }

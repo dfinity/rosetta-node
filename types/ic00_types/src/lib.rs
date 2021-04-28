@@ -1,5 +1,4 @@
 //! Data types used for encoding/decoding the Candid payloads of ic:00.
-
 use candid::{CandidType, Decode, Deserialize, Encode};
 use ic_base_types::{
     CanisterId, CanisterInstallMode, CanisterStatusType, NodeId, NumBytes, PrincipalId,
@@ -12,23 +11,26 @@ use num_traits::cast::ToPrimitive;
 use std::{collections::BTreeSet, convert::TryFrom};
 use strum_macros::{EnumIter, EnumString, ToString};
 
+/// The id of the management canister.
 pub const IC_00: CanisterId = CanisterId::ic_00();
 
-// Methods exported by ic:00.
+/// Methods exported by ic:00.
 #[derive(Debug, EnumString, EnumIter, ToString, Copy, Clone)]
 #[strum(serialize_all = "snake_case")]
 pub enum Method {
-    CreateCanister,
-    InstallCode,
-    SetController,
     CanisterStatus,
+    CreateCanister,
+    DeleteCanister,
+    DepositCycles,
+    DepositFunds,
+    InstallCode,
+    RawRand,
+    SetController,
+    SetupInitialDKG,
     StartCanister,
     StopCanister,
-    DeleteCanister,
-    RawRand,
-    DepositFunds,
-    DepositCycles,
-    SetupInitialDKG,
+    UninstallCode,
+    UpdateSettings,
 
     // These methods are added for the Mercury I release.
     // They should be removed afterwards.
@@ -74,12 +76,42 @@ impl From<CanisterId> for CanisterIdRecord {
 
 /// Struct used for encoding/decoding
 /// `(record {
-///     status : variant { running; stopping; stopped };
-///     module_hash: opt blob;
-///     controller: principal;
-///     memory_size: nat;
-///     cycles: nat;
+///     controller : principal;
+///     compute_allocation: nat;
+///     memory_allocation: opt nat;
 /// })`
+#[derive(CandidType, Deserialize, Debug, Eq, PartialEq)]
+pub struct DefiniteCanisterSettingsArgs {
+    controller: PrincipalId,
+    compute_allocation: candid::Nat,
+    memory_allocation: candid::Nat,
+    freezing_threshold: candid::Nat,
+}
+
+impl DefiniteCanisterSettingsArgs {
+    pub fn new(
+        controller: PrincipalId,
+        compute_allocation: u64,
+        memory_allocation: Option<u64>,
+        freezing_threshold: u64,
+    ) -> Self {
+        let memory_allocation = match memory_allocation {
+            None => candid::Nat::from(0),
+            Some(memory) => candid::Nat::from(memory),
+        };
+        Self {
+            controller,
+            compute_allocation: candid::Nat::from(compute_allocation),
+            memory_allocation,
+            freezing_threshold: candid::Nat::from(freezing_threshold),
+        }
+    }
+}
+
+impl Payload<'_> for DefiniteCanisterSettingsArgs {}
+
+/// The deprecated version of CanisterStatusResult that is being
+/// used by NNS canisters.
 #[derive(CandidType, Debug, Deserialize, Eq, PartialEq)]
 pub struct CanisterStatusResult {
     status: CanisterStatusType,
@@ -134,6 +166,96 @@ impl CanisterStatusResult {
 
 impl Payload<'_> for CanisterStatusResult {}
 
+/// Struct used for encoding/decoding
+/// `(record {
+///     status : variant { running; stopping; stopped };
+///     settings: definite_canister_settings;
+///     module_hash: opt blob;
+///     controller: principal;
+///     memory_size: nat;
+///     cycles: nat;
+/// })`
+#[derive(CandidType, Debug, Deserialize, Eq, PartialEq)]
+pub struct CanisterStatusResultV2 {
+    status: CanisterStatusType,
+    module_hash: Option<Vec<u8>>,
+    controller: candid::Principal,
+    settings: DefiniteCanisterSettingsArgs,
+    memory_size: candid::Nat,
+    cycles: candid::Nat,
+    // this is for compat with Spec 0.12/0.13
+    balance: Vec<(Vec<u8>, candid::Nat)>,
+    freezing_threshold: candid::Nat,
+}
+
+impl CanisterStatusResultV2 {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        status: CanisterStatusType,
+        module_hash: Option<Vec<u8>>,
+        controller: PrincipalId,
+        memory_size: NumBytes,
+        cycles: u128,
+        compute_allocation: u64,
+        memory_allocation: Option<u64>,
+        freezing_threshold: u64,
+    ) -> Self {
+        Self {
+            status,
+            module_hash,
+            controller: candid::Principal::from_text(controller.to_string()).unwrap(),
+            memory_size: candid::Nat::from(memory_size.get()),
+            cycles: candid::Nat::from(cycles),
+            // the following is spec 0.12/0.13 compat;
+            // "\x00" denotes cycles
+            balance: vec![(vec![0], candid::Nat::from(cycles))],
+            settings: DefiniteCanisterSettingsArgs::new(
+                controller,
+                compute_allocation,
+                memory_allocation,
+                freezing_threshold,
+            ),
+            freezing_threshold: candid::Nat::from(freezing_threshold),
+        }
+    }
+
+    pub fn status(&self) -> CanisterStatusType {
+        self.status.clone()
+    }
+
+    pub fn module_hash(&self) -> Option<Vec<u8>> {
+        self.module_hash.clone()
+    }
+
+    pub fn controller(&self) -> PrincipalId {
+        PrincipalId::try_from(self.controller.as_slice()).unwrap()
+    }
+
+    pub fn memory_size(&self) -> NumBytes {
+        NumBytes::from(self.memory_size.0.to_u64().unwrap())
+    }
+
+    pub fn cycles(&self) -> u128 {
+        self.cycles.0.to_u128().unwrap()
+    }
+
+    pub fn freezing_threshold(&self) -> u64 {
+        self.freezing_threshold.0.to_u64().unwrap()
+    }
+}
+
+impl Payload<'_> for CanisterStatusResultV2 {}
+
+/// Struct used for encoding/decoding
+/// `(record {
+///     mode : variant { install; reinstall; upgrade };
+///     canister_id: principal;
+///     wasm_module: blob;
+///     arg: blob;
+///     compute_allocation: opt nat;
+///     memory_allocation: opt nat;
+///     query_allocation: opt nat;
+/// })`
 #[derive(Clone, CandidType, Deserialize, Debug)]
 pub struct InstallCodeArgs {
     pub mode: CanisterInstallMode,
@@ -210,10 +332,11 @@ impl InstallCodeArgs {
     }
 }
 
+/// Represents the empty blob.
 #[derive(CandidType, Deserialize)]
 pub struct EmptyBlob;
 
-// TODO(ielashi): Implement the `Payload` interface.
+// TODO(EXC-239): Implement the `Payload` interface.
 impl EmptyBlob {
     pub fn encode() -> Vec<u8> {
         Encode!().unwrap()
@@ -224,6 +347,76 @@ impl EmptyBlob {
     }
 }
 
+/// Struct used for encoding/decoding
+/// `(record {
+///     canister_id : principal;
+///     settings: canister_settings;
+/// })`
+#[derive(CandidType, Deserialize)]
+pub struct UpdateSettingsArgs {
+    pub canister_id: PrincipalId,
+    pub settings: CanisterSettingsArgs,
+}
+
+impl UpdateSettingsArgs {
+    pub fn get_canister_id(&self) -> CanisterId {
+        // Safe as this was converted from CanisterId when Self was constructed.
+        CanisterId::new(self.canister_id).unwrap()
+    }
+}
+
+impl Payload<'_> for UpdateSettingsArgs {}
+
+/// Struct used for encoding/decoding
+/// `(record {
+///     controller : opt principal;
+///     compute_allocation: opt nat;
+///     memory_allocation: opt nat;
+/// })`
+#[derive(Default, Clone, CandidType, Deserialize, Debug)]
+pub struct CanisterSettingsArgs {
+    pub controller: Option<PrincipalId>,
+    pub compute_allocation: Option<candid::Nat>,
+    pub memory_allocation: Option<candid::Nat>,
+    pub freezing_threshold: Option<candid::Nat>,
+}
+
+impl Payload<'_> for CanisterSettingsArgs {}
+
+/// Struct used for encoding/decoding
+/// `(record {
+///     settings : opt canister_settings;
+/// })`
+#[derive(Default, Clone, CandidType, Deserialize)]
+pub struct CreateCanisterArgs {
+    pub settings: Option<CanisterSettingsArgs>,
+}
+
+impl CreateCanisterArgs {
+    pub fn encode(&self) -> Vec<u8> {
+        Encode!(&self).unwrap()
+    }
+
+    pub fn decode(blob: &[u8]) -> Result<Self, UserError> {
+        let result = Decode!(blob, Self);
+        match result {
+            Err(_) => match EmptyBlob::decode(blob) {
+                Err(_) => Err(UserError::new(
+                    ErrorCode::CanisterContractViolation,
+                    "Payload deserialization error.".to_string(),
+                )),
+                Ok(_) => Ok(CreateCanisterArgs::default()),
+            },
+            Ok(settings) => Ok(settings),
+        }
+    }
+}
+
+/// Struct used for encoding/decoding
+/// `(record {
+///     canister_id : principal;
+///     controller: principal;
+/// })`
 #[derive(CandidType, Deserialize)]
 pub struct SetControllerArgs {
     canister_id: PrincipalId,
@@ -250,6 +443,11 @@ impl SetControllerArgs {
 
 impl Payload<'_> for SetControllerArgs {}
 
+/// Struct used for encoding/decoding
+/// `(record {
+///     node_ids : vec principal;
+///     registry_version: nat;
+/// })`
 #[derive(CandidType, Deserialize, Debug)]
 pub struct SetupInitialDKGArgs {
     node_ids: Vec<PrincipalId>,
@@ -287,6 +485,8 @@ impl SetupInitialDKGArgs {
     }
 }
 
+/// Represents the response for a request to setup an initial DKG for a new
+/// subnet.
 #[derive(Debug)]
 pub struct SetupInitialDKGResponse {
     pub low_threshold_transcript_record: InitialNiDkgTranscriptRecord,
@@ -339,15 +539,18 @@ impl SetupInitialDKGResponse {
     }
 }
 
+/// Struct used for encoding/decoding `(record { amount : opt nat; })`
 #[derive(CandidType, Deserialize, Debug)]
 pub struct ProvisionalCreateCanisterWithCyclesArgs {
-    amount: Option<candid::Nat>,
+    pub amount: Option<candid::Nat>,
+    pub settings: Option<CanisterSettingsArgs>,
 }
 
 impl ProvisionalCreateCanisterWithCyclesArgs {
     pub fn new(amount: Option<u64>) -> Self {
         Self {
             amount: amount.map(candid::Nat::from),
+            settings: None,
         }
     }
 
@@ -361,6 +564,11 @@ impl ProvisionalCreateCanisterWithCyclesArgs {
 
 impl Payload<'_> for ProvisionalCreateCanisterWithCyclesArgs {}
 
+/// Struct used for encoding/decoding
+/// `(record {
+///     canister_id : principal;
+///     amount: nat;
+/// })`
 #[derive(CandidType, Deserialize, Debug)]
 pub struct ProvisionalTopUpCanisterArgs {
     canister_id: PrincipalId,

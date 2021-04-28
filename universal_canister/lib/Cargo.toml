@@ -1,0 +1,10 @@
+[package]
+name = "ic-universal-canister"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+hex-literal = "0.2.1"
+
+[dev-dependencies]
+ic-crypto-sha256 = { path = "../../crypto/sha256" }

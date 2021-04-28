@@ -34,9 +34,10 @@ async fn smoke_test() {
     );
 
     for i in 0..num_accounts {
+        let acc = acc_id(i);
         assert_eq!(
-            get_balance(&req_handler, None, i).await.unwrap(),
-            *scribe.balance_book.get(&to_uid(i)).unwrap()
+            get_balance(&req_handler, None, acc).await.unwrap(),
+            *scribe.balance_book.get(&acc).unwrap()
         );
     }
 
@@ -59,10 +60,28 @@ async fn smoke_test() {
             )
             .unwrap(),
             block_id(&scribe.blockchain.front().unwrap()).unwrap(),
-            Some(block_id(&scribe.blockchain.front().unwrap()).unwrap()),
+            None,
             SyncStatus::new(scribe.blockchain.back().unwrap().index as i64, None),
             vec![]
         ))
+    );
+
+    let chain_len = scribe.blockchain.len();
+    ledger.blockchain.write().await.try_prune(&Some(10), 0).ok();
+    let expected_first_block = chain_len - 11;
+    assert_eq!(
+        ledger.read_blocks().await.first().unwrap().unwrap().index as usize,
+        expected_first_block
+    );
+    let b = ledger.read_blocks().await.last().unwrap().unwrap().index;
+    let a = ledger.read_blocks().await.first().unwrap().unwrap().index;
+    assert_eq!(b - a, 10);
+
+    let msg = NetworkRequest::new(req_handler.network_id());
+    let res = req_handler.network_status(msg).await;
+    assert_eq!(
+        res.unwrap().oldest_block_identifier,
+        Some(block_id(&scribe.blockchain.get(expected_first_block).unwrap()).unwrap())
     );
 
     let msg = MetadataRequest::new();
@@ -119,14 +138,14 @@ async fn smoke_test() {
 
     let msg = AccountBalanceRequest::new(
         req_handler.network_id(),
-        ic_rosetta_api::convert::to_model_account_identifier(&to_uid(0)),
+        ic_rosetta_api::convert::to_model_account_identifier(&acc_id(0)),
     );
     let res = req_handler.account_balance(msg).await;
     assert_eq!(
         res,
         Ok(AccountBalanceResponse::new(
             block_id(&scribe.blockchain.back().unwrap()).unwrap(),
-            vec![amount_(*scribe.balance_book.get(&to_uid(0)).unwrap()).unwrap()]
+            vec![amount_(*scribe.balance_book.get(&acc_id(0)).unwrap()).unwrap()]
         ))
     );
 }
@@ -134,7 +153,6 @@ async fn smoke_test() {
 #[actix_rt::test]
 async fn blocks_test() {
     init_test_logger();
-    rng_set_seed(5);
 
     let ledger = Arc::new(TestLedger::new());
     let req_handler = RosettaRequestHandler::new(ledger.clone());
@@ -153,9 +171,10 @@ async fn blocks_test() {
 
     let h = num_accounts as usize + 17;
     for i in 0..num_accounts {
+        let acc = acc_id(i);
         assert_eq!(
-            get_balance(&req_handler, Some(h), i).await.unwrap(),
-            *scribe.balance_history[h].get(&to_uid(i)).unwrap()
+            get_balance(&req_handler, Some(h), acc).await.unwrap(),
+            *scribe.balance_history[h].get(&acc).unwrap()
         );
     }
 
@@ -198,7 +217,7 @@ async fn blocks_test() {
     };
     let msg = BlockTransactionRequest::new(
         req_handler.network_id(),
-        block_id,
+        block_id.clone(),
         trans.transaction_identifier.clone(),
     );
     let resp = req_handler.block_transaction(msg).await.unwrap();
@@ -207,6 +226,20 @@ async fn blocks_test() {
         trans.transaction_identifier.hash,
         resp.transaction.transaction_identifier.hash
     );
+
+    let resp = req_handler
+        .search_transactions(SearchTransactionsRequest::new(
+            req_handler.network_id(),
+            Some(trans.transaction_identifier.clone()),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.transactions,
+        vec![BlockTransaction::new(block_id, trans)]
+    );
+    assert_eq!(resp.total_count, 1);
 }
 
 #[actix_rt::test]
@@ -222,62 +255,65 @@ async fn balances_test() {
         ledger.add_block(b.clone()).await.ok();
     }
 
+    let acc0 = acc_id(0);
+    let acc1 = acc_id(1);
+
     assert_eq!(
-        get_balance(&req_handler, None, 0).await.unwrap(),
-        *scribe.balance_book.get(&to_uid(0)).unwrap()
+        get_balance(&req_handler, None, acc0).await.unwrap(),
+        *scribe.balance_book.get(&acc0).unwrap()
     );
     assert_eq!(
-        get_balance(&req_handler, None, 1).await.unwrap(),
-        *scribe.balance_book.get(&to_uid(1)).unwrap()
+        get_balance(&req_handler, None, acc1).await.unwrap(),
+        *scribe.balance_book.get(&acc1).unwrap()
     );
 
-    scribe.buy(to_uid(0), 10);
+    scribe.buy(acc0, 10);
     ledger
         .add_block(scribe.blockchain.back().unwrap().clone())
         .await
         .ok();
     assert_eq!(
-        get_balance(&req_handler, None, 0).await.unwrap(),
-        *scribe.balance_book.get(&to_uid(0)).unwrap()
+        get_balance(&req_handler, None, acc0).await.unwrap(),
+        *scribe.balance_book.get(&acc0).unwrap()
     );
     assert_eq!(
-        get_balance(&req_handler, None, 1).await.unwrap(),
-        *scribe.balance_book.get(&to_uid(1)).unwrap()
+        get_balance(&req_handler, None, acc1).await.unwrap(),
+        *scribe.balance_book.get(&acc1).unwrap()
     );
 
-    let after_buy_balance = *scribe.balance_book.get(&to_uid(0)).unwrap();
+    let after_buy_balance = *scribe.balance_book.get(&acc0).unwrap();
 
-    scribe.sell(to_uid(0), 100);
+    scribe.sell(acc0, 100);
     ledger
         .add_block(scribe.blockchain.back().unwrap().clone())
         .await
         .ok();
     assert_eq!(
-        get_balance(&req_handler, None, 0).await.unwrap(),
-        *scribe.balance_book.get(&to_uid(0)).unwrap()
+        get_balance(&req_handler, None, acc0).await.unwrap(),
+        *scribe.balance_book.get(&acc0).unwrap()
     );
     assert_eq!(
-        get_balance(&req_handler, None, 1).await.unwrap(),
-        *scribe.balance_book.get(&to_uid(1)).unwrap()
+        get_balance(&req_handler, None, acc1).await.unwrap(),
+        *scribe.balance_book.get(&acc1).unwrap()
     );
 
-    scribe.transfer(to_uid(0), to_uid(1), 1000);
+    scribe.transfer(acc0, acc1, 1000);
     ledger
         .add_block(scribe.blockchain.back().unwrap().clone())
         .await
         .ok();
     assert_eq!(
-        get_balance(&req_handler, None, 0).await.unwrap(),
-        *scribe.balance_book.get(&to_uid(0)).unwrap()
+        get_balance(&req_handler, None, acc0).await.unwrap(),
+        *scribe.balance_book.get(&acc0).unwrap()
     );
     assert_eq!(
-        get_balance(&req_handler, None, 1).await.unwrap(),
-        *scribe.balance_book.get(&to_uid(1)).unwrap()
+        get_balance(&req_handler, None, acc1).await.unwrap(),
+        *scribe.balance_book.get(&acc1).unwrap()
     );
 
     // and test if we can access arbitrary block
     assert_eq!(
-        get_balance(&req_handler, Some(2), 0).await.unwrap(),
+        get_balance(&req_handler, Some(2), acc0).await.unwrap(),
         after_buy_balance
     );
 }

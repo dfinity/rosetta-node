@@ -1,6 +1,7 @@
 //! Tests for bls operations
 use super::super::{fr_to_bytes, g1_to_bytes};
 use super::*;
+use ic_crypto_internal_bls12381_serde_miracl::miracl_g1_to_bytes;
 use pairing::bls12_381::FrRepr;
 use std::collections::HashSet;
 
@@ -32,8 +33,8 @@ fn test_distinct_messages_yield_distinct_curve_points_miracl() {
     let number_of_messages = 100;
     let points: HashSet<_> = (0..number_of_messages as u32)
         .map(|number| {
-            let g1 = hash_to_g1_miracl(dst, &number.to_be_bytes()[..]);
-            let bytes = g1_to_bytes(&g1);
+            let miracl_g1 = hash_to_miracl_g1(dst, &number.to_be_bytes()[..]);
+            let bytes = miracl_g1_to_bytes(&miracl_g1).0;
             // It suffices to prove that the first 32 bytes are distinct.  More requires a
             // custom hash implementation.
             let mut hashable = [0u8; 32];
@@ -47,8 +48,8 @@ fn test_distinct_messages_yield_distinct_curve_points_miracl() {
 #[test]
 fn test_empty_hash_matches_draft_spec_09() {
     let dst = b"QUUX-V01-CS02-with-BLS12381G1_XMD:SHA-256_SSWU_RO_";
-    let g1 = hash_to_g1_miracl(dst, b"");
-    let got = g1_to_bytes(&g1);
+    let miracl_g1 = hash_to_miracl_g1(dst, b"");
+    let got = miracl_g1_to_bytes(&miracl_g1).0;
     // The spec says P.x starts with "05", which we replace with "85" because the
     // `pairing` crate sets the MSB to indicate point compression. (Another bit
     // indicates the "sign" of the y-coordinate, which happens to be 0 for this

@@ -1,8 +1,10 @@
-use crate::malicious_flags::MaliciousFlagsStruct;
+//! Defines [`MaliciousBehaviour`] that allows to control malicious flags.
+
+use crate::malicious_flags::MaliciousFlags;
 use serde::{Deserialize, Serialize};
 
 /// When testing our system we need to make some nodes act badly to make sure
-/// they don't effect the system more than we expect. These options should NEVER
+/// they don't affect the system more than we expect. These options should NEVER
 /// be enabled on a production system.
 ///
 /// Enabling these options can cause your node to attack the network and the
@@ -20,7 +22,7 @@ pub struct MaliciousBehaviour {
     // All subsequent fields should start with 'maliciously_' just to really send home that these
     // aren't options you want to enable
     maliciously_seg_fault: bool,
-    pub malicious_flags: MaliciousFlagsStruct,
+    pub malicious_flags: MaliciousFlags,
 }
 
 /// The setters will panic if you try to set
@@ -137,9 +139,29 @@ impl MaliciousBehaviour {
         })
     }
 
+    pub fn set_maliciously_corrupt_own_state_at_heights(self, height: u64) -> Self {
+        self.set_malicious_behaviour_to(
+            |mut s, height| {
+                s.malicious_flags
+                    .maliciously_corrupt_own_state_at_heights
+                    .push(height);
+                s
+            },
+            height,
+        )
+    }
+
     fn set_malicious_behaviour<F: FnOnce(Self) -> Self>(self, f: F) -> Self {
         if self.allow_malicious_behaviour {
             f(self)
+        } else {
+            panic!("Attempted to enable malicious behavior without first setting allow_malicious_behavior to true")
+        }
+    }
+
+    fn set_malicious_behaviour_to<T, F: FnOnce(Self, T) -> Self>(self, f: F, value: T) -> Self {
+        if self.allow_malicious_behaviour {
+            f(self, value)
         } else {
             panic!("Attempted to enable malicious behavior without first setting allow_malicious_behavior to true")
         }

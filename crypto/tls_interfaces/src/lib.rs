@@ -171,12 +171,6 @@ impl AsyncWrite for TlsStream {
     }
 }
 
-/// A temporary and insecure placeholder struct for a `TlsStream`. This struct
-/// shall facilitate the transition from the old to the new TLS handshake API
-/// for the P2P team. Once the short transition period is over, this struct will
-/// be removed. Removal is tracked in ticket CRP-775.
-pub type TlsStreamInsecure = (ReadHalf<TcpStream>, WriteHalf<TcpStream>);
-
 /// The read half of a stream over a secure connection protected by TLS.
 pub struct TlsReadHalf {
     read_half: ReadHalf<SslStream<TcpStream>>,
@@ -247,34 +241,30 @@ pub trait TlsHandshake {
     /// * Supported signature algorithms: ed25519
     /// * Allowed cipher suites: TLS_AES_128_GCM_SHA256, TLS_AES_256_GCM_SHA384
     /// * Client authentication: mandatory, with ed25519 certificate
+    /// * Maximum number of intermediate CA certificates: 1
     ///
     /// To determine whether the peer (that successfully performed the
-    /// handshake) is an allowed client, first, the certificate that the peer
-    /// presented during the handshake (and for which the peer therefore knows
-    /// the private key) is compared to all the (explicitly allowed)
-    /// certificates in `allowed_clients`. If there is a match, then this
-    /// peer certificate successfully authenticated.
-    /// If there is no match, then the following steps are taken:
+    /// handshake) is an allowed client, the following steps are taken:
     /// 1. Determine the peer's node ID N_claimed from the _subject name_ of
     ///    the certificate C_handshake that the peer presented during the
     ///    handshake (and for which the peer therefore knows the private key).
-    ///    Return an error if N_claimed is not contained in the nodes in
-    ///    `allowed_clients`.
-    /// 2. Determine the certificate C_registry by querying the registry for the
-    ///    TLS certificate of node with ID N_claimed. Return an error if
-    ///    C_registry does not equal C_handshake.
+    ///    If N_claimed is contained in the nodes in `allowed_clients`,
+    ///    determine the certificate C_registry by querying the registry for the
+    ///    TLS certificate of node with ID N_claimed, and if C_registry is equal
+    ///    to C_handshake, then the peer successfully authenticated as node
+    ///    N_claimed. Otherwise, step 2 is taken.
+    /// 2. Compare the root of the certificate chain that the peer presented
+    ///    during the handshake (and for which the peer therefore knows the
+    ///    private key of the chain's leaf certificate) to all the (explicitly
+    ///    allowed) certificates in `allowed_clients`. If there is a match,
+    ///    then the peer represented by the chain's leaf certificate
+    ///    successfully authenticated.
     ///
     /// The given `tcp_stream` is consumed. If an error is returned, the TCP
     /// connection is therefore dropped.
     ///
     /// Returns the TLS stream together with the peer that successfully
-    /// authenticated. This peer is either one of the (explicitly) allowed
-    /// certificates or node ID N_claimed.
-    /// For determining the authenticated peer, explicitly allowed certificates
-    /// take precedence, i.e., if a node in the `allowed_clients` resolves
-    /// (via the registry) to the exact same certificate as one that is
-    /// explicitly listed in the `allowed_clients`, then the returned peer
-    /// will be of variant `Cert`.
+    /// authenticated.
     ///
     /// # Errors
     /// * TlsServerHandshakeError::RegistryError if the registry cannot be
@@ -309,28 +299,6 @@ pub trait TlsHandshake {
         registry_version: RegistryVersion,
     ) -> Result<(TlsStream, AuthenticatedPeer), TlsServerHandshakeError>;
 
-    /// Temporary *insecure* placeholder for `perform_tls_server_handshake`.
-    ///           ^^^^^^^^^^
-    ///
-    /// This method does NOT perform a TLS handshake.
-    ///
-    /// Returns an insecure placeholder struct for a TLS stream that is simply
-    /// the read-half/write-half pair of the given `tcp_stream`.
-    /// Because no handshake and no authentication is performed, it is also not
-    /// known who the peer is, so the method returns the first certificate in
-    /// `allowed_clients`, or the first node if the certificates are empty.
-    /// This method never returns a `TlsServerHandshakeError`.
-    ///
-    /// This method shall facilitate the transition from the old to the new TLS
-    /// handshake API for the P2P team. Once the short transition period is
-    /// over, this struct will be removed. Removal is tracked in ticket CRP-775.
-    async fn perform_tls_server_handshake_insecure(
-        &self,
-        tcp_stream: TcpStream,
-        allowed_clients: AllowedClients,
-        registry_version: RegistryVersion,
-    ) -> Result<(TlsStreamInsecure, AuthenticatedPeer), TlsServerHandshakeError>;
-
     /// IMPORTANT NODE: This method is temporary. It will be replaced by
     /// `perform_tls_server_handshake` and a new method
     /// `perform_tls_server_handshake_without_client_auth` soon. This method is
@@ -350,6 +318,7 @@ pub trait TlsHandshake {
     /// * Supported signature algorithms: ed25519
     /// * Allowed cipher suites: TLS_AES_128_GCM_SHA256, TLS_AES_256_GCM_SHA384
     /// * Client authentication: optional, with ed25519 certificate
+    /// * Maximum number of intermediate CA certificates: 1
     ///
     /// Whenever the TLS handshake fails, this method returns an error.
     ///
@@ -365,29 +334,26 @@ pub trait TlsHandshake {
     /// the certificate is valid and trusted given the
     /// `allowed_authenticating_clients`. Additionally, after the handshake, to
     /// determine whether the peer (that successfully performed the handshake)
-    /// is an allowed client, first, the certificate that the peer presented
-    /// during the handshake (and for which the peer therefore knows the private
-    /// key) is compared to all the (explicitly allowed) certificates in
-    /// `allowed_authenticating_clients`. If there is a match, then this peer
-    /// certificate successfully authenticated. If there is no match, then the
-    /// following steps are taken:
-    /// 1. Determine the peer's node ID N_claimed from the _subject name_ of the
-    ///    certificate C_handshake that the peer presented during the handshake
-    ///    (and for which the peer therefore knows the private key). Return an
-    ///    error if N_claimed is not contained in the nodes in
-    ///    `allowed_authenticating_clients`.
-    /// 2. Determine the certificate C_registry by querying the registry for the
-    ///    TLS certificate of node with ID N_claimed. Return an error if
-    ///    C_registry does not equal C_handshake.
+    /// is an allowed client, the following steps are taken:
+    /// 1. Determine the peer's node ID N_claimed from the _subject name_ of
+    ///    the certificate C_handshake that the peer presented during the
+    ///    handshake (and for which the peer therefore knows the private key).
+    ///    If N_claimed is contained in the nodes in
+    ///    `allowed_authenticating_clients`, determine the certificate
+    ///    C_registry by querying the registry for the TLS certificate of node
+    ///    with ID N_claimed, and if C_registry is equal to C_handshake,
+    ///    then the peer successfully authenticated as node N_claimed.
+    ///    Otherwise, step 2 is taken.
+    /// 2. Compare the root of the certificate chain that the peer presented
+    ///    during the handshake (and for which the peer therefore knows the
+    ///    private key of the chain's leaf certificate) to all the (explicitly
+    ///    allowed) certificates in `allowed_authenticating_clients`. If there
+    ///    is a match, then the peer represented by the chain's leaf certificate
+    ///    successfully authenticated.
+    ///
     /// If client authentication is successful, the TLS stream together with the
     /// peer (`Peer::Authenticated`) that successfully authenticated is
-    /// returned. This peer is either one of the (explicitly) allowed
-    /// certificates or node ID N_claimed. For determining the authenticated
-    /// peer, explicitly allowed certificates take precedence, i.e., if a node
-    /// in the `allowed_authenticating_clients` resolves (via the registry) to
-    /// the exact same certificate as one that is explicitly listed in the
-    /// `allowed_authenticating_clients`, then the returned peer will be of
-    /// variant `Cert`.
+    /// returned.
     ///
     /// # Errors
     /// * TlsServerHandshakeError::RegistryError if the registry cannot be

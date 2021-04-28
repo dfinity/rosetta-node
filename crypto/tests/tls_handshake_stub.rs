@@ -72,7 +72,10 @@ mod handshakes {
 mod server_with_certs {
     use super::*;
     use ic_crypto_test_utils::tls::custom_client::CustomClient;
-    use ic_crypto_test_utils::tls::x509_certificates::{x509_public_key_cert, CertWithPrivateKey};
+    use ic_crypto_test_utils::tls::x509_certificates::{
+        ed25519_key_pair, x509_public_key_cert, CertWithPrivateKey,
+    };
+    use openssl::hash::MessageDigest;
 
     #[tokio::test]
     async fn should_perform_tls_handshake_with_cert() {
@@ -90,6 +93,85 @@ mod server_with_certs {
         let (_, server_result) = tokio::join!(client.run(server.port()), server.run());
 
         assert_peer_cert_eq(server_result.unwrap(), allowed_cert_proto);
+    }
+
+    #[tokio::test]
+    async fn should_perform_tls_handshake_with_ca_cert() {
+        const CLIENT_CA_CN: &str = "certificate authority";
+        const CLIENT_LEAF_CN: &str = "client certificate";
+
+        let ca_cert_key_pair = ed25519_key_pair();
+        let leaf_cert_key_pair = ed25519_key_pair();
+        let leaf_cert = CertWithPrivateKey::builder()
+            .cn(CLIENT_LEAF_CN.to_string())
+            .with_ca_signing(ca_cert_key_pair.clone(), CLIENT_CA_CN.to_string())
+            .build(leaf_cert_key_pair.clone(), MessageDigest::null());
+        let leaf_cert_proto = x509_public_key_cert(&leaf_cert.x509());
+        let ca_cert = CertWithPrivateKey::builder()
+            .cn(CLIENT_CA_CN.to_string())
+            .set_ca_key_usage_extension()
+            .build(ca_cert_key_pair, MessageDigest::null())
+            .x509();
+        let ca_cert_proto = x509_public_key_cert(&ca_cert);
+
+        let registry = TlsRegistry::new();
+        let server = Server::builder(SERVER_ID_1)
+            .add_allowed_client_cert(ca_cert_proto.clone())
+            .build(registry.get());
+        let client = CustomClient::builder()
+            .with_client_auth(leaf_cert)
+            .with_extra_chain_certs(vec![ca_cert])
+            .build(server.cert());
+        registry.add_cert(SERVER_ID_1, server.cert()).update();
+
+        let (_, server_result) = tokio::join!(client.run(server.port()), server.run());
+
+        assert_peer_cert_eq(server_result.unwrap(), leaf_cert_proto);
+    }
+
+    #[tokio::test]
+    async fn should_perform_tls_handshake_with_ca_and_intermediate_cert() {
+        const CLIENT_CA_CN: &str = "certificate authority";
+        const CLIENT_INTERMEDIATE_CA_CN: &str = "intermediate certificate authority";
+        const CLIENT_LEAF_CN: &str = "client certificate";
+
+        let ca_cert_key_pair = ed25519_key_pair();
+        let intermediate_ca_cert_key_pair = ed25519_key_pair();
+        let leaf_cert_key_pair = ed25519_key_pair();
+        let leaf_cert = CertWithPrivateKey::builder()
+            .cn(CLIENT_LEAF_CN.to_string())
+            .with_ca_signing(
+                intermediate_ca_cert_key_pair.clone(),
+                CLIENT_INTERMEDIATE_CA_CN.to_string(),
+            )
+            .build(leaf_cert_key_pair.clone(), MessageDigest::null());
+        let leaf_cert_proto = x509_public_key_cert(&leaf_cert.x509());
+        let intermediate_ca_cert = CertWithPrivateKey::builder()
+            .cn(CLIENT_INTERMEDIATE_CA_CN.to_string())
+            .set_ca_key_usage_extension()
+            .with_ca_signing(ca_cert_key_pair.clone(), CLIENT_CA_CN.to_string())
+            .build(intermediate_ca_cert_key_pair.clone(), MessageDigest::null())
+            .x509();
+        let ca_cert = CertWithPrivateKey::builder()
+            .cn(CLIENT_CA_CN.to_string())
+            .set_ca_key_usage_extension()
+            .build(ca_cert_key_pair, MessageDigest::null())
+            .x509();
+        let ca_cert_proto = x509_public_key_cert(&ca_cert);
+
+        let registry = TlsRegistry::new();
+        let server = Server::builder(SERVER_ID_1)
+            .add_allowed_client_cert(ca_cert_proto.clone())
+            .build(registry.get());
+        let client = CustomClient::builder()
+            .with_client_auth(leaf_cert)
+            .with_extra_chain_certs(vec![intermediate_ca_cert, ca_cert])
+            .build(server.cert());
+        registry.add_cert(SERVER_ID_1, server.cert()).update();
+
+        let (_, server_result) = tokio::join!(client.run(server.port()), server.run());
+
+        assert_peer_cert_eq(server_result.unwrap(), leaf_cert_proto);
     }
 
     #[tokio::test]
@@ -712,7 +794,7 @@ mod server {
         let x509_client_ca_cert = x509_public_key_cert(&ca_cert);
         let client = CustomClient::builder()
             .with_client_auth(leaf_cert)
-            .with_client_ca_cert(ca_cert)
+            .with_extra_chain_certs(vec![ca_cert])
             .build(server.cert());
         registry
             .add_cert(SERVER_ID_1, server.cert())
@@ -775,58 +857,6 @@ mod server {
         let (_, server_result) = tokio::join!(client.run(server.port()), server.run());
 
         assert_handshake_server_error_containing(&server_result, "certificate is not yet valid");
-    }
-}
-
-mod server_returning_tls_stream_placeholder {
-    use super::*;
-    use crate::tls_utils::REG_V1;
-    use ic_crypto_tls_interfaces::{AllowedClients, TlsHandshake};
-    use maplit::btreeset;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::{TcpListener, TcpStream};
-
-    #[tokio::test]
-    async fn should_allow_communication_without_without_having_performed_tls_handshake() {
-        let listener = TcpListener::bind(("0.0.0.0", 0)).await.unwrap();
-        let server_port = listener.local_addr().unwrap().port();
-        tokio::join!(
-            server_performing_handshake(listener),
-            client_not_performing_handshake(server_port)
-        );
-    }
-
-    async fn server_performing_handshake(mut listener: TcpListener) {
-        let registry = TlsRegistry::new();
-        let (crypto, _cert) = temp_crypto_component_with_tls_keys(registry.get(), SERVER_ID_1);
-        let allowed_clients = AllowedClients::new_with_nodes(btreeset! {CLIENT_ID_1}).unwrap();
-
-        let (tcp_stream, _) = listener.accept().await.expect("accept failed");
-        let ((_read_half, mut write_half), peer) = crypto
-            .perform_tls_server_handshake_insecure(tcp_stream, allowed_clients, REG_V1)
-            .await
-            .unwrap();
-
-        assert_eq!(peer, AuthenticatedPeer::Node(CLIENT_ID_1));
-        let msg_for_client = "message after handshake";
-        let num_bytes_written = write_half.write(msg_for_client.as_bytes()).await.unwrap();
-        assert_eq!(num_bytes_written, msg_for_client.as_bytes().len());
-    }
-
-    async fn client_not_performing_handshake(server_port: u16) {
-        let mut tcp_stream = TcpStream::connect(("127.0.0.1", server_port))
-            .await
-            .unwrap();
-        let mut bytes_from_server = Vec::new();
-        tcp_stream
-            .read_to_end(&mut bytes_from_server)
-            .await
-            .unwrap();
-        let msg_from_server = String::from_utf8(bytes_from_server.to_vec()).unwrap();
-
-        // Assert that message from server can be read without
-        // having performed a TLS handshake beforehand.
-        assert_eq!(msg_from_server, "message after handshake");
     }
 }
 

@@ -48,6 +48,40 @@ pub fn new_keypair() -> CryptoResult<(types::SecretKeyBytes, types::PublicKeyByt
     Ok((sk, pk))
 }
 
+// raw_bytes: BigEndian unsigned big integer.
+pub fn secret_key_from_components(
+    sk_raw_bytes: &[u8],
+    pk: &types::PublicKeyBytes,
+) -> CryptoResult<types::SecretKeyBytes> {
+    let group = EcGroup::from_curve_name(CURVE_NAME)
+        .map_err(|e| wrap_openssl_err(e, "unable to create EC group"))?;
+    let private_number = BigNum::from_slice(sk_raw_bytes)
+        .map_err(|e| wrap_openssl_err(e, "unable to parse big integer"))?;
+    let mut ctx =
+        BigNumContext::new().map_err(|e| wrap_openssl_err(e, "unable to create BigNumContext"))?;
+    let public_point = EcPoint::from_bytes(&group, &pk.0, &mut ctx).map_err(|e| {
+        CryptoError::MalformedPublicKey {
+            algorithm: AlgorithmId::EcdsaSecp256k1,
+            key_bytes: Some(pk.0.to_vec()),
+            internal_error: e.to_string(),
+        }
+    })?;
+    let ec_key =
+        EcKey::from_private_components(&group, &private_number, &public_point).map_err(|_| {
+            CryptoError::MalformedSecretKey {
+                algorithm: AlgorithmId::EcdsaSecp256k1,
+                internal_error: "OpenSSL error".to_string(), // don't leak sensitive information
+            }
+        })?;
+    let sk_der = ec_key
+        .private_key_to_der()
+        .map_err(|e| CryptoError::AlgorithmNotSupported {
+            algorithm: AlgorithmId::EcdsaSecp256k1,
+            reason: format!("OpenSSL failed with error {}", e.to_string()),
+        })?;
+    Ok(types::SecretKeyBytes::from(sk_der))
+}
+
 pub fn public_key_from_der(pk_der: &[u8]) -> CryptoResult<types::PublicKeyBytes> {
     let pkey = PKey::public_key_from_der(pk_der).map_err(|e| CryptoError::MalformedPublicKey {
         algorithm: AlgorithmId::EcdsaSecp256k1,
@@ -78,6 +112,33 @@ pub fn public_key_from_der(pk_der: &[u8]) -> CryptoResult<types::PublicKeyBytes>
     Ok(types::PublicKeyBytes::from(pk_bytes))
 }
 
+pub fn public_key_to_der(pk: &types::PublicKeyBytes) -> CryptoResult<Vec<u8>> {
+    let group = EcGroup::from_curve_name(CURVE_NAME)
+        .map_err(|e| wrap_openssl_err(e, "unable to create EC group"))?;
+    let mut ctx =
+        BigNumContext::new().map_err(|e| wrap_openssl_err(e, "unable to create BigNumContext"))?;
+    let point = EcPoint::from_bytes(&group, &pk.0, &mut ctx).map_err(|e| {
+        CryptoError::MalformedPublicKey {
+            algorithm: AlgorithmId::EcdsaSecp256k1,
+            key_bytes: Some(pk.0.to_vec()),
+            internal_error: e.to_string(),
+        }
+    })?;
+    let ec_pk =
+        EcKey::from_public_key(&group, &point).map_err(|e| CryptoError::MalformedPublicKey {
+            algorithm: AlgorithmId::EcdsaSecp256k1,
+            key_bytes: Some(pk.0.to_vec()),
+            internal_error: e.to_string(),
+        })?;
+    ec_pk
+        .public_key_to_der()
+        .map_err(|e| CryptoError::MalformedPublicKey {
+            algorithm: AlgorithmId::EcdsaSecp256k1,
+            key_bytes: Some(pk.0.to_vec()),
+            internal_error: e.to_string(),
+        })
+}
+
 // Returns `secp256k1_sig` as an array of exactly types::SignatureBytes::SIZE
 // bytes.
 fn secp256k1_sig_to_bytes(
@@ -106,9 +167,9 @@ fn secp256k1_sig_to_bytes(
 //#[cfg(test)]
 pub fn sign(msg: &[u8], sk: &types::SecretKeyBytes) -> CryptoResult<types::SignatureBytes> {
     let signing_key =
-        EcKey::private_key_from_der(&sk.0).map_err(|e| CryptoError::MalformedSecretKey {
+        EcKey::private_key_from_der(&sk.0).map_err(|_| CryptoError::MalformedSecretKey {
             algorithm: AlgorithmId::EcdsaSecp256k1,
-            internal_error: e.to_string(),
+            internal_error: "OpenSSL error".to_string(), // don't leak sensitive information
         })?;
     let secp256k1_sig =
         EcdsaSig::sign(msg, &signing_key).map_err(|e| CryptoError::InvalidArgument {

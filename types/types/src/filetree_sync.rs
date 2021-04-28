@@ -1,3 +1,5 @@
+//! File tree sync artifact.
+
 use crate::{
     artifact::Artifact,
     chunkable::{
@@ -19,8 +21,8 @@ pub type FileTreeSyncId = String;
 // ChunkableArtifact trait on the complete artifact             //
 //////////////////////////////////////////////////////////////////
 
-// Artifact to be be delivered to the artifact pool when
-// file tree sync is complete
+/// Artifact to be be delivered to the artifact pool when
+/// file tree sync is complete
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub struct FileTreeSyncArtifact {
     pub absolute_path: PathBuf,
@@ -74,12 +76,15 @@ impl From<FileTreeSyncArtifact> for Box<dyn ChunkableArtifact> {
 // trait over the download tracker object. The download tracker is     //
 // also referred to as the under construction object                   //
 /////////////////////////////////////////////////////////////////////////
+///
+/// Represents the state under construction for a file tree sync artifact.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum UnderConstructionState {
     WaitForManifest,
     SyncFromDir(u32),
 }
 
+/// File tree sync tracker.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FileTreeSyncChunksTracker {
     pub state: UnderConstructionState,
@@ -88,6 +93,7 @@ pub struct FileTreeSyncChunksTracker {
     // Tracker looks at this fs path  syncs it to a remote fs path.
     pub absolute_path: PathBuf,
 }
+
 impl Default for FileTreeSyncChunksTracker {
     fn default() -> Self {
         FileTreeSyncChunksTracker {
@@ -99,6 +105,7 @@ impl Default for FileTreeSyncChunksTracker {
 }
 
 const CHUNK_PREFIX: &str = "Chunk";
+
 impl Chunkable for FileTreeSyncChunksTracker {
     fn get_artifact_hash(&self) -> CryptoHash {
         // The hash should be the merkle root. Pending implementation

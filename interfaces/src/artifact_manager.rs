@@ -1,7 +1,11 @@
 //! The artifact manager/client public interface.
 
-use crate::{artifact_pool, time_source::TimeSource};
-use ic_types::artifact::{GenericPriorityFn, PriorityFn};
+use crate::{
+    artifact_pool::{ArtifactPoolError, UnvalidatedArtifact},
+    time_source::TimeSource,
+};
+use derive_more::From;
+use ic_types::artifact::{ArtifactPriorityFn, PriorityFn};
 use ic_types::{artifact, chunkable, p2p, NodeId};
 
 #[derive(Debug)]
@@ -18,14 +22,14 @@ pub enum ArtifactAcceptance<T> {
 }
 
 #[allow(clippy::large_enum_variant)]
-#[derive(Debug)]
+#[derive(From, Debug)]
 /// An error type that combines 'NotProcessed' status with an actual
 /// error that might be returned by artifact pools. It is used as
 /// the return type for the `on_artifact` function of `ArtifactManager`.
 pub enum OnArtifactError<T> {
-    NotProcessed(T),
+    NotProcessed(Box<T>),
     AdvertMismatch(AdvertMismatchError),
-    ArtifactPoolError(artifact_pool::ArtifactPoolError),
+    ArtifactPoolError(ArtifactPoolError),
     MessageConversionfailed(p2p::GossipAdvert),
 }
 
@@ -50,9 +54,9 @@ pub trait ArtifactClient<Artifact: artifact::ArtifactKind>: Send + Sync {
     /// The default implementation is to accept unconditionally.
     fn check_artifact_acceptance(
         &self,
-        msg: Artifact::Message,
+        msg: Artifact::SerializeAs,
         peer_id: &NodeId,
-    ) -> Result<ArtifactAcceptance<Artifact::Message>, artifact_pool::ArtifactPoolError>;
+    ) -> Result<ArtifactAcceptance<Artifact::Message>, ArtifactPoolError>;
 
     /// Checks if the node already has the artifact in the pool by its
     /// identifier.
@@ -82,12 +86,9 @@ pub trait ArtifactClient<Artifact: artifact::ArtifactKind>: Send + Sync {
     /// executed state referred to in the block at this height.
     ///
     /// `Example`
-    /// If Consensus pool has finalizations till height 10, the filter will be
-    /// 'height = 10' since this node needs all the consensus artifacts with
-    /// height > 10.
-    ///
-    /// TODO: Consider random tape height here too, which comes after
-    /// finalization.
+    /// If Consensus pool has delivered batches up to height 10, the filter will
+    /// be 'height = 10' since this node only needs consensus artifacts
+    /// with height > 10.
     fn get_filter(&self) -> Artifact::Filter
     where
         Artifact::Filter: Default,
@@ -165,10 +166,12 @@ pub trait ArtifactProcessor<Artifact: artifact::ArtifactKind>: Send {
     fn process_changes(
         &self,
         time_source: &dyn TimeSource,
-        new_artifacts: Vec<artifact_pool::UnvalidatedArtifact<Artifact::Message>>,
+        new_artifacts: Vec<UnvalidatedArtifact<Artifact::Message>>,
     ) -> (Vec<artifact::Advert<Artifact>>, ProcessingResult);
 }
 
+/// The Artifact Manager stores artifacts to be used by this and other nodes in
+/// the same subnet in the artifact pool.
 // tag::artifact_manager[]
 pub trait ArtifactManager: Send + Sync {
     /// When a new artifact is received by Gossip, it is forwarded to
@@ -221,7 +224,7 @@ pub trait ArtifactManager: Send + Sync {
     /// the given artifact tag.
     ///
     /// See `ArtifactClient::get_priority_function` for more details.
-    fn get_priority_function(&self, tag: artifact::ArtifactTag) -> Option<GenericPriorityFn>;
+    fn get_priority_function(&self, tag: artifact::ArtifactTag) -> Option<ArtifactPriorityFn>;
 
     /// Get Chunk tracker for an advert.
     ///

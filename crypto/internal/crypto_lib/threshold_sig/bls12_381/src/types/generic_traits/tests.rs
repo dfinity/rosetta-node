@@ -22,6 +22,14 @@ proptest! {
     fn debug_trait_on_combined_signature_bytes_works(combined_signature_bytes: CombinedSignatureBytes) {  format!("{:?}", combined_signature_bytes) }
 
     #[test]
+    fn debug_should_redact_secretkey_bytes(secret_key_bytes: SecretKeyBytes) {
+        let debug_str = format!("{:?}", secret_key_bytes);
+        let raw_str = String::from(secret_key_bytes);
+        assert!(!debug_str.contains(&raw_str));
+        assert_eq!(debug_str, "REDACTED");
+    }
+
+    #[test]
     fn equality_holds_for_public_key_bytes(public_key_bytes in threshold_sig_public_key_bytes()) {
       assert_eq!(public_key_bytes, public_key_bytes);
     }

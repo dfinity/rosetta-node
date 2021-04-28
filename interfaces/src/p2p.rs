@@ -1,4 +1,4 @@
-use async_trait::async_trait;
+//! The P2P public interface.
 use ic_types::{artifact::Artifact, messages::SignedIngress};
 
 use crate::artifact_manager::OnArtifactError;
@@ -7,7 +7,6 @@ use crate::artifact_manager::OnArtifactError;
 /// Ingress Message to P2P events channel for processing. It encapsulates the
 /// given ingress message in a GossipArtifact and sends it to P2P GossipArtifact
 /// channel. It is mainly to be used by HttpHandler to submit ingress messages.
-/// TODO: Make it such that it does not need to wrapped into a GossipArtifact
 pub trait IngressEventHandler: Send + Sync {
     fn on_ingress_message(&self, message: SignedIngress) -> Result<(), OnArtifactError<Artifact>>;
 
@@ -22,12 +21,6 @@ pub trait IngressEventHandler: Send + Sync {
 /// P2PRunner provides the run interface which is used by replica to start
 /// reading from these channels. The artifacts or notifications received from
 /// these channels are sent to Gossip for processing.
-#[async_trait]
 pub trait P2PRunner: Send {
     fn run(&mut self);
-    async fn stop(&mut self);
-    /// This is required for tests that cannot call the async stop().
-    /// Example: replica tests that expect a panic need to do the clean up
-    /// from Drop::drop(). Drop is sync and hence can't use the async version.
-    fn stop_blocking(&mut self);
 }

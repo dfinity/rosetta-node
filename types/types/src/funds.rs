@@ -13,8 +13,9 @@ use icp::ICP;
 use serde::{Deserialize, Serialize};
 use std::convert::{From, TryFrom};
 
-/// A struct to hold various types of funds. Currently, only Cycles and ICP are
-/// supported.
+/// A struct to hold various types of funds.
+//
+// TODO(EXC-240): ICP tokens are handled via the ledger canister and should be removed from here.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Funds {
     cycles: Cycles,
@@ -79,6 +80,15 @@ impl Funds {
     }
 }
 
+impl From<Cycles> for Funds {
+    fn from(cycles: Cycles) -> Self {
+        Self {
+            cycles,
+            icp: ICP::zero(),
+        }
+    }
+}
+
 impl From<&Funds> for PbFunds {
     fn from(item: &Funds) -> Self {
         Self {
@@ -98,64 +108,3 @@ impl TryFrom<PbFunds> for Funds {
         })
     }
 }
-// TODO(EXE-84): Move the following parameters to the registry
-
-//////////////////////////////////////////////////////////////
-// Fees
-//////////////////////////////////////////////////////////////
-
-/// Cycles charged per Wasm page (64KiB), for one round.
-/// The assumptions used to set the cost are:
-/// 1T cycles is about 1USD
-/// a round takes ca 3s.
-/// The value is set so that storing 1GB/month costs roughly 100 USD
-/// This is the intended cost for storage on a 7 node subnetwork at launch.
-/// The cost should go down as the protocol storage costs improve.
-pub const CYCLES_PER_WASM_PAGE: Cycles = Cycles::new(7500);
-
-/// Cycles charged for each percent of the reserved compute allocation.
-/// Note that reserved compute allocation is a scarce resource, and should be
-/// appropriately charged for.
-pub const CYCLES_PER_COMPUTE_ALLOCATION_PERCENT: Cycles = Cycles::new(1);
-
-/// Baseline fee, charged for every message execution.
-pub const FIXED_FEE_FOR_EXECUTION: Cycles = Cycles::new(10);
-
-/// Baseline fee, charged for sending every message.
-pub const FIXED_FEE_FOR_NETWORK_TRANSFER: Cycles = Cycles::new(10);
-
-/// This value controls what is the threshold for being able to execute
-/// messages. If the canister doesn't have enough cycles in its balance, then
-/// it's frozen and cannot execute more messages until it's topped up with more
-/// cycles.
-// TODO(EXE-87): Change this constant into a value calculated from resource
-// allocation and usage
-pub const CANISTER_FREEZE_BALANCE_RESERVE: Cycles = Cycles::new(1 << 33);
-
-/// Creating canisters incurs a "large" fee in order to prevent someone from
-/// creating a lot of canisters and thus attempt to DDoS the system. Arbitrarily
-/// set to 10^12 cycles which ought to be large enough.
-pub const CANISTER_CREATION_FEE: Cycles = Cycles::new(1_000_000_000_000);
-
-/// Flat fee to charge for an incoming ingress message.
-pub const INGRESS_MESSAGE_RECEIVED_FEE: Cycles = Cycles::new(100);
-
-/// Fee to charge per byte of an ingress message.
-pub const INGRESS_BYTE_RECEIVED_FEE: Cycles = Cycles::new(100);
-
-//////////////////////////////////////////////////////////////
-// Conversions
-//////////////////////////////////////////////////////////////
-
-/// Cycles to be paid per byte that's transferred across subnets.
-pub const CYCLES_PER_BYTE_RATIO: Cycles = Cycles::new(1);
-
-/// The cost reported by the runtime is divided by this number,
-/// before actually charging the canister.
-/// This allows us to have different costs per subnets and
-/// to charge a fraction of a cycle per executed instruction.
-/// This was calculated with the objective to run 2-3 months on 100T cycles.
-/// 100 * 10^12 cycles / 100 days = 10^12 cycles / day
-/// (86400[sec] * (3 * 10^9)[inst/sec]) / 10^12 = 259
-/// The assumption is that storage and network costs can be ignored.
-pub const EXECUTED_INSTRUCTIONS_PER_CYCLE: u64 = 250;

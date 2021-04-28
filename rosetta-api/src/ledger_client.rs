@@ -1,20 +1,20 @@
 use crate::convert::{ic_error, internal_error, into_error, invalid_block_id, transaction_id};
-use crate::models::{ApiError, TransactionIdentifier};
+use crate::models::{ApiError, Envelopes, TransactionIdentifier};
 use crate::store::{BlockStore, BlockStoreError, HashedBlock, InMemoryStore, OnDiskStore};
 use async_trait::async_trait;
 use core::ops::Deref;
 use dfn_protobuf::{ProtoBuf, ToProto};
-use ic_canister_client::{Agent, HttpClient, HttpContentType, RequestStub, Sender};
+use ic_canister_client::{Agent, HttpClient, HttpContentType, Sender};
 use ic_crypto_tree_hash::{Digest, LabeledTree, MixedHashTree};
 use ic_crypto_utils_threshold_sig::verify_combined;
-use ic_types::messages::{HttpReadContent, HttpRequestEnvelope, HttpSubmitContent, MessageId};
+use ic_types::messages::MessageId;
 use ic_types::CanisterId;
 use ic_types::{
     consensus::certification::CertificationContent,
     crypto::{threshold_sig::ThresholdSigPublicKey, CombinedThresholdSigOf, CryptoHash},
-    CryptoHashOfPartialState,
+    messages::SignedRequestBytes,
+    CryptoHashOfPartialState, Time,
 };
-use im::OrdMap;
 use ledger_canister::{
     protobuf::TipOfChainRequest, AccountIdentifier, BalancesStore, BlockArg, BlockHeight, BlockRes,
     EncodedBlock, HashOf, ICPTs, TipOfChainRes,
@@ -29,10 +29,10 @@ use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
-use tree_deserializer::LabeledTreeDeserializer;
+use tree_deserializer::{types::Leb128EncodedU64, LabeledTreeDeserializer};
 use url::Url;
 
-pub type Balances = ledger_canister::Balances<OrdMapBalancesStore>;
+pub type Balances = ledger_canister::Balances<ChunkmapBalancesStore>;
 
 #[async_trait]
 pub trait LedgerAccess {
@@ -44,8 +44,7 @@ pub trait LedgerAccess {
     fn testnet_url(&self) -> &Url;
     async fn submit(
         &self,
-        _submit_envelope: HttpRequestEnvelope<HttpSubmitContent>,
-        _read_state_envelope: HttpRequestEnvelope<HttpReadContent>,
+        _envelopes: Envelopes,
     ) -> Result<(TransactionIdentifier, Option<BlockHeight>), ApiError>;
     async fn chain_length(&self) -> BlockHeight;
 }
@@ -58,7 +57,7 @@ pub struct LedgerClient {
     testnet_url: Url,
     store_max_blocks: Option<u64>,
     offline: bool,
-    public_key: Option<ThresholdSigPublicKey>,
+    root_key: Option<ThresholdSigPublicKey>,
 }
 
 impl LedgerClient {
@@ -68,7 +67,7 @@ impl LedgerClient {
         store_location: &Path,
         store_max_blocks: Option<u64>,
         offline: bool,
-        public_key: Option<ThresholdSigPublicKey>,
+        root_key: Option<ThresholdSigPublicKey>,
     ) -> Result<LedgerClient, ApiError> {
         let location = store_location.join("blocks");
         std::fs::create_dir_all(&location)
@@ -115,7 +114,7 @@ impl LedgerClient {
             testnet_url,
             store_max_blocks,
             offline,
-            public_key,
+            root_key,
         })
     }
 
@@ -190,11 +189,11 @@ impl LedgerClient {
         cert: ledger_canister::Certification,
         hash: HashOf<EncodedBlock>,
     ) -> Result<(), String> {
-        match self.public_key {
-            Some(public_key) => {
-                let from_cert = check_certificate(
+        match self.root_key {
+            Some(root_key) => {
+                let (from_cert, _) = check_certificate(
                     &self.canister_id,
-                    &public_key,
+                    &root_key,
                     &*cert.ok_or("verify tip failed: no data certificate present")?,
                 )
                 .map_err(|e| format!("Certification error: {:?}", e))?;
@@ -228,17 +227,17 @@ pub enum CertificationError {
 fn verify_combined_threshold_sig(
     msg: &CryptoHashOfPartialState,
     sig: &CombinedThresholdSigOf<CertificationContent>,
-    public_key: &ThresholdSigPublicKey,
+    root_key: &ThresholdSigPublicKey,
 ) -> Result<(), CertificationError> {
-    verify_combined(&CertificationContent::new(msg.clone()), sig, public_key)
+    verify_combined(&CertificationContent::new(msg.clone()), sig, root_key)
         .map_err(|e| CertificationError::InvalidSignature(e.to_string()))
 }
 
 fn check_certificate(
     canister_id: &CanisterId,
-    nns_public_key: &ThresholdSigPublicKey,
+    nns_pk: &ThresholdSigPublicKey,
     encoded_certificate: &[u8],
-) -> Result<Digest, CertificationError> {
+) -> Result<(Digest, Time), CertificationError> {
     #[derive(Deserialize)]
     struct Certificate {
         tree: MixedHashTree,
@@ -252,6 +251,7 @@ fn check_certificate(
 
     #[derive(Deserialize)]
     struct ReplicaState {
+        time: Leb128EncodedU64,
         canister: BTreeMap<CanisterId, CanisterView>,
     }
 
@@ -264,10 +264,10 @@ fn check_certificate(
 
     let digest = CryptoHashOfPartialState::from(CryptoHash(certificate.tree.digest().to_vec()));
 
-    verify_combined_threshold_sig(&digest, &certificate.signature, nns_public_key).map_err(|err| {
+    verify_combined_threshold_sig(&digest, &certificate.signature, nns_pk).map_err(|err| {
         CertificationError::InvalidSignature(format!(
-            "failed to verify threshold signature: root_hash={:?}, sig={:?}, public_key={:?}, error={:?}",
-            digest, certificate.signature, nns_public_key, err
+            "failed to verify threshold signature: root_hash={:?}, sig={:?}, pk={:?}, error={:?}",
+            digest, certificate.signature, nns_pk, err
         ))
     })?;
 
@@ -289,10 +289,12 @@ fn check_certificate(
         ))
     })?;
 
+    let time = Time::from_nanos_since_unix_epoch(replica_state.time.0);
+
     replica_state
         .canister
         .get(canister_id)
-        .map(|canister| canister.certified_data.clone())
+        .map(|canister| (canister.certified_data.clone(), time))
         .ok_or_else(|| {
             CertificationError::MalformedHashTree(format!(
                 "cannot find certified_data for canister {} in the tree",
@@ -343,6 +345,7 @@ impl LedgerAccess for LedgerClient {
             }
             debug!("Fetching block {}", i);
             let raw_block = canister.query_raw_block(i).await?.unwrap_or_else(|| {
+                // FIXME: fetch the block from the archive
                 panic!(
                     "Block {} is missing when the tip of the chain is {}",
                     i, chain_length
@@ -395,37 +398,49 @@ impl LedgerAccess for LedgerClient {
 
     async fn submit(
         &self,
-        submit_request: HttpRequestEnvelope<HttpSubmitContent>,
-        read_state_request: HttpRequestEnvelope<HttpReadContent>,
+        envelopes: Envelopes,
     ) -> Result<(TransactionIdentifier, Option<BlockHeight>), ApiError> {
         if self.offline {
             return Err(ApiError::NotAvailableOffline(false, None));
         }
+
+        // Pick the update/read-start message that is currently valid.
+        let now = ic_types::time::current_time();
+
+        let (submit_request, read_state_request) = envelopes
+            .into_iter()
+            .find(|(submit_request, _)| {
+                let ingress_expiry = ic_types::Time::from_nanos_since_unix_epoch(
+                    submit_request.content.ingress_expiry(),
+                );
+                let ingress_start = ingress_expiry
+                    - (ic_types::ingress::MAX_INGRESS_TTL - ic_types::ingress::PERMITTED_DRIFT);
+                ingress_start <= now && ingress_expiry > now
+            })
+            .ok_or_else(|| ApiError::TransactionExpired)?;
 
         const TIMEOUT: Duration = Duration::from_secs(20);
 
         let start_time = Instant::now();
         let deadline = start_time + TIMEOUT;
 
-        let http_body = ic_canister_client::cbor::to_self_describing_cbor(&submit_request)
-            .map_err(|e| {
-                internal_error(format!(
-                    "Cannot serialize the submit request in CBOR format because of: {}",
-                    e
-                ))
-            })?;
+        let request_id = MessageId::from(submit_request.content.representation_independent_hash());
+        let txn_id = transaction_id(&submit_request);
 
-        let read_state_http_body = ic_canister_client::cbor::to_self_describing_cbor(
-            &read_state_request,
-        )
-        .map_err(|e| {
+        let http_body = SignedRequestBytes::try_from(submit_request).map_err(|e| {
             internal_error(format!(
-                "Cannot serialize the read state request in CBOR format because of: {}",
+                "Cannot serialize the submit request in CBOR format because of: {}",
                 e
             ))
         })?;
 
-        let request_id = MessageId::from(submit_request.content.representation_independent_hash());
+        let read_state_http_body =
+            SignedRequestBytes::try_from(read_state_request).map_err(|e| {
+                internal_error(format!(
+                    "Cannot serialize the read state request in CBOR format because of: {}",
+                    e
+                ))
+            })?;
 
         let url = self
             .testnet_url
@@ -437,7 +452,7 @@ impl LedgerAccess for LedgerClient {
             .send_post_request(
                 url.as_str(),
                 Some(HttpContentType::CBOR),
-                Some(http_body),
+                Some(http_body.into()),
                 Some(TIMEOUT),
             )
             .await
@@ -472,7 +487,7 @@ impl LedgerAccess for LedgerClient {
                 .send_post_request(
                     url.as_str(),
                     Some(HttpContentType::CBOR),
-                    Some(read_state_http_body.clone()),
+                    Some(read_state_http_body.clone().into()),
                     Some(wait_timeout),
                 )
                 .await
@@ -500,8 +515,7 @@ impl LedgerAccess for LedgerClient {
                                         err
                                     ))
                                 })?;
-                            return transaction_id(submit_request)
-                                .map(|id| (id, Some(block_index)));
+                            return txn_id.map(|id| (id, Some(block_index)));
                         }
                         None => {
                             return Err(internal_error("Send returned with no result.".to_owned()));
@@ -546,7 +560,7 @@ impl LedgerAccess for LedgerClient {
             TIMEOUT
         );
 
-        transaction_id(submit_request).map(|id| (id, None))
+        txn_id.map(|id| (id, None))
     }
 
     async fn chain_length(&self) -> BlockHeight {
@@ -576,14 +590,29 @@ impl CanisterAccess {
         let arg = ProtoBuf(payload).into_bytes()?;
         let bytes = self
             .agent
-            .execute_query(&self.canister_id, method, Some(arg))
+            .execute_query(&self.canister_id, method, arg)
+            .await?
+            .ok_or_else(|| "Reply payload was empty".to_string())?;
+        ProtoBuf::from_bytes(bytes).map(|c| c.0)
+    }
+
+    pub async fn query_canister<'a, Payload: ToProto, Res: ToProto>(
+        &self,
+        canister_id: CanisterId,
+        method: &str,
+        payload: Payload,
+    ) -> Result<Res, String> {
+        let arg = ProtoBuf(payload).into_bytes()?;
+        let bytes = self
+            .agent
+            .execute_query(&canister_id, method, arg)
             .await?
             .ok_or_else(|| "Reply payload was empty".to_string())?;
         ProtoBuf::from_bytes(bytes).map(|c| c.0)
     }
 
     pub async fn query_tip(&self) -> Result<TipOfChainRes, ApiError> {
-        self.query("tip_of_chain", TipOfChainRequest {})
+        self.query("tip_of_chain_pb", TipOfChainRequest {})
             .await
             .map_err(|e| internal_error(format!("In tip: {}", e)))
     }
@@ -593,32 +622,52 @@ impl CanisterAccess {
         height: BlockHeight,
     ) -> Result<Option<EncodedBlock>, ApiError> {
         let BlockRes(b) = self
-            .query("block", BlockArg(height))
+            .query("block_pb", BlockArg(height))
             .await
             .map_err(|e| internal_error(format!("In block: {}", e)))?;
-        Ok(b)
+        match b {
+            // block not found
+            None => Ok(None),
+            // block in the ledger
+            Some(Ok(block)) => Ok(Some(block)),
+            // block in the archive
+            Some(Err(canister_id)) => {
+                let BlockRes(b) = self
+                    .query_canister(canister_id, "get_block_pb", BlockArg(height))
+                    .await
+                    .map_err(|e| internal_error(format!("In block: {}", e)))?;
+                // get_block() on archive node will never return Ok(Err(canister_id))
+                Ok(b.map(|x| x.unwrap()))
+            }
+        }
     }
 }
 
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
-pub struct OrdMapBalancesStore(pub OrdMap<AccountIdentifier, ICPTs>);
+pub struct ChunkmapBalancesStore(pub immutable_chunkmap::map::Map<AccountIdentifier, ICPTs>);
 
-/// This is essencially copy-paste of BalancesStore for HashMap
-impl BalancesStore for OrdMapBalancesStore {
+impl BalancesStore for ChunkmapBalancesStore {
     fn get_balance(&self, k: &AccountIdentifier) -> Option<&ICPTs> {
         self.0.get(k)
     }
 
-    fn get_balance_mut(&mut self, k: &AccountIdentifier) -> Option<&mut ICPTs> {
-        self.0.get_mut(k)
-    }
+    fn update<F>(&mut self, k: AccountIdentifier, mut f: F)
+    where
+        F: FnMut(Option<&ICPTs>) -> ICPTs,
+    {
+        let (m, _) = self
+            .0
+            .update(k, ICPTs::ZERO /* dummy param */, |_, _, prev| {
+                let prev_v = prev.map(|x| x.1);
+                let new_v = f(prev_v);
+                if new_v != ICPTs::ZERO {
+                    Some((k, new_v))
+                } else {
+                    None
+                }
+            });
 
-    fn get_create_balance(&mut self, k: AccountIdentifier) -> &mut ICPTs {
-        self.0.entry(k).or_insert(ICPTs::ZERO)
-    }
-
-    fn remove_account(&mut self, k: &AccountIdentifier) -> Option<ICPTs> {
-        self.0.remove(k)
+        self.0 = m;
     }
 }
 

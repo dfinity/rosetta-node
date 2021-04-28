@@ -1,3 +1,4 @@
+//! The crate contains common concurrency patterns.
 mod observable_counting_semaphore;
 mod spawn_and_wait;
 

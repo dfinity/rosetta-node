@@ -1,3 +1,4 @@
+//! Cycles struct to be used for metrics collection.
 use crate::Cycles;
 use ic_protobuf::{proxy::ProxyDecodeError, types::v1 as pb};
 use serde::{Deserialize, Serialize};
@@ -14,7 +15,7 @@ use std::convert::{From, TryFrom};
 /// underflow. A similar struct is provided in the protobuf types.
 /// We also provide split into low and high parts as protobuf does not support
 /// u128.
-// TODO: Update documentation:
+//
 // EXC-24 will introduce a separation of concepts between Cycles and NominalCycles.
 #[derive(
     Clone, Copy, Default, Debug, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize,

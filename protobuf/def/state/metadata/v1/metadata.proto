@@ -4,6 +4,7 @@ import "types/v1/types.proto";
 import "state/ingress/v1/ingress.proto";
 import "state/queues/v1/queues.proto";
 import "registry/routing_table/v1/routing_table.proto";
+import "registry/subnet/v1/subnet.proto";
 import "google/protobuf/wrappers.proto";
 
 message NodeTopology {
@@ -21,6 +22,7 @@ message SubnetTopology {
     // The public key of the subnet (a DER-encoded BLS key, see
     // https://docs.dfinity.systems/public/v/master/#certification)
     bytes public_key = 2;
+    registry.subnet.v1.SubnetType subnet_type = 3;
 }
 
 message SubnetsEntry {
@@ -37,7 +39,8 @@ message NetworkTopology {
 message SetupInitialDkgContext {
     state.queues.v1.Request request = 1;
     repeated types.v1.NodeId nodes_in_subnet = 2;
-    types.v1.SubnetId subnet_id = 3;
+    reserved 3;
+    reserved "subnet_id";
     bytes target_id = 4;
     uint64 registry_version = 5;
 }
@@ -73,6 +76,11 @@ message SystemMetadata {
     // Version of the certification protocol that should be used to
     // certify this state.
     uint32 certification_version = 10;
+
+    uint64 heap_delta_estimate = 11;
+
+    reserved 12;
+    reserved "stable_memory_delta_estimate";
 }
 
 message StableMemory {

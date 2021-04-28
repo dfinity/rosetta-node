@@ -8,15 +8,16 @@ use crate::sign::threshold_sig::{ThresholdSigVerifierInternal, ThresholdSignerIn
 use ic_crypto_internal_csp::types::{CspPublicKey, CspSignature, SigConverter};
 use ic_crypto_internal_csp::CryptoServiceProvider;
 use ic_interfaces::crypto::{
-    BasicSigVerifier, BasicSigVerifierByPublicKey, BasicSigner, MultiSigVerifier, MultiSigner,
-    Signable, ThresholdSigVerifier, ThresholdSigVerifierByPublicKey, ThresholdSigner,
+    BasicSigVerifier, BasicSigVerifierByPublicKey, BasicSigner, CanisterSigVerifier,
+    MultiSigVerifier, MultiSigner, Signable, ThresholdSigVerifier, ThresholdSigVerifierByPublicKey,
+    ThresholdSigner,
 };
 use ic_logger::{debug, new_logger};
 use ic_types::crypto::threshold_sig::errors::threshold_sign_error::ThresholdSignError;
 use ic_types::crypto::threshold_sig::ni_dkg::DkgId;
 use ic_types::crypto::KeyPurpose::CommitteeSigning;
 use ic_types::crypto::{
-    AlgorithmId, BasicSig, BasicSigOf, CombinedMultiSig, CombinedMultiSigOf,
+    AlgorithmId, BasicSig, BasicSigOf, CanisterSigOf, CombinedMultiSig, CombinedMultiSigOf,
     CombinedThresholdSigOf, CryptoError, CryptoResult, IndividualMultiSig, IndividualMultiSigOf,
     ThresholdSigShareOf, UserPublicKey,
 };
@@ -27,6 +28,7 @@ pub use threshold_sig::ThresholdSigDataStore;
 pub use threshold_sig::ThresholdSigDataStoreImpl;
 
 mod basic_sig;
+mod canister_sig;
 mod multi_sig;
 mod threshold_sig;
 
@@ -392,6 +394,40 @@ impl<C: CryptoServiceProvider, T: Signable> ThresholdSigVerifierByPublicKey<T>
             signature,
             message,
             subnet_id,
+            registry_version,
+        );
+        debug!(logger;
+            crypto.description => "end",
+            crypto.is_ok => result.is_ok(),
+            crypto.error => log_err(result.as_ref().err()),
+        );
+        result
+    }
+}
+
+impl<C: CryptoServiceProvider, S: Signable> CanisterSigVerifier<S> for CryptoComponentFatClient<C> {
+    fn verify_canister_sig(
+        &self,
+        signature: &CanisterSigOf<S>,
+        signed_bytes: &S,
+        public_key: &UserPublicKey,
+        registry_version: RegistryVersion,
+    ) -> CryptoResult<()> {
+        let logger = new_logger!(&self.logger;
+            crypto.trait_name => "CanisterSigVerifier",
+            crypto.method_name => "verify_canister_sig",
+            crypto.signed_bytes => hex::encode(signed_bytes.as_signed_bytes()),
+            crypto.public_key => format!("{}", public_key),
+            crypto.registry_version => registry_version.get(),
+        );
+        debug!(logger;
+            crypto.description => "start",
+        );
+        let result = canister_sig::verify_canister_sig(
+            Arc::clone(&self.registry_client),
+            signature,
+            signed_bytes,
+            public_key,
             registry_version,
         );
         debug!(logger;

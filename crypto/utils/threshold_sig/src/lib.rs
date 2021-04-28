@@ -6,6 +6,9 @@ use ic_types::crypto::threshold_sig::ThresholdSigPublicKey;
 use ic_types::crypto::{CombinedThresholdSigOf, CryptoResult};
 use std::convert::TryFrom;
 
+mod conversions;
+pub use conversions::*;
+
 #[cfg(test)]
 mod tests;
 

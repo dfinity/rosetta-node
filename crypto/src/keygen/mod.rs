@@ -4,14 +4,14 @@ use ic_crypto_internal_csp::keygen::{forward_secure_key_id, public_key_hash_as_k
 use ic_crypto_internal_csp::types::CspPublicKey;
 use ic_crypto_internal_csp::CryptoServiceProvider;
 use ic_crypto_internal_types::encrypt::forward_secure::{
-    CspFsEncryptionPok, CspFsEncryptionPublicKey,
+    CspFsEncryptionPop, CspFsEncryptionPublicKey,
 };
 use ic_interfaces::crypto::{KeyManager, Keygen};
 use ic_protobuf::crypto::v1::NodePublicKeys;
 use ic_registry_client::helper::crypto::CryptoRegistry;
 use ic_types::crypto::{
-    AlgorithmId, CommitteeMemberPublicKey, CryptoError, CryptoResult, IcpPublicKey, KeyId,
-    KeyPurpose, NodePublicKey, UserPublicKey,
+    AlgorithmId, CommitteeMemberPublicKey, CryptoError, CryptoResult, KeyId, KeyPurpose,
+    UserPublicKey,
 };
 use ic_types::RegistryVersion;
 use std::convert::TryFrom;
@@ -27,20 +27,8 @@ impl<C: CryptoServiceProvider> Keygen for CryptoComponentFatClient<C> {
         KeyGenInternal::generate_user_keys_ed25519(&self.csp)
     }
 
-    fn generate_icp_keys(&self) -> CryptoResult<(KeyId, IcpPublicKey)> {
-        unimplemented!()
-    }
-
     fn generate_committee_member_keys(&self) -> CryptoResult<(KeyId, CommitteeMemberPublicKey)> {
         KeyGenInternal::generate_committee_member_keys(&self.csp)
-    }
-
-    fn generate_node_keys(&self) -> CryptoResult<(KeyId, NodePublicKey)> {
-        unimplemented!()
-    }
-
-    fn remove(&self, _key_id: KeyId) {
-        unimplemented!()
     }
 }
 
@@ -133,7 +121,7 @@ impl<C: CryptoServiceProvider> CryptoComponentFatClient<C> {
                 registry_version,
             });
         }
-        let _csp_pok = CspFsEncryptionPok::try_from(&pk_proto).map_err(|e| {
+        let _csp_pop = CspFsEncryptionPop::try_from(&pk_proto).map_err(|e| {
             CryptoError::MalformedPublicKey {
                 algorithm: AlgorithmId::Groth20_Bls12_381,
                 key_bytes: None,
