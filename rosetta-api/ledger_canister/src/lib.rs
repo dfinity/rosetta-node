@@ -1,47 +1,53 @@
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use candid::CandidType;
-use dfn_candid::CandidOne;
 use dfn_protobuf::ProtoBuf;
 use ic_crypto_sha256::Sha256;
 use ic_types::{CanisterId, PrincipalId};
 use intmap::IntMap;
 use lazy_static::lazy_static;
-use on_wire::{FromWire, IntoWire, NewType};
+use on_wire::{FromWire, IntoWire};
 use phantom_newtype::Id;
 use serde::{
-    de::{DeserializeOwned, Deserializer, MapAccess, Visitor},
+    de::{Deserializer, MapAccess, Visitor},
     ser::SerializeMap,
     Deserialize, Serialize, Serializer,
 };
 use std::borrow::Cow;
 use std::collections::hash_map::Entry::{Occupied, Vacant};
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::convert::TryFrom;
 use std::convert::TryInto;
 use std::fmt;
 use std::hash::Hash;
-use std::io::{Seek, SeekFrom};
 use std::marker::PhantomData;
 use std::str::FromStr;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
 
-mod account_identifier;
-mod icpts;
+pub mod account_identifier;
+pub mod icpts;
 #[path = "../gen/ic_ledger.pb.v1.rs"]
 #[rustfmt::skip]
 pub mod protobuf;
-mod timestamp;
-mod validate_endpoints;
+pub mod timestamp;
+pub mod validate_endpoints;
 
 pub mod archive;
 
 use archive::Archive;
+pub use archive::ArchiveOptions;
 
 pub mod spawn;
 pub use account_identifier::{AccountIdentifier, Subaccount};
 pub use icpts::{ICPTs, DECIMAL_PLACES, ICP_SUBDIVIDABLE_BY, MIN_BURN_AMOUNT, TRANSACTION_FEE};
 pub use protobuf::TimeStamp;
+
+// Helper to print messages in magenta
+pub fn print<S: std::convert::AsRef<str>>(s: S)
+where
+    yansi::Paint<S>: std::string::ToString,
+{
+    dfn_core::api::print(yansi::Paint::magenta(s).to_string());
+}
 
 pub const HASH_LENGTH: usize = 32;
 
@@ -485,7 +491,10 @@ pub struct Blockchain {
     /// The timestamp of the most recent block. Must be monotonically
     /// non-decreasing.
     pub last_timestamp: TimeStamp,
-    pub archive: Option<Archive>,
+    pub archive: Arc<RwLock<Option<Archive>>>,
+
+    /// How many blocks have been sent to the archive
+    num_archived_blocks: u64,
 }
 
 impl Default for Blockchain {
@@ -494,7 +503,8 @@ impl Default for Blockchain {
             blocks: vec![],
             last_hash: None,
             last_timestamp: SystemTime::UNIX_EPOCH.into(),
-            archive: None,
+            archive: Arc::new(RwLock::new(None)),
+            num_archived_blocks: 0,
         }
     }
 }
@@ -538,22 +548,12 @@ impl Blockchain {
         self.blocks.last()
     }
 
-    /// Serialize the entire chain by concatenating the serialization
-    /// of the blocks.
-    pub fn encode(&self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
-        writer.write_u64::<LittleEndian>(self.blocks.len() as u64)?;
-        for block in &self.blocks {
-            writer.write_u64::<LittleEndian>(block.size_bytes() as u64)?;
-            writer.write_all(&block.0)?;
-        }
-        Ok(())
+    pub fn num_archived_blocks(&self) -> u64 {
+        self.num_archived_blocks
     }
 
-    pub fn num_archived_blocks(&self) -> u64 {
-        self.archive
-            .as_ref()
-            .map(|archive| archive.num_archived_blocks())
-            .unwrap_or(0)
+    pub fn add_num_archived_blocks(&mut self, to_add: u64) {
+        self.num_archived_blocks += to_add;
     }
 
     pub fn num_unarchived_blocks(&self) -> u64 {
@@ -567,7 +567,7 @@ impl Blockchain {
 
 /// Similar to Vec::split_off. Splits the Vec into two at the given index. `vec`
 /// contains elements [at, len), and the returned Vec contains elements [0, at).
-fn split_off_front(vec: &mut Vec<EncodedBlock>, at: usize) -> Vec<EncodedBlock> {
+pub fn split_off_front(vec: &mut Vec<EncodedBlock>, at: usize) -> Vec<EncodedBlock> {
     let len = vec.len();
     assert!(at <= len, "`at` out of bounds");
 
@@ -633,7 +633,6 @@ where
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Ledger {
     pub balances: LedgerBalances,
-    #[serde(skip)]
     pub blockchain: Blockchain,
     // A cap on the maximum number of accounts
     maximum_number_of_accounts: usize,
@@ -658,6 +657,8 @@ pub struct Ledger {
     /// index / block timestamp. (Block timestamps are monotonically
     /// non-decreasing, so this is the same.)
     transactions_by_height: VecDeque<TransactionInfo>,
+    /// Used to prevent non-whitelisted canisters from sending tokens
+    send_whitelist: HashSet<CanisterId>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -678,6 +679,7 @@ impl Default for Ledger {
             transaction_window: Duration::from_secs(24 * 60 * 60),
             transactions_by_hash: BTreeMap::new(),
             transactions_by_height: VecDeque::new(),
+            send_whitelist: HashSet::new(),
         }
     }
 }
@@ -800,6 +802,7 @@ impl Ledger {
         minting_account: AccountIdentifier,
         timestamp: TimeStamp,
         transaction_window: Option<Duration>,
+        send_whitelist: HashSet<CanisterId>,
     ) {
         self.balances.icpt_pool = ICPTs::MAX;
         self.minting_account_id = Some(minting_account);
@@ -816,58 +819,8 @@ impl Ledger {
             )
             .expect(&format!("Creating account {:?} failed", to)[..]);
         }
-    }
 
-    const VERSION: u32 = 1;
-
-    /// Serialize the state. This is just all the blocks, their notification
-    /// state and a version field to accomodate canister upgrades.
-    pub fn encode(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.write_u32::<LittleEndian>(Self::VERSION).unwrap();
-        self.blockchain.encode(&mut bytes).unwrap();
-        let serialized = bincode::serialize(&self).unwrap();
-        bytes.extend_from_slice(&serialized);
-        bytes
-    }
-
-    pub fn decode(bytes: &[u8]) -> Result<Self, String> {
-        let mut rdr = std::io::Cursor::new(bytes);
-        let version = rdr.read_u32::<LittleEndian>().unwrap();
-
-        match version {
-            Self::VERSION => {
-                // FIXME: bit ugly to do this here rather than in
-                // Blockchain, but we need to apply the blocks to our
-                // state...
-                let nr_blocks = rdr.read_u64::<LittleEndian>().unwrap();
-                let mut blocks = Vec::with_capacity(nr_blocks as usize);
-
-                for _ in 0..nr_blocks {
-                    let block_size = rdr.read_u64::<LittleEndian>().unwrap();
-                    let contents: &[u8] = &rdr.get_ref()
-                        [rdr.position() as usize..(rdr.position() + block_size) as usize];
-                    let block = ProtoBuf::from_bytes(contents.to_vec())?.get();
-                    let raw_block = contents.to_vec().into_boxed_slice().into();
-                    blocks.push((block, raw_block));
-                    rdr.seek(SeekFrom::Current(block_size as i64)).unwrap();
-                }
-
-                let mut state: Ledger =
-                    bincode::deserialize(&bytes[rdr.position() as usize..]).unwrap();
-
-                for (block, raw_block) in blocks.into_iter() {
-                    state.blockchain.add_block_with_encoded(block, raw_block)?;
-                }
-
-                Ok(state)
-            }
-
-            _ => Err(format!(
-                "Cannot decode state from unknown version {}.",
-                version
-            )),
-        }
+        self.send_whitelist = send_whitelist;
     }
 
     pub fn change_notification_state(
@@ -896,6 +849,8 @@ impl Ledger {
         let index = self
             .blockchain
             .archive
+            .try_read()
+            .expect("Failed to get lock on archive")
             .as_ref()
             .expect("archiving not enabled")
             .index();
@@ -916,11 +871,71 @@ impl Ledger {
     }
 
     pub fn split_off_blocks_to_archive(&mut self, at: usize) -> VecDeque<EncodedBlock> {
-        if self.blockchain.archive.is_none() {
+        if self
+            .blockchain
+            .archive
+            .try_read()
+            .expect("Failed to get lock on archive")
+            .is_none()
+        {
             VecDeque::new()
         } else {
             VecDeque::from(split_off_front(&mut self.blockchain.blocks, at))
         }
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub fn archive_blocks(
+        &mut self,
+    ) -> Option<(VecDeque<EncodedBlock>, Arc<RwLock<Option<Archive>>>)> {
+        let (trigger_threshold, num_blocks_to_archive) = match &self.blockchain.archive.try_read() {
+            Ok(l) => match l.as_ref() {
+                Some(a) => (a.trigger_threshold, a.num_blocks_to_archive),
+                None => {
+                    print("[ledger] archive not enabled. skipping archive_blocks()");
+                    return None;
+                }
+            },
+            Err(_) => {
+                print("[ledger] ledger is currently archiving. skipping archive_blocks()");
+                return None;
+            }
+        };
+
+        // Upon reaching the `trigger_threshold` we will archive
+        // `num_blocks_to_archive`. For example, when set to (2000, 1000)
+        // archiving will trigger when there are 2000 blocks in the ledger and
+        // the 1000 oldest bocks will be archived, leaving the remaining 1000
+        // blocks in place.
+        let num_blocks_before = self.blockchain.num_unarchived_blocks();
+
+        if (num_blocks_before as usize) < trigger_threshold {
+            return None;
+        }
+
+        let blocks_to_archive: VecDeque<EncodedBlock> =
+            self.split_off_blocks_to_archive(num_blocks_to_archive);
+
+        let num_blocks_after = self.blockchain.num_unarchived_blocks();
+        print(format!(
+            "[ledger] archive_blocks(): trigger_threshold: {}, num_blocks: {}, blocks before split: {}, blocks to archive: {}, blocks after split: {}",
+            trigger_threshold,
+            num_blocks_to_archive,
+            num_blocks_before,
+            blocks_to_archive.len(),
+            num_blocks_after,
+        ));
+
+        Some((blocks_to_archive, self.blockchain.archive.clone()))
+    }
+
+    pub fn can_send(&self, principal_id: &PrincipalId) -> bool {
+        principal_id.is_self_authenticating()
+            || LEDGER
+                .read()
+                .unwrap()
+                .send_whitelist
+                .contains(&CanisterId::new(*principal_id).unwrap())
     }
 }
 
@@ -957,6 +972,7 @@ pub struct LedgerCanisterInitPayload {
     pub max_message_size_bytes: Option<usize>,
     pub transaction_window: Option<Duration>,
     pub archive_options: Option<ArchiveOptions>,
+    pub send_whitelist: HashSet<CanisterId>,
 }
 
 impl LedgerCanisterInitPayload {
@@ -966,6 +982,7 @@ impl LedgerCanisterInitPayload {
         archive_options: Option<ArchiveOptions>,
         max_message_size_bytes: Option<usize>,
         transaction_window: Option<Duration>,
+        send_whitelist: HashSet<CanisterId>,
     ) -> Self {
         // verify ledger's invariant about the maximum amount
         let _can_sum = initial_values.values().fold(ICPTs::ZERO, |acc, x| {
@@ -981,24 +998,7 @@ impl LedgerCanisterInitPayload {
             max_message_size_bytes,
             transaction_window,
             archive_options,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, CandidType, Clone, Debug, Default, PartialEq, Eq)]
-pub struct ArchiveOptions {
-    pub node_max_memory_size_bytes: Option<usize>,
-    pub max_message_size_bytes: Option<usize>,
-}
-
-impl ArchiveOptions {
-    pub fn new(
-        node_max_memory_size_bytes: Option<usize>,
-        max_message_size_bytes: Option<usize>,
-    ) -> Self {
-        Self {
-            node_max_memory_size_bytes,
-            max_message_size_bytes,
+            send_whitelist,
         }
     }
 }
@@ -1234,6 +1234,7 @@ mod tests {
             PrincipalId::new_user_test_id(1000).into(),
             SystemTime::UNIX_EPOCH.into(),
             None,
+            HashSet::new(),
         );
 
         let txn = Transaction::new(
@@ -1280,9 +1281,9 @@ mod tests {
 
         state.add_block(block2).unwrap();
 
-        let state_bytes = state.encode();
+        let state_bytes = serde_cbor::to_vec(&state).unwrap();
 
-        let state_decoded = Ledger::decode(&state_bytes).unwrap();
+        let state_decoded: Ledger = serde_cbor::from_slice(&state_bytes).unwrap();
 
         assert_eq!(
             state.blockchain.chain_length(),
@@ -1375,7 +1376,15 @@ mod tests {
     #[test]
     fn duplicate_txns() {
         let mut state = Ledger::default();
-        state.blockchain.archive = Some(archive::Archive::new(ArchiveOptions::default()));
+
+        state.blockchain.archive =
+            Arc::new(RwLock::new(Some(archive::Archive::new(ArchiveOptions {
+                trigger_threshold: 2000,
+                num_blocks_to_archive: 1000,
+                node_max_memory_size_bytes: None,
+                max_message_size_bytes: None,
+                controller_id: CanisterId::from_u64(876),
+            }))));
 
         let user1 = PrincipalId::new_user_test_id(1).into();
 
@@ -1457,6 +1466,90 @@ mod tests {
             .unwrap_err()
             .contains("Transaction already exists on chain"));
     }
+
+    #[test]
+    fn get_blocks_returns_correct_blocks() {
+        let mut state = Ledger::default();
+
+        state.from_init(
+            vec![(
+                PrincipalId::new_user_test_id(0).into(),
+                ICPTs::new(1000000, 0).unwrap(),
+            )]
+            .into_iter()
+            .collect(),
+            PrincipalId::new_user_test_id(1000).into(),
+            SystemTime::UNIX_EPOCH.into(),
+            None,
+            HashSet::new(),
+        );
+
+        for i in 0..10 {
+            let txn = Transaction::new(
+                PrincipalId::new_user_test_id(0).into(),
+                PrincipalId::new_user_test_id(1).into(),
+                ICPTs::new(1, 0).unwrap(),
+                TRANSACTION_FEE,
+                Memo(i),
+                TimeStamp::new(1, 0),
+            );
+
+            let block = Block {
+                parent_hash: state.blockchain.last_hash,
+                transaction: txn,
+                timestamp: (SystemTime::UNIX_EPOCH + Duration::new(1, 0)).into(),
+            };
+
+            state.add_block(block).unwrap();
+        }
+
+        let blocks = &state.blockchain.blocks;
+
+        let first_blocks = super::get_blocks(blocks, 0, 1, 5).0.unwrap();
+        for i in 0..first_blocks.len() {
+            let block = first_blocks.get(i).unwrap().decode().unwrap();
+            assert_eq!(block.transaction.memo.0, i as u64);
+        }
+
+        let last_blocks = super::get_blocks(blocks, 0, 6, 5).0.unwrap();
+        for i in 0..last_blocks.len() {
+            let block = last_blocks.get(i).unwrap().decode().unwrap();
+            assert_eq!(block.transaction.memo.0, 5 + i as u64);
+        }
+    }
+
+    #[test]
+    fn failing_archiving_test() {
+        let mut blocks: Vec<EncodedBlock> =
+            (1..20).map(|n: u8| EncodedBlock(Box::new([n]))).collect();
+
+        let old_blocks = blocks.clone();
+
+        let mut blocks_to_archive = VecDeque::from(split_off_front(&mut blocks, 13));
+
+        let chunk = get_chain_prefix(&mut blocks_to_archive, 3);
+
+        // Failed first time
+        recover_from_failed_archive(&mut blocks, blocks_to_archive, VecDeque::from(chunk));
+
+        assert_eq!(&old_blocks, &blocks, "Recovered to previous state");
+
+        let mut blocks_to_archive = VecDeque::from(split_off_front(&mut blocks, 13));
+
+        let _ = get_chain_prefix(&mut blocks_to_archive, 3);
+        // succeeded first time
+
+        let chunk = get_chain_prefix(&mut blocks_to_archive, 3);
+
+        // Failed second time
+        recover_from_failed_archive(&mut blocks, blocks_to_archive, VecDeque::from(chunk));
+
+        assert_eq!(
+            &old_blocks[3..],
+            &blocks[..],
+            "Recovered state, but first three blocks are still archived"
+        )
+    }
 }
 
 /// Argument taken by the send endpoint
@@ -1480,35 +1573,6 @@ pub struct TransactionNotification {
     pub block_height: BlockHeight,
     pub amount: ICPTs,
     pub memo: Memo,
-}
-
-/// A Candid-encoded value returned by transaction notification, limited to
-/// MAX_LENGTH bytes.
-#[derive(Serialize, Deserialize, CandidType, Clone, Hash, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct TransactionNotificationResult(Vec<u8>);
-
-impl TransactionNotificationResult {
-    pub const MAX_LENGTH: usize = 1024;
-
-    pub fn encode<T: CandidType>(x: T) -> Result<Self, String> {
-        let res = Self(CandidOne(x).into_bytes()?);
-        res.check_size()?;
-        Ok(res)
-    }
-
-    pub fn decode<T: CandidType + DeserializeOwned>(self) -> Result<T, String> {
-        Ok(CandidOne::from_bytes(self.0)?.into_inner())
-    }
-
-    pub fn check_size(&self) -> Result<(), String> {
-        if self.0.len() > Self::MAX_LENGTH {
-            return Err(format!(
-                "TransactionNotificationResult is too long ({} bytes)",
-                self.0.len()
-            ));
-        }
-        Ok(())
-    }
 }
 
 /// Argument taken by the notification endpoint
@@ -1633,4 +1697,41 @@ pub fn iter_blocks(blocks: &[EncodedBlock], offset: usize, length: usize) -> Ite
     let end = std::cmp::min(start + length, blocks.len());
     let blocks = blocks[start..end].to_vec();
     IterBlocksRes(blocks)
+}
+
+#[derive(CandidType, Deserialize)]
+pub enum CyclesResponse {
+    CanisterCreated(CanisterId),
+    // Silly requirement by the candid derivation
+    ToppedUp(()),
+    Refunded(String, Option<BlockHeight>),
+}
+
+// Generic for testing
+pub fn recover_from_failed_archive(
+    blocks: &mut Vec<EncodedBlock>,
+    mut blocks_to_archive: VecDeque<EncodedBlock>,
+    chunk: VecDeque<EncodedBlock>,
+) {
+    // re add the blocks on failure. Chunks are processed from the
+    // oldest blocks to the newest so we must prepend a failing chunk
+    // to the front of the VecDeq
+    let chunk_len = chunk.len();
+    for block in chunk.into_iter().rev() {
+        blocks_to_archive.push_front(block);
+    }
+
+    // Similarly, block_to_archive must go back to the the front of the
+    // Vec in the Blockchain
+    use std::iter::FromIterator;
+    let all_blocks: Vec<_> = Vec::from_iter(blocks_to_archive.into_iter().chain(blocks.drain(..)));
+
+    // TODO: It would be better to change blocks from Vec to VecDeque
+    // to avoid copying
+    *blocks = all_blocks;
+
+    print(format!(
+        "[ledger] Re added {} blocks to the ledger",
+        chunk_len
+    ));
 }

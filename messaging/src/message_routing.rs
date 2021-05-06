@@ -565,7 +565,7 @@ impl BatchProcessor for BatchProcessorImpl {
             CertificationScope::Metadata
         };
 
-        // TODO (DFN-1631) Cache network topology and only populate if version
+        // TODO (MR-29) Cache network topology and only populate if version
         // referenced in batch changes.
         let network_topology = self.populate_network_topology(batch.registry_version);
         let provisional_whitelist = self.get_provisional_whitelist(batch.registry_version);

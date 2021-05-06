@@ -25,7 +25,7 @@ pub enum PortConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ExternalConfig {
-    // XXX: we use "flatten" in order to avoid having to write:
+    // We use "flatten" in order to avoid having to write:
     // ```
     // {
     //   http_handler: {

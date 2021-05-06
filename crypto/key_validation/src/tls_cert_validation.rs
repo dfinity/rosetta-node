@@ -9,27 +9,7 @@ use x509_parser::x509::{X509Name, X509Version};
 
 /// Validates a node's TLS certificate.
 ///
-/// This includes verifying that
-/// * the certificate is present and well-formed, i.e., formatted in X.509
-///   version 3 and DER-encoded
-/// * the certificate has a single subject common name (CN) that matches the
-///   node ID
-/// * the certificate has a single issuer common name (CN) that matches the
-///   subject CN (indicating that the certificate is self-signed)
-/// * the certificate is NOT for a certificate authority. This means either 1)
-///   there are no BasicConstraints extensions, or 2) if there are
-///   BasicConstraints then one is `CA` and it's set to `False`.
-/// * the certificate's notBefore date is latest in two minutes from now. This
-///   is to ensure that the certificate is already valid or becomes valid
-///   shortly. The grace period is to account for potential clock differences.
-/// * the certificate's notAfter date indicates according to RFC5280 (section
-///   4.1.2.5; see https://tools.ietf.org/html/rfc5280#section-4.1.2.5) that the
-///   certificate has no well-defined expiration date.
-/// * the certificate's signature algorithm is Ed25519 (OID 1.3.101.112)
-/// * the certificate's public key is valid, which includes checking that the
-///   key is a point on the curve and in the right subgroup
-/// * the certificate's signature is valid w.r.t. the certificate's public key,
-///   that is, that the certificate is correctly self-signed
+/// See the crate documentation for the exact checks that are performed.
 pub fn validate_tls_certificate(
     tls_certificate: &Option<X509PublicKeyCert>,
     node_id: NodeId,

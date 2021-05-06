@@ -1,6 +1,5 @@
 //! This module encapsulates all components required for establishing of a
-//! distributed consensus. It breaks down the main `on_state_change` call
-//! into calling each subcomponent in round-robin manner.
+//! distributed consensus.
 
 mod block_maker;
 mod catchup_package_maker;
@@ -96,7 +95,8 @@ enum ConsensusSubcomponent {
 /// registry for longer than this, the subnet should halt.
 pub const HALT_AFTER_REGISTRY_UNREACHABLE: Duration = Duration::from_secs(60 * 60);
 
-/// A struct that holds other consensus subcomponents.
+/// ConsensusImpl holds all consensus subcomponents, and implements the
+/// Consensus trait by calling each subcomponent in round-robin manner.
 pub struct ConsensusImpl {
     notary: Notary,
     finalizer: Finalizer,
@@ -141,11 +141,11 @@ impl ConsensusImpl {
         logger: ReplicaLogger,
         local_store_time_reader: Option<Arc<dyn LocalStoreCertifiedTimeReader>>,
     ) -> Self {
-        let payload_builder = PayloadBuilderImpl::new_rc(
+        let payload_builder = Arc::new(PayloadBuilderImpl::new(
             ingress_selector.clone(),
             xnet_payload_builder,
             metrics_registry.clone(),
-        );
+        ));
 
         let current_time = time_source.get_relative_time();
         let mut last_invoked: BTreeMap<ConsensusSubcomponent, Time> = BTreeMap::new();

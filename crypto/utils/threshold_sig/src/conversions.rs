@@ -3,6 +3,16 @@ use ic_types::crypto::threshold_sig::ThresholdSigPublicKey;
 use std::io::{Error, ErrorKind, Result};
 use std::path::Path;
 
+/// Parse a PEM format threshold signature public key from a named file.
+///
+/// # Arguments
+/// * `pem_file` names the filesystem path where the key to be read from is
+///   located.
+/// # Returns
+/// The decoded `ThresholdSigPublicKey`
+/// # Error
+/// * `std::io::Error` if the file cannot be opened, or if the contents
+/// are not PEM, or if the encoded key is not BLS12-381.
 pub fn parse_threshold_sig_key(pem_file: &Path) -> Result<ThresholdSigPublicKey> {
     fn invalid_data_err(msg: impl std::string::ToString) -> Error {
         Error::new(ErrorKind::InvalidData, msg.to_string())
@@ -37,6 +47,7 @@ pub fn parse_threshold_sig_key(pem_file: &Path) -> Result<ThresholdSigPublicKey>
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
     use super::*;
 
     #[test]

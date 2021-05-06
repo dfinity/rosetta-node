@@ -186,11 +186,7 @@ impl SignedIngressBuilder {
     }
 
     pub fn build(&self) -> SignedIngress {
-        // TODO: Maybe panic if expiry_time() was not called?
-        // On the assumption that all messages should have an expiry time.
-        // Panicking would quickly tell callers that they've made a mistake.
-        // Or maybe non-optional fields should be passed as params to the
-        // builder's constructor directly?
+        // TODO(NNS1-502): Consider panicking if expiry_time() was not called
 
         let content = HttpSubmitContent::Call {
             update: self.update.clone(),

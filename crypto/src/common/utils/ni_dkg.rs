@@ -1,3 +1,4 @@
+//! Utilities for non-interactive Distributed Key Generation (NI-DKG).
 use crate::common::utils::temp_crypto::TempCryptoComponentGeneric;
 use crate::common::utils::TempCryptoComponent;
 use ic_crypto_internal_csp::CryptoServiceProvider;
@@ -22,11 +23,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::TryFrom;
 use std::sync::Arc;
-use tempfile::TempDir;
 
 #[cfg(test)]
 mod tests;
 
+/// A config used to create an initial NI-DKG transcript. Such a transcript is
+/// used to bootstrap a subnet for testing purposes.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct InitialNiDkgConfig {
     dkg_config: NiDkgConfig,
@@ -94,8 +96,8 @@ impl InitialNiDkgConfig {
 /// Creates an initial DKG transcript.
 ///
 /// The transcript is created by performing the DKG protocol in a _centralized_
-/// manner. Creating the initial DKG transcript this way is insecure. This
-/// temporary solution will be replaced eventually (see also CRP-410).
+/// manner. This method must only be used for testing purposes since the
+/// transcript is generated in a centralized manner.
 ///
 /// # Panics
 /// * If the `receiver_keys` don't match the receivers in the
@@ -114,7 +116,8 @@ pub fn initial_dkg_transcript(
     transcript_with_single_dealing(dkg_config, dealer_crypto)
 }
 
-/// Converts a NI-DKG transcript into the corresponding protobuf representation.
+/// Converts an NI-DKG transcript into the corresponding protobuf
+/// representation.
 pub fn initial_ni_dkg_transcript_record_from_transcript(
     transcript: NiDkgTranscript,
 ) -> InitialNiDkgTranscriptRecord {
@@ -197,18 +200,4 @@ fn transcript_with_single_dealing<C: CryptoServiceProvider>(
     dealer_crypto
         .create_transcript(dkg_config, &map_with(dealer_crypto.node_id, dealing))
         .expect("internal error: failed to create transcript")
-}
-
-pub fn temp_dir() -> TempDir {
-    tempfile::Builder::new()
-        .prefix("ic_crypto_")
-        .tempdir()
-        .expect("unable to create temp dir")
-}
-
-pub fn path_str(temp_dir: &TempDir) -> &str {
-    temp_dir
-        .path()
-        .to_str()
-        .expect("path could not be converted to string")
 }

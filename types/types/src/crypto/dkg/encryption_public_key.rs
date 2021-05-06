@@ -1,6 +1,7 @@
 use super::*;
 use ic_crypto_internal_types::sign::threshold_sig::dkg::encryption_public_key::CspEncryptionPublicKey;
 
+/// An encryption public key for interactive DKG.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct EncryptionPublicKey {
     internal: CspEncryptionPublicKey,

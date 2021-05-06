@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use crate::imported_utilities::sign_utils as utils;
 use ic_crypto_internal_basic_sig_der_utils::subject_public_key_info_der;
 use ic_crypto_internal_test_vectors::test_data;

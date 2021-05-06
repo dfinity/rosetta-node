@@ -1,8 +1,13 @@
+//! The P2P module exposes the peer-to-peer functionality.
+//!
+//! Specifically, it constructs all the artifact pools and the Consensus/P2P
+//! time source.
+
 use crate::event_handler::{AdvertSubscriber, P2PEventHandlerControl, P2PEventHandlerImpl};
 use crate::gossip_protocol::{Gossip, GossipImpl};
 use crate::metrics::{DownloadManagementMetrics, DownloadPrioritizerMetrics, P2PMetrics};
 use crate::utils::FlowMapper;
-use crate::{download_management::DownloadManagerImpl, event_handler::IngressThrottle};
+use crate::{download_management::DownloadManagerImpl, event_handler::IngressThrottler};
 use crate::{
     download_prioritization::DownloadPrioritizerImpl, event_handler::IngressEventHandlerImpl,
 };
@@ -61,16 +66,18 @@ use tokio::task::JoinHandle;
 use ic_interfaces::registry::LocalStoreCertifiedTimeReader;
 use ic_types::malicious_flags::MaliciousFlags;
 
-/// Periodic timer duration to poll P2P component.
-const P2P_TIMER_DURATION_MSEC: u64 = 100;
+/// Periodic timer duration in milliseconds between polling calls to the P2P
+/// component.
+const P2P_TIMER_DURATION_MS: u64 = 100;
 
-/// A helper to run P2P.
+/// A helper service to run the P2P component.
 pub struct P2PService {
     p2p: Option<P2P>,
     p2p_arbiters: Vec<Arbiter>,
 }
 
 impl Drop for P2PService {
+    /// The method drops the P2PService.
     fn drop(&mut self) {
         if let Some(p2p) = self.p2p.take() {
             std::mem::drop(p2p);
@@ -88,30 +95,40 @@ impl Drop for P2PService {
 }
 
 impl P2PRunner for P2PService {
+    /// The method starts the run loop of the P2P service.
     fn run(&mut self) {
         self.p2p.as_mut().unwrap().start_timer();
     }
 }
 
-/// The P2P component.
+/// The P2P struct, which encapsulates all relevant components including gossip
+/// and event handler control.
 #[allow(unused)]
 pub struct P2P {
+    /// The logger.
     pub(crate) log: ReplicaLogger,
+    /// The time source.
     time_source: Arc<SysTimeSource>,
+    /// The *Gossip* struct with automatic reference counting.
     gossip: Arc<GossipImpl>,
+    /// The task handles.
     task_handles: Vec<JoinHandle<()>>,
+    /// Flag indicating if P2P has been terminated.
     killed: Arc<AtomicBool>,
+    /// The P2P metrics.
     metrics: P2PMetrics,
+    /// The P2P event handler control with automatic reference counting.
     event_handler: Arc<dyn P2PEventHandlerControl>,
 }
 
-/// Comment(eftychis): That we have separate ArtifactKinds for testing and
-/// non-testing is problematic and adds complexity while distancing us from
-/// reality.
+/// The P2P state sync client.
 #[derive(Clone)]
 pub enum P2PStateSyncClient {
+    /// The main client variant.
     Client(Arc<StateManagerImpl>),
+    /// The test client variant.
     TestClient(),
+    /// The test chunking pool variant.
     TestChunkingPool(
         Arc<dyn ArtifactClient<TestArtifact>>,
         Arc<dyn ArtifactProcessor<TestArtifact> + Sync + 'static>,
@@ -119,7 +136,7 @@ pub enum P2PStateSyncClient {
 }
 
 impl P2P {
-    /// Fetch Gossip Config from the registry
+    /// Fetch the Gossip configuration from the registry.
     pub fn fetch_gossip_config(
         registry_client: Arc<dyn RegistryClient>,
         subnet_id: SubnetId,
@@ -133,8 +150,8 @@ impl P2P {
         }
     }
 
-    /// Construct a P2P instance. Currently it constructs all the
-    /// artifact pools and the consensus/p2p time source. Artifact
+    /// The function constructs a P2P instance. Currently, it constructs all the
+    /// artifact pools and the Consensus/P2P time source. Artifact
     /// clients are constructed and run in their separate actors.
     #[allow(
         clippy::too_many_arguments,
@@ -228,8 +245,6 @@ impl P2P {
         )?;
 
         let gossip = Arc::new(GossipImpl::new(
-            node_id,
-            subnet_id,
             download_manager,
             Arc::clone(&artifact_manager),
             log.clone(),
@@ -261,7 +276,7 @@ impl P2P {
         Ok((ingress_handler as Arc<_>, p2p_runner, consensus_pool_cache))
     }
 
-    // Starts the P2P timer task
+    /// The method starts the P2P timer task in the background.
     fn start_timer(&mut self) {
         let gossip = self.gossip.clone();
         let event_handler = self.event_handler.clone();
@@ -270,7 +285,7 @@ impl P2P {
         let handle = tokio::task::spawn_blocking(move || {
             debug!(log, "P2P::p2p_timer(): started processing",);
 
-            let timer_duration = Duration::from_millis(P2P_TIMER_DURATION_MSEC);
+            let timer_duration = Duration::from_millis(P2P_TIMER_DURATION_MS);
             while !killed.load(SeqCst) {
                 std::thread::sleep(timer_duration);
                 gossip.on_timer(&event_handler);
@@ -281,7 +296,7 @@ impl P2P {
 }
 
 impl Drop for P2P {
-    // Signals the tasks to exit and waits for them to complete
+    /// The method signals the tasks to exit and waits for them to complete.
     fn drop(&mut self) {
         self.killed.store(true, SeqCst);
         while let Some(handle) = self.task_handles.pop() {
@@ -291,18 +306,16 @@ impl Drop for P2P {
     }
 }
 
-/// Setup and return the ArtifactManager and Consensus Pool
+/// The function sets up and returns the Artifact Manager and Consensus Pool.
 ///
-/// ArtifactManager runs all artifact clients as separate actors.
+/// The Artifact Manager runs all artifact clients as separate actors.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn setup_artifact_manager(
     p2p_arbiters: &mut Vec<Arbiter>,
     node_id: NodeId,
-    // ConsensusCrypto is the extension of Crypto trait, and we can
-    // not downcast traits (or I am missing something about the crypto
-    // trait hierarchy). This is a bad solution to the testing
-    // problem.
     _crypto: Arc<dyn Crypto>,
+    // ConsensusCrypto is an extension of the Crypto trait and we can
+    // not downcast traits.
     consensus_crypto: Arc<dyn ConsensusCrypto>,
     certifier_crypto: Arc<dyn certification::CertificationCrypto>,
     ingress_sig_crypto: Arc<dyn IngressSigVerifier + Send + Sync>,
@@ -326,7 +339,7 @@ fn setup_artifact_manager(
     Arc<dyn ArtifactManager>,
     Arc<dyn ConsensusPoolCache>,
     Arc<P2PEventHandlerImpl>,
-    IngressThrottle,
+    IngressThrottler,
 )> {
     p2p_arbiters.push(Arbiter::new());
     let mut artifact_manager_maker = manager::ArtifactManagerMaker::new(time_source.clone());
@@ -345,7 +358,6 @@ fn setup_artifact_manager(
 
     let event_handler = Arc::new(P2PEventHandlerImpl::new(
         node_id,
-        subnet_id,
         replica_logger.clone(),
         &metrics_registry,
         P2P::fetch_gossip_config(registry_client.clone(), subnet_id),
@@ -405,14 +417,14 @@ fn setup_artifact_manager(
     let ingress_manager = Arc::new(ingress_manager);
 
     {
-        // Create consensus client
+        // Create the consensus client.
         let event_handler = event_handler.clone();
         p2p_arbiters.push(Arbiter::new());
         let (consensus_client, addr) = actors::ConsensusClient::run(
             &p2p_arbiters.last().unwrap(),
             move |advert| event_handler.broadcast_advert(advert.into()),
             || {
-                ic_consensus::setup(
+                ic_consensus::consensus::setup(
                     consensus_replica_config.clone(),
                     consensus_config,
                     Arc::clone(&registry_client),
@@ -440,7 +452,7 @@ fn setup_artifact_manager(
     }
 
     {
-        // Create ingress client
+        // Create the ingress client.
         let event_handler = event_handler.clone();
         p2p_arbiters.push(Arbiter::new());
         let (ingress_client, addr) = actors::IngressClient::run(
@@ -456,7 +468,7 @@ fn setup_artifact_manager(
     }
 
     {
-        // Create certification client
+        // Create the certification client.
         let event_handler = event_handler.clone();
         p2p_arbiters.push(Arbiter::new());
         let (certification_client, addr) = actors::CertificationClient::run(
@@ -515,6 +527,7 @@ fn setup_artifact_manager(
     ))
 }
 
+/// The function initializes the artifact pools.
 #[allow(clippy::type_complexity)]
 pub(crate) fn init_artifact_pools(
     subnet_id: SubnetId,
@@ -550,18 +563,21 @@ pub(crate) fn init_artifact_pools(
     )
 }
 
-// The following types are used by the testing framework. However, it is a
-// unique ArtifactKind and is parameterized by it. One simple way is to simply
-// move this type and use it explicitly here.
+// The following types are used for testing only. Ideally, they should only
+// appear in the test module, but `TestArtifact` is used by
+// `P2PStateSyncClient` so these definitions are still required here.
 
-// TODO: Need to make Pool Mgr actually generic. This is WIP
 #[derive(Eq, PartialEq)]
+/// The artifact struct used by the testing framework.
 pub struct TestArtifact;
-
+/// The artifact message used by the testing framework.
 pub type TestArtifactMessage = FileTreeSyncArtifact;
+/// The artifact ID used by the testing framework.
 pub type TestArtifactId = FileTreeSyncId;
+/// The attribute of the artifact used by the testing framework.
 pub type TestArtifactAttribute = FileTreeSyncAttribute;
 
+/// `TestArtifact` implements the `ArtifactKind` trait.
 impl ArtifactKind for TestArtifact {
     const TAG: ArtifactTag = ArtifactTag::FileTreeSyncArtifact;
     type Message = TestArtifactMessage;
@@ -570,6 +586,8 @@ impl ArtifactKind for TestArtifact {
     type Attribute = TestArtifactAttribute;
     type Filter = ();
 
+    /// The function converts a TestArtifactMessage to an advert for a
+    /// TestArtifact.
     fn to_advert(msg: &TestArtifactMessage) -> Advert<TestArtifact> {
         Advert {
             attribute: msg.id.to_string(),

@@ -27,7 +27,9 @@ pub const DECIMAL_PLACES: u32 = 8;
 /// How many times can ICPs be divided
 pub const ICP_SUBDIVIDABLE_BY: u64 = 100_000_000;
 
-pub const TRANSACTION_FEE: ICPTs = ICPTs { e8s: 137 };
+/// This is 1/10,000th of an ICP, this is probably more than it costs us to
+/// store a transaction so it will likely come down in the future
+pub const TRANSACTION_FEE: ICPTs = ICPTs { e8s: 10_000 };
 pub const MIN_BURN_AMOUNT: ICPTs = TRANSACTION_FEE;
 
 impl ICPTs {
@@ -93,7 +95,7 @@ impl ICPTs {
     /// let icpt = ICPTs::new(12, 200).unwrap();
     /// assert_eq!(icpt.get_e8s(), 1200000200)
     /// ```
-    pub fn get_e8s(self) -> u64 {
+    pub const fn get_e8s(self) -> u64 {
         self.e8s
     }
 

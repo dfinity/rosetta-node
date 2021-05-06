@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use crate::tls_utils::registry::TlsRegistry;
 use crate::tls_utils::temp_crypto_component_with_tls_keys;
 use crate::tls_utils::test_client::{Client, ClientBuilder};

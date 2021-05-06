@@ -4,16 +4,18 @@ use crate::visitor::{named_blob, named_num, named_subtree, subtree};
 use Pattern as P;
 use TraceEntry::{EndSubtree, EnterEdge, StartSubtree, VisitBlob, VisitNum};
 
-// Sample tree traversal:
-//
-// *
-// |
-// +- blobmap
-// |  +- 0 → [0xcafebabe]
-// |  `- 1 → [0xdeadbeef]
-// `- num
-//    +- from → 5
-//    `- to   → 10
+/// Sample tree traversal:
+///
+/// ```text
+/// *
+/// |
+/// +- blobmap
+/// |  +- 0 → [0xcafebabe]
+/// |  `- 1 → [0xdeadbeef]
+/// `- num
+///    +- from → 5
+///    `- to   → 10
+/// ```
 fn traverse_sample_tree<V: Visitor>(mut v: V) -> V::Output {
     let blobmap = [&[0xca, 0xfe, 0xba, 0xbe], &[0xde, 0xad, 0xbe, 0xef]];
 

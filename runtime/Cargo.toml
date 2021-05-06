@@ -14,7 +14,6 @@ ic-config = { path = "../config" }
 ic-interfaces = { path = "../interfaces" }
 ic-logger = { path = "../monitoring/logger" }
 ic-replicated-state = { path = "../replicated_state" }
-ic-canister-sandbox-replica-controller = { path = "../canister_sandbox/replica_controller" }
 ic-utils = { path = "../utils" }
 ic-types = { path = "../types/types" }
 ic-wasm-types = { path = "../types/wasm_types" }

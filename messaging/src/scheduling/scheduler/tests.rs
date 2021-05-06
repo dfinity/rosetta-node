@@ -17,7 +17,7 @@ use ic_test_utilities::{
     mock_time,
     state::{
         arb_replicated_state, get_initial_state, get_running_canister, get_stopped_canister,
-        get_stopping_canister, initial_execution_state, CanisterStateBuilder,
+        get_stopping_canister, initial_execution_state, new_canister_state, CanisterStateBuilder,
     },
     types::{
         ids::{canister_test_id, message_test_id, subnet_test_id, user_test_id},
@@ -38,7 +38,7 @@ use mockall::predicate::always;
 use proptest::prelude::*;
 use std::cmp::min;
 use std::collections::{BTreeSet, HashMap};
-use std::{convert::TryFrom, path::PathBuf};
+use std::{convert::TryFrom, path::PathBuf, time::Duration};
 
 const CANISTER_FREEZE_BALANCE_RESERVE: Cycles = Cycles::new(5_000_000_000_000);
 const MAX_INSTRUCTIONS_PER_MESSAGE: NumInstructions = NumInstructions::new(1 << 30);
@@ -613,6 +613,82 @@ fn dont_execute_any_canisters_if_not_enough_cycles() {
     );
 }
 
+// Creates an initial state with some canisters that contain very few cycles.
+// Ensures that after `execute_round` returns, the canisters have been
+// uninstalled.
+#[test]
+fn canisters_with_insufficient_cycles_are_uninstalled() {
+    let num_instructions_consumed_per_msg = NumInstructions::from(5);
+    let num_canisters = 3;
+    let scheduler_test_fixture = SchedulerTestFixture {
+        scheduler_config: SchedulerConfig {
+            scheduler_cores: 1,
+            max_instructions_per_round: num_instructions_consumed_per_msg
+                - NumInstructions::from(1),
+            max_instructions_per_message: num_instructions_consumed_per_msg,
+            ..SchedulerConfig::application_subnet()
+        },
+        metrics_registry: MetricsRegistry::new(),
+        canister_num: num_canisters,
+        message_num_per_canister: 0,
+    };
+    let exec_env = default_exec_env_mock(
+        &scheduler_test_fixture,
+        0,
+        scheduler_test_fixture
+            .scheduler_config
+            .max_instructions_per_message,
+        NumBytes::new(0),
+    );
+    let exec_env = Arc::new(exec_env);
+
+    let ingress_history_writer = default_ingress_history_writer_mock(0);
+    let ingress_history_writer = Arc::new(ingress_history_writer);
+    scheduler_test(
+        &scheduler_test_fixture,
+        |scheduler| {
+            let mut state = get_initial_state(0, 0);
+            // Set the cycles balance of all canisters to small enough amount so
+            // that they cannot pay for their resource usage but also do not set
+            // it to 0 as that is a simpler test.
+            for i in 0..num_canisters {
+                let canister_state = CanisterStateBuilder::new()
+                    .with_canister_id(canister_test_id(i))
+                    .with_cycles(Cycles::from(100))
+                    .with_wasm(vec![1; 1 << 30])
+                    .build();
+                state.put_canister_state(canister_state);
+            }
+            state.metadata.batch_time = UNIX_EPOCH + Duration::from_secs(2);
+
+            state = scheduler.execute_round(
+                state,
+                Randomness::from([0; 32]),
+                UNIX_EPOCH + Duration::from_secs(1),
+                ExecutionRound::from(1),
+                ProvisionalWhitelist::Set(BTreeSet::new()),
+            );
+            for (_, canister) in state.canister_states.iter() {
+                assert!(canister.execution_state.is_none());
+                assert_eq!(
+                    canister.scheduler_state.compute_allocation,
+                    ComputeAllocation::zero()
+                );
+                assert!(canister.system_state.memory_allocation.is_none());
+            }
+            assert_eq!(
+                scheduler
+                    .metrics
+                    .num_canisters_uninstalled_out_of_cycles
+                    .get() as u64,
+                num_canisters
+            );
+        },
+        ingress_history_writer,
+        exec_env,
+    );
+}
+
 #[test]
 fn can_execute_messages_with_just_enough_cycles() {
     // In this test we have 3 canisters with 1 message each and the maximum allowed
@@ -716,7 +792,7 @@ fn execute_only_canisters_with_messages() {
                 scheduler_test_fixture.canister_num,
                 scheduler_test_fixture.message_num_per_canister,
             );
-            state.put_canister_state(CanisterState::new(
+            state.put_canister_state(new_canister_state(
                 canister_test_id(3),
                 user_test_id(24).get(),
                 *INITIAL_CYCLES,
@@ -1029,7 +1105,7 @@ fn can_record_metrics_single_scheduler_thread() {
                 });
         }
 
-        let mut canister_state = CanisterState::new(
+        let mut canister_state = new_canister_state(
             canister_id,
             user_test_id(24).get(),
             *INITIAL_CYCLES,
@@ -1240,7 +1316,7 @@ fn requested_method_does_not_exist() {
             );
 
             let canister_id = canister_test_id(0);
-            let mut canister_state = CanisterState::new(
+            let mut canister_state = new_canister_state(
                 canister_id,
                 user_test_id(24).get(),
                 *INITIAL_CYCLES,

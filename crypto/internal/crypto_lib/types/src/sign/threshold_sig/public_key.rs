@@ -73,19 +73,20 @@ pub mod bls12_381 {
         }
 
         impl TryFrom<&str> for PublicKeyBytes {
-            type Error = ThresholdSigPublicKeyError;
+            type Error = ThresholdSigPublicKeyBytesConversionError;
 
             fn try_from(string: &str) -> Result<Self, Self::Error> {
-                let bytes =
-                    base64::decode(string).map_err(|e| ThresholdSigPublicKeyError::Malformed {
+                let bytes = base64::decode(string).map_err(|e| {
+                    ThresholdSigPublicKeyBytesConversionError::Malformed {
                         key_bytes: Some(string.as_bytes().to_vec()),
                         internal_error: format!(
                             "public key is not a valid base64 encoded string: {}",
                             e
                         ),
-                    })?;
+                    }
+                })?;
                 if bytes.len() != PublicKeyBytes::SIZE {
-                    return Err(ThresholdSigPublicKeyError::Malformed {
+                    return Err(ThresholdSigPublicKeyBytesConversionError::Malformed {
                         key_bytes: Some(string.as_bytes().to_vec()),
                         internal_error: "public key length is incorrect".to_string(),
                     });
@@ -97,7 +98,7 @@ pub mod bls12_381 {
         }
 
         impl TryFrom<&String> for PublicKeyBytes {
-            type Error = ThresholdSigPublicKeyError;
+            type Error = ThresholdSigPublicKeyBytesConversionError;
 
             fn try_from(string: &String) -> Result<Self, Self::Error> {
                 PublicKeyBytes::try_from(string.as_str())
@@ -105,8 +106,9 @@ pub mod bls12_381 {
         }
     }
 
+    /// May occur when converting threshold signature public keys to bytes.
     #[derive(Clone, Debug, PartialEq, Eq, Hash, Error)]
-    pub enum ThresholdSigPublicKeyError {
+    pub enum ThresholdSigPublicKeyBytesConversionError {
         #[error("malformed threshold signature public key: {internal_error}")]
         Malformed {
             key_bytes: Option<Vec<u8>>,

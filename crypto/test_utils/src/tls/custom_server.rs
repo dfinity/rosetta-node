@@ -1,3 +1,6 @@
+//! A custom, configurable TLS server that does not rely on the crypto
+//! implementation. It is purely for testing the client.
+#![allow(clippy::unwrap_used)]
 use crate::tls::set_peer_verification_cert_store;
 use crate::tls::x509_certificates::CertWithPrivateKey;
 use ic_protobuf::registry::crypto::v1::X509PublicKeyCert;
@@ -10,6 +13,8 @@ const DEFAULT_MAX_PROTO_VERSION: SslVersion = SslVersion::TLS1_3;
 const DEFAULT_ALLOWED_CIPHER_SUITES: &str = "TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384";
 const DEFAULT_ALLOWED_SIGNATURE_ALGORITHMS: &str = "ed25519";
 
+/// A builder that allows to configure and build a `CustomServer` using a fluent
+/// API.
 pub struct CustomServerBuilder {
     max_proto_version: Option<SslVersion>,
     allowed_cipher_suites: Option<String>,
@@ -17,7 +22,6 @@ pub struct CustomServerBuilder {
     expected_error: Option<String>,
 }
 
-#[allow(unused)]
 impl CustomServerBuilder {
     pub fn with_max_protocol_version(mut self, version: SslVersion) -> Self {
         self.max_proto_version = Some(version);
@@ -99,6 +103,7 @@ impl CustomServer {
         }
     }
 
+    /// Run this client asynchronously. This allows a client to connect.
     pub async fn run(self) {
         let mut tokio_tcp_listener = TcpListener::from_std(self.listener.try_clone().unwrap())
             .expect("failed to create tokio TcpListener");
@@ -126,6 +131,7 @@ impl CustomServer {
         }
     }
 
+    /// Returns the port this server is running on.
     pub fn port(&self) -> u16 {
         self.listener
             .local_addr()
@@ -133,6 +139,7 @@ impl CustomServer {
             .port()
     }
 
+    /// Returns the server certificate.
     pub fn cert(&self) -> X509PublicKeyCert {
         X509PublicKeyCert {
             certificate_der: self
@@ -143,6 +150,7 @@ impl CustomServer {
         }
     }
 
+    /// Returns the PEM encoded server certificate.
     pub fn cert_pem(&self) -> Vec<u8> {
         self.server_cert
             .x509()

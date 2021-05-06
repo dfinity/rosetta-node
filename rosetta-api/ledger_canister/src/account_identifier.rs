@@ -42,7 +42,7 @@ impl Into<proto::AccountIdentifier> for AccountIdentifier {
     }
 }
 
-static SUB_ACCOUNT_ZERO: Subaccount = Subaccount([0; 32]);
+pub static SUB_ACCOUNT_ZERO: Subaccount = Subaccount([0; 32]);
 static ACCOUNT_DOMAIN_SEPERATOR: &[u8] = b"\x0Aaccount-id";
 
 impl AccountIdentifier {
@@ -242,6 +242,12 @@ impl TryFrom<&[u8]> for Subaccount {
 
     fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
         slice.try_into().map(Subaccount)
+    }
+}
+
+impl Display for Subaccount {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        hex::encode(self.0).fmt(f)
     }
 }
 

@@ -7,6 +7,9 @@ use super::*;
 use secp256k1::curve::Affine;
 use std::fmt;
 
+#[cfg(test)]
+mod tests;
+
 // Note: This is needed because Rust doesn't support const generics yet.
 impl fmt::Debug for EphemeralPopBytes {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -30,9 +33,10 @@ impl Eq for EphemeralPublicKey {}
 
 impl Zeroize for EphemeralSecretKey {
     fn zeroize(&mut self) {
-        // TODO(DFN-1475)
+        self.0.clear()
     }
 }
+
 /* TODO(CRP-103): Zeroize all secret keys properly; Zeroize does not work as originally thought.
 impl Drop for EphemeralSecretKey {
     fn drop(&mut self) {

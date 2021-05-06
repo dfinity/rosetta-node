@@ -1,43 +1,63 @@
-// Artifact download list. This data structure tracks artifacts being
-// currently downloaded by P2P. The tracking is done using 2 indices.
-//
-// a. The artifact index
-//
-//    Artifacts being downloaded can be looked up using their artifact
-//    IDs using this index. Artifact download schedule is determined
-//    by advert priority class i.e. higher priority adverts are
-//    scheduled for download ahead of lower priority adverts. Within
-//    the same priority class adverts are scheduled for download in a
-//    first come first serve order.
-//
-// b. Download Expiry Index
-//
-//    Artifacts downloads are allotted a finite time duration to
-//    conclude (artifact timeout). This duration is roughly based on
-//    the size of the artifact and the count of unique peers that may
-//    be contacted for the artifact. Artifact downloads thus expire at
-//    a future time instant called the expiry-instant. The expiry
-//    index orders the downloads in increasing order of their
-//    expiry-instant. Note: This index may contain multiple downloads
-//    expiring at a given expiry-instant.
+//! A data structure that tracks the download process of artifacts.
+//!
+//! <h1>Overview</h1>
+//!
+//! Artifact download list. This data structure tracks artifacts being
+//! currently downloaded by P2P. The tracking is done using 2 indices.
+//!
+//! a. The artifact index
+//!
+//!    Artifacts being downloaded can be looked up using their artifact
+//!    IDs using this index. Artifact download schedule is determined
+//!    by advert priority class i.e. higher priority adverts are
+//!    scheduled for download ahead of lower priority adverts. Within
+//!    the same priority class adverts are scheduled for download in a
+//!    first come first serve order.
+//!
+//! b. Download Expiry Index
+//!
+//!    Artifacts downloads are allotted a finite time duration to
+//!    conclude (artifact timeout). This duration is roughly based on
+//!    the size of the artifact and the count of unique peers that may
+//!    be contacted for the artifact. Artifact downloads thus expire at
+//!    a future time instant called the expiry-instant. The expiry
+//!    index orders the downloads in increasing order of their
+//!    expiry-instant. Note: This index may contain multiple downloads
+//!    expiring at a given expiry-instant.
+
+use core::ops::Deref;
+use ic_interfaces::artifact_manager::ArtifactManager;
+use ic_logger::replica_logger::ReplicaLogger;
+use ic_logger::warn;
+use ic_protobuf::registry::subnet::v1::GossipConfig;
+use ic_types::{artifact::ArtifactId, chunkable::Chunkable, p2p::GossipAdvert, NodeId};
+use linked_hash_map::LinkedHashMap;
+use std::{
+    collections::BTreeMap,
+    time::{Duration, Instant},
+};
+
+/// The trait defines the behavior of the `ArtifactDownloadList` data structure.
 pub(crate) trait ArtifactDownloadList: Send + Sync {
-    // Schedule a download to occur.
-    //
-    //     Admission control for the artifact download list. Given a
-    //     advert checks if the download can be scheduled without
-    //     violating the IC download constraints. Returns an artifact
-    //     download tracker if the download scheduling succeeds.
-    //
-    // Parameters:
-    //
-    //     peer_id: peer from which download is to be initiated. This
-    //              peers quota will be charged for the download
-    //     advert:  advert for the artifact being downloaded
-    //     download_config: download configuration for the p2p instance
-    //
-    //     max_peer: estimated number of peers that can
-    //               be contacted for this download.
-    //     artifact_manager: AM associated with this p2p instance.
+    /// ```text
+    /// The method schedules a download.
+    ///
+    /// Admission control for the artifact download list. Given a
+    /// advert checks if the download can be scheduled without
+    /// violating the IC download constraints. Returns an artifact
+    /// download tracker if the download scheduling succeeds.
+    ///
+    /// Parameters:
+    ///
+    ///     `peer_id`: peer from which download is to be initiated. This
+    ///              peers quota will be charged for the download
+    ///     `advert`:  advert for the artifact being downloaded
+    ///     `download_config`: download configuration for the p2p instance
+    ///
+    ///     `max_peer`: estimated number of peers that can
+    ///               be contacted for this download.
+    ///     `artifact_manager`: AM associated with this p2p instance.
+    /// ```
     fn schedule_download(
         &mut self,
         peer_id: NodeId,
@@ -47,13 +67,15 @@ pub(crate) trait ArtifactDownloadList: Send + Sync {
         artifact_manager: &dyn ArtifactManager,
     ) -> Option<&ArtifactTracker>;
 
-    /// Remove and return expired artifact downloads from the list.
+    /// The method removes and returns the expired artifact downloads from the
+    /// list.
     ///
     /// Returns:
     ///    Vec<ArtifactId>: Vector of ids for the expired downloads.
     fn prune_expired_downloads(&mut self) -> Vec<ArtifactId>;
 
-    /// Get the artifact download tracker associated by its artifact_id
+    /// The method gets the artifact download tracker associated the given
+    /// artifact ID.
     ///
     /// Parameters:
     ///     artifact_id: artifact id for the query
@@ -62,57 +84,51 @@ pub(crate) trait ArtifactDownloadList: Send + Sync {
     ///     Option for the tracker
     fn get_tracker(&mut self, artifact_id: &ArtifactId) -> Option<&mut ArtifactTracker>;
 
-    /// Remove any artifact download tracker from the download list.
+    /// The method removes the artifact download tracker for the given artifact
+    /// ID if it exists.
     ///
-    /// Does nothing if the download tracker does not exist.
+    /// The method does nothing if the download tracker does not exist.
     ///
     /// Parameters:
     ///    artifact_id: id for the download that needs to be removed.
     fn remove_tracker(&mut self, artifact_id: &ArtifactId);
 }
 
-use linked_hash_map::LinkedHashMap;
-use std::{
-    collections::BTreeMap,
-    time::{Duration, Instant},
-};
-
+/// The artifact tracker.
 pub(crate) struct ArtifactTracker {
-    expiry_instant: Instant, // time limit for the artifact download
-    pub chunkable: Box<dyn Chunkable + Send + Sync>, // Chunkable interface
-    pub peer_id: NodeId,     // The node whose quota is charged for this artifact
+    /// Time limit for the artifact download.
+    expiry_instant: Instant,
+    /// The artifact, which implements the `Chunkable` interface.
+    pub chunkable: Box<dyn Chunkable + Send + Sync>,
+    /// The ID of the node whose quota is charged for this artifact.
+    pub peer_id: NodeId,
 }
 
-use core::ops::Deref;
-use ic_interfaces::artifact_manager::ArtifactManager;
-use ic_logger::replica_logger::ReplicaLogger;
-use ic_logger::warn;
-use ic_protobuf::registry::subnet::v1::GossipConfig;
-use ic_types::{artifact::ArtifactId, chunkable::Chunkable, p2p::GossipAdvert, NodeId};
-
+/// The implementation of the `ArtifactDownloadList` trait.
 pub(crate) struct ArtifactDownloadListImpl {
-    // Artifact list is a LinkedHashmap. This ensures fairness by
-    // ordering items by their download initiation time while providing O(1) lookup using artifact
-    // ID.
-    //
-    // Collections like BTreeMap are ordered based on the key. A
-    // key ordered data structure would incorrectly favor smaller
-    // artifacts with smaller ids for download selection
+    // A LinkedHashmap is used for the artifacts because it ensures fairness by ordering items by
+    // their download initiation time while providing constant lookup time complexity using the
+    // artifact ID.
+    /// Artifacts to be downloaded with their corresponding trackers.
     artifacts: LinkedHashMap<ArtifactId, ArtifactTracker>,
+    /// Expiry indices.
     expiry_index: BTreeMap<Instant, Vec<ArtifactId>>,
+    /// The logger instance.
     log: ReplicaLogger,
 }
 
-// Hides indexing complexities and allows the list to be manipulated
-// using standard container API.
+/// The `Deref` trait is implemented to hide indexing complexities and allow the
+/// list to be manipulated using standard container APIs.
 impl Deref for ArtifactDownloadListImpl {
     type Target = LinkedHashMap<ArtifactId, ArtifactTracker>;
+    /// The method returns the artifacts to be downloaded.
     fn deref(&self) -> &Self::Target {
         &self.artifacts
     }
 }
 
 impl ArtifactDownloadListImpl {
+    /// The constructor creates an `ArtifactDownloadListImpl` instance.
     pub fn new(log: ReplicaLogger) -> Self {
         ArtifactDownloadListImpl {
             log,
@@ -121,7 +137,11 @@ impl ArtifactDownloadListImpl {
         }
     }
 }
+
+/// `ArtifactDownloadListImpl` implements the `ArtifactDownloadList` trait.
 impl ArtifactDownloadList for ArtifactDownloadListImpl {
+    /// The function checks if the download can be scheduled without violating
+    /// the IC download constraints.
     fn schedule_download(
         &mut self,
         peer_id: NodeId,
@@ -130,8 +150,7 @@ impl ArtifactDownloadList for ArtifactDownloadListImpl {
         max_advertizing_peer: u32,
         artifact_manager: &dyn ArtifactManager,
     ) -> Option<&ArtifactTracker> {
-        // schedule a download of an artifact that are not currently
-        // being downloaded
+        // Schedule a download of an artifact that is not currently being downloaded.
         if !self.artifacts.contains_key(&advert.artifact_id) {
             let artifact_id = &advert.artifact_id;
             match artifact_manager.get_remaining_quota(artifact_id.into(), peer_id) {
@@ -142,13 +161,11 @@ impl ArtifactDownloadList for ArtifactDownloadListImpl {
 
             if let Some(chunk_tracker) = artifact_manager.get_chunk_tracker(&advert.artifact_id) {
                 let requested_instant = Instant::now();
-                // Calculate the worst-case time estimate for the
-                // artifact download.  This worst-case estimate
-                // assumes that all chunks for the artifact will
-                // timeout for each peer that has advertised the
-                // artifact.
+                // Calculate the worst-case time estimate for the artifact download, which
+                // assumes that all chunks for the artifact will time out for
+                // each peer that has advertised the artifact.
                 //
-                // TODO: Revisit this in the context of NNS sub net: DFN-1661
+                // TODO: Revisit this in the context of subnets with many nodes: P2P-510
                 let download_eta_ms =
                     std::cmp::max(advert.size as u64 / gossip_config.max_chunk_size as u64, 1)
                         * max_advertizing_peer as u64
@@ -173,19 +190,21 @@ impl ArtifactDownloadList for ArtifactDownloadListImpl {
         self.artifacts.get(&advert.artifact_id)
     }
 
+    ///The function removes and returns the expired artifact downloads from the
+    /// artifact download list.
     fn prune_expired_downloads(&mut self) -> Vec<ArtifactId> {
         let now_instant = Instant::now();
-
-        // 2 phase pruning of the expired downloads.
+        // 2-phase pruning of the expired downloads:
         //
-        // In the first phase, we walk the time ordered expired-instants
-        // collecting instants until we are past the current time instant.
+        // In the first phase, the list of time-ordered expired-instants is traversed,
+        // collecting instants until the current time instant is passed.
         //
-        // In the second phase we extract artifacts from
-        // expired-instants collected in phase 1. Finally we delete
-        // the expired-instant entries.
+        // In the second phase, artifacts are extracted from the
+        // expired-instants collected in the first phase.
+        //
+        // Finally, the expired-instant entries are deleted.
 
-        // collect the expired instances
+        // Collect the expired instances.
         let expired_instances: Vec<_> = self
             .expiry_index
             .iter()
@@ -193,7 +212,7 @@ impl ArtifactDownloadList for ArtifactDownloadListImpl {
             .map(|(expiry_instant, expired_artifacts)| (*expiry_instant, expired_artifacts.clone()))
             .collect();
 
-        // extract artifact ids from the expired instances
+        // Extract artifact IDs from the expired instances.
         let mut expired_artifacts = Vec::new();
         expired_instances
             .iter()
@@ -204,21 +223,25 @@ impl ArtifactDownloadList for ArtifactDownloadListImpl {
                 });
             });
 
-        // Remove the expired instances
+        // Remove the expired instances.
         expired_instances.into_iter().for_each(|(instant, _)| {
             self.expiry_index.remove(&instant);
         });
         expired_artifacts
     }
 
+    /// The method returns the artifact tracker associated with the given
+    /// artifact ID.
     fn get_tracker(&mut self, artifact_id: &ArtifactId) -> Option<&mut ArtifactTracker> {
         self.artifacts.get_mut(&artifact_id)
     }
 
+    /// The function removes the artifact download tracker if it exists in the
+    /// download list.
     fn remove_tracker(&mut self, artifact_id: &ArtifactId) {
-        // remove from the artifact id index
+        // Remove the artifact ID from the artifact ID index.
         if let Some(tracker) = self.artifacts.remove(&artifact_id) {
-            // remove from the expiry index
+            // Remove the artifact ID from the expiry entry.
             if let Some(expiry_entry) = self.expiry_index.get_mut(&tracker.expiry_instant) {
                 expiry_entry.retain(|expired_artifacts_id| expired_artifacts_id != artifact_id);
                 // remove expiry entry if no more artifacts are expiring at that instant
@@ -240,20 +263,21 @@ mod tests {
     use ic_types::crypto::CryptoHash;
     use ic_types::p2p;
 
+    /// The function schedules the download of the given number of adverts.
     fn try_begin_download(
         num_adverts: i32,
         gossip_config: &GossipConfig,
         artifact_manager: &dyn ArtifactManager,
         artifact_download_list: &mut ArtifactDownloadListImpl,
     ) -> std::time::Instant {
-        // insert and remove artifacts
+        // Insert and remove artifacts.
         let mut max_expiry = std::time::Instant::now();
         for advert_id in 0..num_adverts {
             let gossip_advert = GossipAdvert {
                 artifact_id: ArtifactId::FileTreeSync(advert_id.to_string()),
                 attribute: ArtifactAttribute::FileTreeSync(advert_id.to_string()),
                 size: 0,
-                // This is ok, this is just a test
+                // The integrity hash is not required in the test.
                 integrity_hash: CryptoHash(vec![]),
             };
             let tracker = artifact_download_list
@@ -273,9 +297,11 @@ mod tests {
         max_expiry
     }
 
+    /// The function tests that artifact download list is pruned correctly when
+    /// artifact downloads expire.
     #[test]
     fn dowload_list_expire_test() {
-        // insert and timeout artifacts
+        // Insert and time out artifacts.
         let artifact_manager = TestArtifactManager {
             quota: std::usize::MAX,
             num_chunks: 0,
@@ -303,14 +329,16 @@ mod tests {
         assert_eq!(expired.len(), num_adverts as usize);
         assert_eq!(artifact_download_list.len(), 0);
 
-        // check that expired artifact list is empty
+        // Check that the expired artifact list is empty.
         let expired = artifact_download_list.prune_expired_downloads();
         assert_eq!(expired.len(), 0);
         assert_eq!(artifact_download_list.len(), 0);
     }
 
+    /// The function tests that artifact trackers can be removed from the
+    /// artifact download list.
     #[test]
-    fn dowload_list_remove_test() {
+    fn download_list_remove_test() {
         let artifact_manager = TestArtifactManager {
             quota: std::usize::MAX,
             num_chunks: 0,

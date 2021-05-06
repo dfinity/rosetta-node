@@ -85,10 +85,6 @@ impl SystemStateAccessor for SystemStateAccessorDirect {
         // Scale amount that can be accepted by what is actually available on
         // the call context.
         let call_context_manager = system_state.call_context_manager_mut().unwrap();
-        // XXX: call_context_id should actually not be passed in as
-        // parameter, it should be known to system state accessor (there
-        // can only be one specific call context for any execution,
-        // it is part of the "system state").
         let call_context = call_context_manager
             .call_context_mut(*call_context_id)
             .unwrap();
@@ -103,9 +99,6 @@ impl SystemStateAccessor for SystemStateAccessorDirect {
     }
 
     fn msg_cycles_available(&self, call_context_id: &CallContextId) -> HypervisorResult<Cycles> {
-        // XXX: call_context_id should not be parameter, but be
-        // known to system_state_accessor (see reasoning above)
-
         let system_state = self.system_state.borrow();
         // A call context manager exists as the canister is either in
         // `Running` or `Stopping` status when executing a message so
@@ -197,7 +190,7 @@ impl SystemStateAccessor for SystemStateAccessorDirect {
                 compute_allocation,
                 amount,
             )
-            .map_err(|_| HypervisorError::InsufficientCycles {
+            .map_err(|_| HypervisorError::InsufficientCyclesBalance {
                 available: system_state.cycles_account.cycles_balance(),
                 requested: amount,
             })?;
@@ -213,12 +206,22 @@ impl SystemStateAccessor for SystemStateAccessorDirect {
         self.system_state.borrow_mut().certified_data = data;
     }
 
-    fn register_callback(&self, callback: Callback) -> HypervisorResult<CallbackId> {
+    fn register_callback(&self, callback: Callback) -> CallbackId {
         let mut system_state = self.system_state.borrow_mut();
-        let call_context_manager = system_state
-            .call_context_manager_mut()
-            .ok_or(HypervisorError::CanisterStopped)?;
-        Ok(call_context_manager.register_callback(callback))
+        // A call context manager exists as the canister is either in
+        // `Running` or `Stopping` status when executing a message so
+        // this unwrap should be safe.
+        let call_context_manager = system_state.call_context_manager_mut().unwrap();
+        call_context_manager.register_callback(callback)
+    }
+
+    fn unregister_callback(&self, callback_id: CallbackId) -> Option<Callback> {
+        let mut system_state = self.system_state.borrow_mut();
+        // A call context manager exists as the canister is either in
+        // `Running` or `Stopping` status when executing a message so
+        // this unwrap should be safe.
+        let call_context_manager = system_state.call_context_manager_mut().unwrap();
+        call_context_manager.unregister_callback(callback_id)
     }
 
     fn push_output_request(

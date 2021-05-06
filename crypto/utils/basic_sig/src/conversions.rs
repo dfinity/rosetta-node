@@ -150,12 +150,14 @@ impl Ed25519SecretKeyConversions for internal_types::SecretKey {
         if correct_oid() != key_data.oid {
             return Err(Ed25519DerParseError::OidValueError(key_data.oid));
         }
-        if key_data.pk_bytes.is_none() {
-            return Err(Ed25519DerParseError::MissingPublicKey());
-        }
+
+        let pk_bytes = key_data
+            .pk_bytes
+            .ok_or_else(Ed25519DerParseError::MissingPublicKey)?;
+
         let sk = internal_types::SecretKey::try_from(&*key_data.sk_bytes)
             .map_err(Ed25519DerParseError::IncorrectSecretKeyLength)?;
-        let pk = internal_types::PublicKey::try_from(&*key_data.pk_bytes.unwrap())
+        let pk = internal_types::PublicKey::try_from(pk_bytes.as_ref())
             .map_err(Ed25519DerParseError::IncorrectPublicKeyLength)?;
         Ok((sk, pk))
     }

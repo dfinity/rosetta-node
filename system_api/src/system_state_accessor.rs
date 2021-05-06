@@ -25,21 +25,9 @@ pub trait SystemStateAccessor {
     fn mint_cycles(&self, amount: Cycles) -> HypervisorResult<()>;
 
     /// Accepts cycles from given call context.
-    ///
-    /// XXX: Call context itself should be "known" to system state
-    /// accessor already -- there can only be one specific call context
-    /// for any execution, and this knowledge is basically part of the
-    /// system state already. Changing this requires a bigger
-    /// refactoring including ApiType and others, though.
     fn msg_cycles_accept(&self, call_context_id: &CallContextId, max_amount: Cycles) -> Cycles;
 
     /// Determines cycles given in call context.
-    ///
-    /// XXX: Call context itself should be "known" to system state
-    /// accessor already -- there can only be one specific call context
-    /// for any execution, and this knowledge is basically part of the
-    /// system state already. Changing this requires a bigger
-    /// refactoring including ApiType and others, though.
     fn msg_cycles_available(&self, call_context_id: &CallContextId) -> HypervisorResult<Cycles>;
 
     /// Determines size of stable memory in Web assembly pages.
@@ -79,25 +67,18 @@ pub trait SystemStateAccessor {
 
     /// (Re-)add cycles to canister. This is intended to be used to
     /// reclaim cycles from unfulfilled requests.
-    ///
-    /// XXX: the actual cycles should be managed purely internally to
-    /// the system state. This however requires a bigger refactoring
-    /// to split user/system state also for messages in progress.
     fn canister_cycles_refund(&self, cycles: Cycles);
 
     /// Set certified data.
     fn set_certified_data(&self, data: Vec<u8>);
 
     /// Registers callback for call return.
-    ///
-    /// XXX: call_context_id management should be hidden inside system
-    /// state. See comments above regarding call contexts.
-    fn register_callback(&self, callback: Callback) -> HypervisorResult<CallbackId>;
+    fn register_callback(&self, callback: Callback) -> CallbackId;
+
+    /// Unregister callback for call return.
+    fn unregister_callback(&self, callback_id: CallbackId) -> Option<Callback>;
 
     /// Pushes outgoing request.
-    ///
-    /// XXX: call context management should be hidden entirely inside
-    /// system state. See comments above regarding call contexts.
     fn push_output_request(
         &self,
         canister_current_memory_usage: NumBytes,

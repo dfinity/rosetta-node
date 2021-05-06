@@ -16,7 +16,7 @@ To run from command line and see debug output:
 RUST_LOG=Debug cargo test --test integration multiple_nodes_are_live -- --nocapture
 ....
 
-The beginning of the output log is something like below:
+After the compilation, the beginning of the test log is something like below:
 
 ....
 running 1 test
@@ -41,9 +41,6 @@ Because `cargo test` has its own command line arguments, we choose to set parame
 `DELIVERY`:: One of `Sequential`, `RandomReceive`, `RandomGraph`. Default is to randomly choose one of the three strategies based on `RANDOM_SEED`.
 `DEGREE` :: Random graph degree (number of connections per node), only applicable to the `RandomGraph` strategy. Default is to randomly choose a suitable degree that is less than `NUM_NODES`.
 
-Details of the different execution and delivery strategies are explained in 
-https://docs.dfinity.systems/dfinity/spec/replica/protocol/consensus/testing_framework/[Consensus Testing Framework Spec].
-
 For example, the following command will set up a network of 6 nodes and run until 100 rounds of finalized blocks are observed for all of them:
 
 `NUM_NODES=6 NUM_ROUNDS=100 RUST_LOG=Debug cargo test --test integration multiple_nodes_are_live -- --nocapture`
@@ -55,7 +52,7 @@ For example, the following command will only print debug messages from `Consensu
 
 `RUST_LOG=integration::framework::driver=Debug ...`
 
-Please also note that in order to show `Trace` level log messages, setting `RUST_LOG=Trace` is not enough. You will have to modify `Cargo.toml` and change `slog` setting to the following:
+Please also note that in order to show `Trace` level log messages, setting `RUST_LOG=Trace` might not be enough. You might need to modify `Cargo.toml` and change `slog` setting to something like the following:
 
 `slog = { version = "2.5.2", features = ["max_level_trace", "release_max_level_warn" ] }`
 

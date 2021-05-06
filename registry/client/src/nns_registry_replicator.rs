@@ -555,8 +555,3 @@ impl InternalState {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    // left as an exercise for the reader.
-}

@@ -8,6 +8,63 @@
 //! messages (adverts, requests) and data messages (artifact chunks for ingress
 //! manager, consensus (incl DKG and certification) and state sync). Thus,
 //! Transport has to handle 3 x 3 flows per peer.
+//!
+//! The diagram below shows the flow/connect set up sequence:
+//!
+//! Transport clients invoke add_peer(peer_id) to set up the
+//! connections with a valid peer. Control plane then looks up the
+//! client config and sets up the peer state. If we are the TCP/TLS
+//! client, the control plane initiates the connections for all the
+//! flows with the peer. If we are the server, we wait for peers to
+//! initiate the flow connections. When a connection is established,
+//! the ownership is passed from control plane to the data plane via
+//! on_connnect(flow_id, socket_read_half, socket_write_half)
+//! callback. The read/write halves are passed to the receive/send
+//! tasks respectively. At this point, data plane can start performing
+//! IOs on the peer connection.  If the data plane tasks detect a
+//! connection error, IOs are paused on the connection, and control
+//! plane is notified via on_disconnect(flow_id) callback. Control
+//! plane then initiates re-connection with the peer.  Successfully
+//! re-connections are handled according via the on_connect() described
+//! earlier.
+//!
+//! The send data path has two hops:
+//!
+//! Transport client calls send(flow_id, message). The message is
+//! en-queued to the per-flow send queue. The send data plane task then
+//! dequeues the messages and sends it over the socket.
+//!
+//! The receive data path has one hop:
+//!
+//! The receive data plane task scans the read half of the
+//! connections. Once a complete message is read from the socket, the
+//! client's on_message(flow_id, message) callback is invoked for
+//! messages delivery.
+//!
+//! ```text
+//! +-----------------------------------------------------+
+//! |    Transport Client (Gossip)                        |
+//! +-----------------------------------------------------+
+//!      |                                 |           ^
+//!      | start_connection()      send()  |           |
+//!      v                                 |           |
+//! +----------+                 +-------------------------------+
+//! |          |                 |         |           |         |
+//! | Control  | on_connect()    |   Send Queues       |         |
+//! | Plane    |---------------->|         |           |         |
+//! |          |                 |  +------v----+  +----------+  |
+//! |          | on_disconnect() |  | Send Task |  | Receive  |  |
+//! |          |<----------------|  +-----------+  | Task     |  |
+//! +----------+                 |         |       +----------+  |
+//!                              |         |           |         |
+//!                              |         v           |         |
+//!                              |  +------------+ +------------+|
+//!                              |  | Connection | | Connection ||
+//!                              |  | Write Half | | Read Half  ||
+//!                              |  +------------+ +------------+|
+//!                              |     Data Plane                |
+//!                              +-------------------------------+
+//! ```
 
 use crate::metrics::{ControlPlaneMetrics, DataPlaneMetrics, SendQueueMetrics};
 use crate::types::TransportImpl;
@@ -28,6 +85,7 @@ use std::sync::{Arc, RwLock, Weak};
 use tokio::runtime::Handle;
 
 impl TransportImpl {
+    /// Creates a new Transport instance
     pub fn new(
         node_id: NodeId,
         config: TransportConfig,
@@ -59,6 +117,8 @@ impl TransportImpl {
     }
 }
 
+/// Creates a new instance of
+/// [`TransportImpl`](../types/struct.TransportImpl.html).
 pub fn create_transport(
     node_id: NodeId,
     transport_config: TransportConfig,
@@ -79,62 +139,8 @@ pub fn create_transport(
     )
 }
 
-// The diagram below shows the flow/connect set up sequence:
-//
-// Transport clients invoke add_peer(peer_id) to set up the
-// connections with a valid peer. Control plane then looks up the
-// client config and sets up the peer state. If we are the TCP/TLS
-// client, the control plane initiates the connections for all the
-// flows with the peer. If we are the server, we wait for peers to
-// initiate the flow connections. When a connection is established,
-// the ownership is passed from control plane to the data plane via
-// on_connnect(flow_id, socket_read_half, socket_write_half)
-// callback. The read/write halves are passed to the receive/send
-// tasks respectively. At this point, data plane can start performing
-// IOs on the peer connection.  If the data plane tasks detect a
-// connection error, IOs are paused on the connection, and control
-// plane is notified via on_disconnect(flow_id) callback. Control
-// plane then initiates re-connection with the peer.  Successfully
-// re-connections are handled according via the on_connect() described
-// earlier.
-//
-// The send data path has two hops:
-//
-// Transport client calls send(flow_id, message). The message is
-// en-queued to the per-flow send queue. The send data plane task then
-// dequeues the messages and sends it over the socket.
-//
-// The receive data path has one hop:
-//
-// The receive data plane task scans the read half of the
-// connections. Once a complete message is read from the socket, the
-// client's on_message(flow_id, message) callback is invoked for
-// messages delivery.
-//
-// +-----------------------------------------------------+
-// |    Transport Client (Gossip)                        |
-// +-----------------------------------------------------+
-//      |                                 |           ^
-//      | start_connection()      send()  |           |
-//      v                                 |           |
-// +----------+                 +-------------------------------+
-// |          |                 |         |           |         |
-// | Control  | on_connect()    |   Send Queues       |         |
-// | Plane    |---------------->|         |           |         |
-// |          |                 |  +------v----+  +----------+  |
-// |          | on_disconnect() |  | Send Task |  | Receive  |  |
-// |          |<----------------|  +-----------+  | Task     |  |
-// +----------+                 |         |       +----------+  |
-//                              |         |           |         |
-//                              |         v           |         |
-//                              |  +------------+ +------------+|
-//                              |  | Connection | | Connection ||
-//                              |  | Write Half | | Read Half  ||
-//                              |  +------------+ +------------+|
-//                              |     Data Plane                |
-//                              +-------------------------------+
-//
-
+/// Trait implementation for
+/// [`Transport`](../../ic_interfaces/transport/trait.Transport.html).
 impl Transport for TransportImpl {
     fn register_client(
         &self,

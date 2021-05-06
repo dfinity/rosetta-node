@@ -92,6 +92,7 @@ impl From<ErrorCode> for RejectCode {
             InterCanisterQueryLoopDetected => CanisterError,
             UnknownManagementMessage => CanisterReject,
             InvalidManagementPayload => CanisterReject,
+            InsufficientCyclesInCall => CanisterError,
         }
     }
 }
@@ -135,6 +136,7 @@ pub enum ErrorCode {
     InterCanisterQueryLoopDetected = 517,
     UnknownManagementMessage = 518,
     InvalidManagementPayload = 519,
+    InsufficientCyclesInCall = 520,
 }
 
 impl From<candid::Error> for UserError {
@@ -181,6 +183,7 @@ impl TryFrom<u64> for ErrorCode {
             517 => Ok(ErrorCode::InterCanisterQueryLoopDetected),
             518 => Ok(ErrorCode::UnknownManagementMessage),
             519 => Ok(ErrorCode::InvalidManagementPayload),
+            520 => Ok(ErrorCode::InsufficientCyclesInCall),
             _ => Err(ProxyDecodeError::ValueOutOfRange {
                 typ: "ErrorCode",
                 err: err.to_string(),

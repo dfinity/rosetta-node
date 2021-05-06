@@ -12,6 +12,9 @@ use zeroize::Zeroize;
 #[cfg(test)]
 pub mod arbitrary;
 
+#[cfg(test)]
+mod tests;
+
 /// Forward secure encryption secret key used in Groth20.
 ///
 /// Note: This is the CBOR serialised form of a linked list.  Given that the
@@ -51,32 +54,16 @@ pub struct BTENode {
 
 impl Zeroize for BTENode {
     fn zeroize(&mut self) {
-        // Note: Alas size_of() doesn't work on generic types, afaik.  There are open
-        // issues on rust-lang about this.
-        fn zeroize_g1(item: &mut G1Bytes) {
-            #[cfg_attr(tarpaulin, skip)]
-            unsafe {
-                core::mem::transmute::<G1Bytes, [u8; core::mem::size_of::<G1Bytes>()]>(*item)
-                    .copy_from_slice(&[0u8; core::mem::size_of::<G1Bytes>()]);
-            }
-        }
-        fn zeroize_g2(item: &mut G2Bytes) {
-            #[cfg_attr(tarpaulin, skip)]
-            unsafe {
-                core::mem::transmute::<G2Bytes, [u8; core::mem::size_of::<G2Bytes>()]>(*item)
-                    .copy_from_slice(&[0u8; core::mem::size_of::<G2Bytes>()]);
-            }
-        }
         // tau is not secret.  It is a common parameter and doesn't need to be zeroed.
-        zeroize_g1(&mut self.a);
-        zeroize_g2(&mut self.b);
+        self.a.zeroize();
+        self.b.zeroize();
         for node in self.d_t.iter_mut() {
-            zeroize_g2(node);
+            node.zeroize();
         }
         for node in self.d_h.iter_mut() {
-            zeroize_g2(node);
+            node.zeroize();
         }
-        zeroize_g2(&mut self.e);
+        self.e.zeroize();
     }
 }
 

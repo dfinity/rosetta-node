@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use super::fixtures::cache::STATE_WITH_TRANSCRIPT;
 use crate::api::NiDkgCspClient;
 use crate::secret_key_store::volatile_store::VolatileSecretKeyStore;

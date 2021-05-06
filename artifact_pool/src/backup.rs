@@ -165,18 +165,39 @@ fn store_sync(artifacts: Vec<ConsensusMessage>, path: PathBuf) {
 // Purges all backup artifacts grouped by heights older than the specified
 // threshold.
 fn purge(threshold_secs: Duration, path: PathBuf) -> Result<(), std::io::Error> {
-    let dirs: Vec<_> = fs::read_dir(&path)?
+    let height_dirs: Vec<_> = fs::read_dir(&path)?
         .map(|dir_entry| {
             dir_entry.unwrap_or_else(|err| panic!("Couldn't read the path: {:?}", err))
         })
+        .flat_map(|entry| {
+            fs::read_dir(entry.path())
+                .expect("Couldn't read the height group directory")
+                .map(|entry| entry.expect("Couldn't read the entry"))
+        })
         .collect();
-    for entry in dirs {
+    for entry in height_dirs {
         let age = entry
             .metadata()?
             .modified()?
             .elapsed()
             .unwrap_or_else(|err| panic!("System time error: {:?}", err));
         if age > threshold_secs {
+            fs::remove_dir_all(entry.path())?;
+        }
+    }
+    // After we purged expired heights, let's purge empty purged groups.
+    let group_dirs: Vec<_> = fs::read_dir(&path)?
+        .map(|dir_entry| {
+            dir_entry.unwrap_or_else(|err| panic!("Couldn't read the path: {:?}", err))
+        })
+        .collect();
+    for entry in group_dirs {
+        let age = entry
+            .metadata()?
+            .modified()?
+            .elapsed()
+            .unwrap_or_else(|err| panic!("System time error: {:?}", err));
+        if age > threshold_secs && entry.path().read_dir()?.next().is_none() {
             fs::remove_dir_all(entry.path())?;
         }
     }
@@ -299,7 +320,9 @@ impl BackupArtifact {
     }
 
     // Each artifact will be stored separately used the following path:
-    // <subnet_id>/height/<artifact_specific_name>.bin
+    //
+    // <subnet_id>/<(height / N) * N>/height/<artifact_specific_name>.bin
+    //
     // Note that the artifact specific name must contain all parameters to be
     // differentiated not only across other artifacts of the same replica, but also
     // across artifacts from all replicas. E.g., since we use multi-signatures for
@@ -338,13 +361,18 @@ impl BackupArtifact {
             RandomBeacon(artifact) => (artifact.height(), "random_beacon.bin".to_string()),
             CatchUpPackage(artifact) => (artifact.height(), "catch_up_package.bin".to_string()),
         };
-        let path_with_height = path.join(height.to_string());
+        // We group heights by directories to avoid running into any kind of unexpected
+        // FS inode limitations. Each group directory will contain at most
+        // `group_size` heights.
+        let group_size = 10000;
+        let group_key = (height.get() / group_size) * group_size;
+        let path_with_height = path.join(group_key.to_string()).join(height.to_string());
         (path_with_height, file_name)
     }
 }
 
 // Dumps a CryptoHash to a hex-encoded string.
-fn bytes_to_hex_str<T>(hash: &CryptoHashOf<T>) -> String {
+pub(super) fn bytes_to_hex_str<T>(hash: &CryptoHashOf<T>) -> String {
     hash.clone()
         .get()
         .0

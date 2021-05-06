@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use crate::secret_key_store::{Scope, SecretKeyStore, SecretKeyStoreError};
 use crate::threshold::ni_dkg::{NIDKG_FS_SCOPE, NIDKG_THRESHOLD_SCOPE};
 use crate::types::CspSecretKey;
@@ -298,7 +299,7 @@ impl SecretKeyStore for ProtoSecretKeyStore {
             }
             None => Ok(false),
         });
-        result.unwrap()
+        result.expect("lambda unexpectedly returned Err")
     }
 
     fn retain<F>(&mut self, filter: F, scope: Scope)

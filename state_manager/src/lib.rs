@@ -185,9 +185,17 @@ impl TryFrom<pb::StateMetadata> for StateMetadata {
     }
 }
 
+/// This type holds per-height metadata related to certification.
 #[derive(Debug)]
 struct CertificationMetadata {
-    hash_tree: Arc<HashTree>,
+    /// Fully materialized hash tree built from the part of the state that is
+    /// certified every round.  Dropped as soon as a higher state is certified.
+    hash_tree: Option<Arc<HashTree>>,
+    /// Root hash of the tree above. It's stored even if the hash tree is
+    /// dropped.
+    certified_state_hash: CryptoHash,
+    /// Certification of the root hash delivered by consensus via
+    /// `deliver_state_certification()`.
     certification: Option<Certification>,
 }
 
@@ -895,17 +903,19 @@ impl StateManagerImpl {
     fn latest_certified_state(
         &self,
     ) -> Option<(Arc<ReplicatedState>, Certification, Arc<HashTree>)> {
-        let (height, certification, hash_tree) =
-            self.states
-                .read()
-                .certifications_metadata
-                .iter()
-                .rev()
-                .find_map(|(height, metadata)| {
-                    metadata.certification.clone().map(|certification| {
-                        (*height, certification, Arc::clone(&metadata.hash_tree))
-                    })
-                })?;
+        let (height, certification, hash_tree) = self
+            .states
+            .read()
+            .certifications_metadata
+            .iter()
+            .rev()
+            .find_map(|(height, metadata)| {
+                let hash_tree = metadata.hash_tree.as_ref()?;
+                metadata
+                    .certification
+                    .clone()
+                    .map(|certification| (*height, certification, Arc::clone(hash_tree)))
+            })?;
         let state = self.get_state_at(height).ok()?;
         Some((state.take(), certification, hash_tree))
     }
@@ -944,8 +954,11 @@ impl StateManagerImpl {
             .with_label_values(&["hash_tree"])
             .observe(elapsed.as_secs_f64());
 
+        let certified_state_hash = crypto_hash_of_tree(&hash_tree);
+
         CertificationMetadata {
-            hash_tree: Arc::new(hash_tree),
+            hash_tree: Some(Arc::new(hash_tree)),
+            certified_state_hash,
             certification: None,
         }
     }
@@ -1044,12 +1057,11 @@ impl StateManagerImpl {
         let states = self.states.read();
         if let Some(metadata) = states.certifications_metadata.get(&prev_height) {
             state.metadata.prev_state_hash = Some(CryptoHashOfPartialState::from(
-                crypto_hash_of_tree(&metadata.hash_tree),
+                metadata.certified_state_hash.clone(),
             ));
             return;
         }
 
-        // TODO(roman): fix all tests that form gaps in states and make it fatal
         warn!(
             self.log,
             "Couldn't populate previous state hash for height {}", height,
@@ -1210,7 +1222,8 @@ impl StateManagerImpl {
         states.certifications_metadata.insert(
             height,
             CertificationMetadata {
-                hash_tree: Arc::new(hash_tree),
+                certified_state_hash: crypto_hash_of_tree(&hash_tree),
+                hash_tree: Some(Arc::new(hash_tree)),
                 certification: None,
             },
         );
@@ -1454,7 +1467,7 @@ impl StateManager for StateManagerImpl {
             .map(|(height, metadata)| {
                 (
                     *height,
-                    CryptoHashOfPartialState::from(crypto_hash_of_tree(&metadata.hash_tree)),
+                    CryptoHashOfPartialState::from(metadata.certified_state_hash.clone()),
                 )
             })
             .collect()
@@ -1467,12 +1480,13 @@ impl StateManager for StateManagerImpl {
             .with_label_values(&["deliver_state_certification"])
             .start_timer();
 
+        let certification_height = certification.height;
         let mut states = self.states.write();
         if let Some(metadata) = states
             .certifications_metadata
             .get_mut(&certification.height)
         {
-            let hash = crypto_hash_of_tree(&metadata.hash_tree);
+            let hash = metadata.certified_state_hash.clone();
             assert_eq!(
                 certification.signed.content.hash.get_ref(),
                 &hash,
@@ -1482,6 +1496,17 @@ impl StateManager for StateManagerImpl {
             );
             update_latest_height(&self.latest_certified_height, certification.height);
             metadata.certification = Some(certification);
+        }
+
+        for (_, certification_metadata) in states
+            .certifications_metadata
+            .range_mut(Self::INITIAL_STATE_HEIGHT..certification_height)
+        {
+            if let Some(tree) = certification_metadata.hash_tree.take() {
+                self.deallocation_sender
+                    .send(Box::new(tree))
+                    .expect("failed to send object to deallocation thread");
+            }
         }
     }
 
@@ -1612,9 +1637,6 @@ impl StateManager for StateManagerImpl {
         self.latest_certified_height
             .store(latest_certified_height.get(), Ordering::Relaxed);
 
-        // TODO: send states_metadata through deallocation channel too. But then
-        // checkpoint removal becomes asynchronous, which requires more careful
-        // handling.
         states.states_metadata = states.states_metadata.split_off(&last_height_to_keep);
 
         self.persist_metadata_or_die(&states.states_metadata);
@@ -1734,13 +1756,16 @@ impl StateManager for StateManagerImpl {
         if let Some(prev_metadata) = states.certifications_metadata.get(&height) {
             use crate::tree_diff::{diff, PrettyPrintedChanges};
 
-            let prev_hash = crypto_hash_of_tree(&prev_metadata.hash_tree);
-            let hash = crypto_hash_of_tree(&certification_metadata.hash_tree);
+            let prev_hash = &prev_metadata.certified_state_hash;
+            let hash = &certification_metadata.certified_state_hash;
             assert_eq!(
                 prev_hash, hash,
-                "Committed state @{} twice with different hashes: first with {:?}, then with {:?}, old/new tree diff: {}",
+                "Committed state @{} twice with different hashes: first with {:?}, then with {:?}, old/new tree diff: {:?}",
                 height, prev_hash, hash,
-                PrettyPrintedChanges(&diff(&prev_metadata.hash_tree, &certification_metadata.hash_tree)),
+                match (prev_metadata.hash_tree.as_ref(), certification_metadata.hash_tree.as_ref()) {
+                    (Some(l), Some(r)) => PrettyPrintedChanges(&diff(l, r)).to_string(),
+                    _ => "unknown".to_string(),
+                }
             );
         }
 

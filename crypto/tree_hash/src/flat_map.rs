@@ -1,3 +1,8 @@
+//! Introduces `FlatMap` structure, a sorted map with fast lookups and appends.
+//! It stores keys and values in vectors.
+//!
+//! NOTE: `FlatMap` isn't a general-purpose map container.
+
 use serde::de::{Deserialize, Deserializer, MapAccess, Visitor};
 use serde::ser::Serializer;
 use serde::Serialize;
@@ -7,7 +12,7 @@ use std::iter::{DoubleEndedIterator, Iterator};
 #[cfg(test)]
 mod tests;
 
-/// Create a FlatMap from a list of key => value pairs.
+/// Creates a [`FlatMap`] from a list of key => value pairs.
 ///
 /// ```
 /// use ic_crypto_tree_hash::flatmap;
@@ -34,7 +39,7 @@ macro_rules! flatmap {
     };
 }
 
-/// An implementation of a sorted map with fast lookups and appends.
+/// A [`FlatMap`] is a sorted map with fast lookups and appends.
 ///
 /// It stores keys and values in vectors.
 ///
@@ -199,6 +204,7 @@ impl<K: Ord, V> FlatMap<K, V> {
     }
 }
 
+/// An auxiliary struct for an implementation of iterators over [`FlatMap`]
 pub struct IntoIter<K, V> {
     keys: std::vec::IntoIter<K>,
     values: std::vec::IntoIter<V>,
@@ -239,7 +245,8 @@ impl<K: Serialize + Ord, V: Serialize> Serialize for FlatMap<K, V> {
         serializer.collect_map(self.iter())
     }
 }
-
+/// An auxiliary struct for an implementation of [`Visitor`]-trait for
+/// [`FlatMap`]
 struct FlatMapVisitor<K: Ord, V> {
     _marker: std::marker::PhantomData<fn() -> FlatMap<K, V>>,
 }

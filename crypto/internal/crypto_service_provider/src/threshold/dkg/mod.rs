@@ -5,8 +5,6 @@
 //! here:
 //! * Converts the arguments into the type accepted by the crypto lib.
 //! * Inserts or retrieves secret keys from the secret key store.
-//!
-//! Spec: https://docs.dfinity.systems/dfinity/spec/replica/ancillary/crypto/index.html#_csp_interface_for_distributed_key_generation
 
 use crate::api::DistributedKeyGenerationCspClient;
 use crate::secret_key_store::SecretKeyStore;

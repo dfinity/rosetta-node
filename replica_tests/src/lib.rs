@@ -12,9 +12,9 @@ use ic_interfaces::{
     state_manager::StateReader,
 };
 use ic_metrics::MetricsRegistry;
-use ic_prep::internet_computer::{IcConfig, TopologyConfig};
-use ic_prep::node::{NodeConfiguration, NodeIndex};
-use ic_prep::subnet_configuration::SubnetConfig;
+use ic_prep_lib::internet_computer::{IcConfig, TopologyConfig};
+use ic_prep_lib::node::{NodeConfiguration, NodeIndex};
+use ic_prep_lib::subnet_configuration::SubnetConfig;
 use ic_registry_client::fake::FakeRegistryClient;
 use ic_registry_client::helper::subnet::SubnetRegistry;
 use ic_registry_common::proto_registry_data_provider::ProtoRegistryDataProvider;
@@ -46,9 +46,9 @@ use ic_utils::ic_features::*;
 use slog_scope::info;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::thread::sleep;
 use std::{
-    cell::Cell,
     convert::TryFrom,
     thread,
     time::{Duration, Instant},
@@ -166,7 +166,7 @@ pub struct LocalTestRuntime {
     pub ingress_history_reader: Arc<dyn IngressHistoryReader>,
     pub state_reader: Arc<dyn StateReader<State = ReplicatedState>>,
     pub node_id: NodeId,
-    nonce: std::cell::Cell<u64>,
+    nonce: Mutex<u64>,
     pub ingress_time_limit: Duration,
 }
 
@@ -359,8 +359,7 @@ where
                 .expect("did not find subnet list in registry")
                 .value
                 .expect("did not find subnet id");
-            // FIXME: This is a very bad way of extracting the subnet id from the protobuf
-            // list.
+            // TODO(VER-808)
             let subnet_id = SubnetId::from(
                 PrincipalId::try_from(&subnet_list_pb[2..])
                     .expect("cannot parse subnet id as principal"),
@@ -431,7 +430,7 @@ where
                 ingress_history_reader: Arc::new(ingress_history_reader),
                 state_reader: state_manager,
                 node_id,
-                nonce: Cell::new(0),
+                nonce: Mutex::new(0),
                 ingress_time_limit: Duration::from_secs(300),
             };
             tokio::runtime::Handle::current().block_on(test(runtime))
@@ -447,9 +446,9 @@ impl LocalTestRuntime {
     /// number which is different every time you call this function in a given
     /// canister test
     pub fn get_nonce(&self) -> u64 {
-        let nonce = self.nonce.get();
-        self.nonce.set(nonce + 1);
-        nonce
+        let mut nonce = self.nonce.lock().unwrap();
+        *nonce += 1;
+        *nonce
     }
 
     pub fn upgrade_canister(

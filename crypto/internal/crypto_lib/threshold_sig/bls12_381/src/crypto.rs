@@ -50,7 +50,7 @@ pub fn x_for_index(index: NodeIndex) -> Fr {
     let value: [u64; 4] = [index as u64, 0, 0, 0];
     // Note: from_repr will blow up if the value is greater than the modulus.
     // By the construction in the previous line of code that can never happen.
-    let mut ans = Fr::from_repr(FrRepr(value)).unwrap(); // Infallible.
+    let mut ans = Fr::from_repr(FrRepr(value)).expect("Fr::from_repr rejected small input");
     ans.add_assign(&Fr::one());
     ans
 }

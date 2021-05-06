@@ -4,10 +4,10 @@ use ic_cycles_account_manager::{
     freeze_threshold_cycles, IngressInductionCost, IngressInductionCostError,
 };
 use ic_registry_subnet_type::SubnetType;
-use ic_replicated_state::{CanisterState, CyclesAccountError, SystemState};
+use ic_replicated_state::{CyclesAccountError, SystemState};
 use ic_test_utilities::{
     cycles_account_manager::CyclesAccountManagerBuilder,
-    state::SystemStateBuilder,
+    state::{new_canister_state, SystemStateBuilder},
     types::{
         ids::{canister_test_id, subnet_test_id, user_test_id},
         messages::SignedIngressBuilder,
@@ -41,7 +41,7 @@ fn test_can_charge_application_subnets() {
                         .with_subnet_type(*subnet_type)
                         .build();
                     let compute_allocation = ComputeAllocation::try_from(20).unwrap();
-                    let mut canister = CanisterState::new(
+                    let mut canister = new_canister_state(
                         canister_test_id(1),
                         canister_test_id(2).get(),
                         Cycles::from(0),
@@ -471,7 +471,7 @@ fn charging_removes_canisters_with_insufficient_balance() {
     with_test_replica_logger(|log| {
         let cycles_account_manager = CyclesAccountManagerBuilder::new().build();
 
-        let mut canister = CanisterState::new(
+        let mut canister = new_canister_state(
             canister_test_id(1),
             canister_test_id(11).get(),
             Cycles::from(std::u128::MAX),
@@ -488,7 +488,7 @@ fn charging_removes_canisters_with_insufficient_balance() {
             )
             .unwrap();
 
-        let mut canister = CanisterState::new(
+        let mut canister = new_canister_state(
             canister_test_id(1),
             canister_test_id(11).get(),
             Cycles::from(0),
@@ -505,7 +505,7 @@ fn charging_removes_canisters_with_insufficient_balance() {
             )
             .unwrap_err();
 
-        let mut canister = CanisterState::new(
+        let mut canister = new_canister_state(
             canister_test_id(1),
             canister_test_id(11).get(),
             Cycles::from(100),

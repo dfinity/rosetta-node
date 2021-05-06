@@ -1,5 +1,3 @@
-//! This module provides utilities to authenticate messages.
-
 use crate::webauthn::validate_webauthn_sig;
 use ic_crypto::{user_public_key_from_bytes, KeyBytesContentType};
 use ic_interfaces::crypto::IngressSigVerifier;
@@ -15,7 +13,58 @@ use ic_types::{
 };
 use std::{collections::BTreeSet, convert::TryFrom, fmt};
 
-/// Error type used by `validate_request`.
+/// Validates the `request` and that the sender is authorized to send
+/// a message to the receiving canister.
+///
+/// See notes on request validity in the crate docs.
+pub fn validate_request<C: HttpRequestContent + HasCanisterId>(
+    request: &HttpRequest<C>,
+    ingress_signature_verifier: &dyn IngressSigVerifier,
+    current_time: Time,
+    registry_version: RegistryVersion,
+) -> Result<(), RequestValidationError> {
+    get_authorized_canisters(
+        &request,
+        ingress_signature_verifier,
+        current_time,
+        registry_version,
+    )
+    .and_then(|targets| {
+        if targets.contains(&request.content().canister_id()) {
+            Ok(())
+        } else {
+            Err(CanisterNotInDelegationTargets(
+                request.content().canister_id(),
+            ))
+        }
+    })
+}
+
+/// Returns the set of canisters that the request is authorized to act on.
+///
+/// The request must be valid for this call to be successful. See notes on
+/// request validity in the crate docs.
+pub fn get_authorized_canisters<C: HttpRequestContent>(
+    request: &HttpRequest<C>,
+    ingress_signature_verifier: &dyn IngressSigVerifier,
+    current_time: Time,
+    registry_version: RegistryVersion,
+) -> Result<CanisterIdSet, RequestValidationError> {
+    validate_ingress_expiry(request, current_time)?;
+    validate_user_id_and_signature(
+        ingress_signature_verifier,
+        &request.sender(),
+        &request.id(),
+        match request.authentication() {
+            Authentication::Anonymous => None,
+            Authentication::Authenticated(signature) => Some(signature),
+        },
+        current_time,
+        registry_version,
+    )
+}
+
+/// Error in validating an [HttpRequest].
 #[derive(Debug)]
 pub enum RequestValidationError {
     InvalidIngressExpiry(String),
@@ -26,16 +75,6 @@ pub enum RequestValidationError {
     MissingSignature(UserId),
     AnonymousSignatureNotAllowed,
     CanisterNotInDelegationTargets(CanisterId),
-}
-
-/// Error in verifying the signature or authentication part of a request.
-#[derive(Debug)]
-pub enum AuthenticationError {
-    InvalidBasicSignature(CryptoError),
-    InvalidCanisterSignature(CryptoError),
-    InvalidPublicKey(CryptoError),
-    WebAuthnError(String),
-    DelegationTargetError(String),
 }
 
 impl fmt::Display for RequestValidationError {
@@ -64,6 +103,16 @@ impl fmt::Display for RequestValidationError {
     }
 }
 
+/// Error in verifying the signature or authentication part of a request.
+#[derive(Debug)]
+pub enum AuthenticationError {
+    InvalidBasicSignature(CryptoError),
+    InvalidCanisterSignature(CryptoError),
+    InvalidPublicKey(CryptoError),
+    WebAuthnError(String),
+    DelegationTargetError(String),
+}
+
 impl fmt::Display for AuthenticationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -78,6 +127,32 @@ impl fmt::Display for AuthenticationError {
 
 use AuthenticationError::*;
 use RequestValidationError::*;
+
+/// An enum representing a set of canister IDs.
+#[derive(Debug, Eq, PartialEq)]
+pub enum CanisterIdSet {
+    /// The entire domain of canister IDs.
+    All,
+    /// A subet of canister IDs.
+    Some(BTreeSet<CanisterId>),
+}
+
+impl CanisterIdSet {
+    pub fn contains(&self, canister_id: &CanisterId) -> bool {
+        match self {
+            Self::All => true,
+            Self::Some(c) => c.contains(canister_id),
+        }
+    }
+
+    fn intersect(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::All, other) => other,
+            (me, Self::All) => me,
+            (Self::Some(c1), Self::Some(c2)) => Self::Some(c1.intersection(&c2).cloned().collect()),
+        }
+    }
+}
 
 // Check if ingress_expiry is within a proper range with respect to the given
 // time, i.e., it is not expired yet and is not too far in the future.
@@ -108,7 +183,7 @@ fn validate_ingress_expiry<C: HttpRequestContent>(
 
 // Check if any of the sender delegation has expired with respect to the
 // `current_time`, and return an error if so.
-pub(crate) fn validate_sender_delegation_expiry(
+fn validate_sender_delegation_expiry(
     sender_delegation: &Option<Vec<SignedDelegation>>,
     current_time: Time,
 ) -> Result<(), RequestValidationError> {
@@ -128,7 +203,7 @@ pub(crate) fn validate_sender_delegation_expiry(
     Ok(())
 }
 
-/// Verifies that the user id matches the public key.  Returns an error if not.
+// Verifies that the user id matches the public key.  Returns an error if not.
 fn validate_user_id(sender_pubkey: &[u8], id: &UserId) -> Result<(), RequestValidationError> {
     if id.get_ref() == &PrincipalId::new_self_authenticating(sender_pubkey) {
         Ok(())
@@ -137,7 +212,7 @@ fn validate_user_id(sender_pubkey: &[u8], id: &UserId) -> Result<(), RequestVali
     }
 }
 
-/// Verifies that the message is properly signed.
+// Verifies that the message is properly signed.
 fn validate_signature(
     validator: &dyn IngressSigVerifier,
     message_id: &MessageId,
@@ -159,8 +234,6 @@ fn validate_signature(
         registry_version,
     )?;
 
-    //TODO: There is duplicate code here and in validate_delegation. This
-    // cannot be unified right now because of the type of IngressSigVerifier.
     let (pk, pk_type) = public_key_from_bytes(&pubkey).map_err(InvalidSignature)?;
 
     match pk_type {
@@ -204,7 +277,7 @@ fn validate_signature_plain(
 }
 
 // Validate a chain of delegations.
-// See https://docs.dfinity.systems/public/v/master/#_envelope_authentication
+// See https://sdk.dfinity.org/docs/interface-spec/index.html#_envelope_authentication
 //
 // If the delegations are valid, returns the public key used to sign the
 // request as well as the set of canister IDs that the public key is valid for.
@@ -276,8 +349,6 @@ fn validate_delegation(
 }
 
 // Verifies correct user and signature.
-//
-// TODO(Luc): DFN-1628: add tests
 fn validate_user_id_and_signature(
     ingress_signature_verifier: &dyn IngressSigVerifier,
     sender: &UserId,
@@ -312,88 +383,10 @@ fn validate_user_id_and_signature(
     }
 }
 
-/// Validates the authentication of an HTTP request. It also checks expiry time
-/// with respect to the given `current_time`, in both `HttpRequest` and its
-/// `Delegation`.
-/// Returns the set of canisters that the request is authorized to act on.
-// TODO(ielashi): This method name can be misleading.
-// Rename this to `get_authorized_canisters`.
-pub fn validate_request_auth<C: HttpRequestContent>(
-    request: &HttpRequest<C>,
-    ingress_signature_verifier: &dyn IngressSigVerifier,
-    current_time: Time,
-    registry_version: RegistryVersion,
-) -> Result<CanisterIdSet, RequestValidationError> {
-    validate_ingress_expiry(request, current_time)?;
-    validate_user_id_and_signature(
-        ingress_signature_verifier,
-        &request.sender(),
-        &request.id(),
-        match request.authentication() {
-            Authentication::Anonymous => None,
-            Authentication::Authenticated(signature) => Some(signature),
-        },
-        current_time,
-        registry_version,
-    )
-}
-
-/// Validates that the HttpRequest is authorized for the canister specified
-/// in its `canister_id` field. It also checks expiry time with respect to
-/// the given `current_time`, in both `HttpRequest` and its `Delegation`.
-pub fn validate_request<C: HttpRequestContent + HasCanisterId>(
-    request: &HttpRequest<C>,
-    ingress_signature_verifier: &dyn IngressSigVerifier,
-    current_time: Time,
-    registry_version: RegistryVersion,
-) -> Result<(), RequestValidationError> {
-    validate_request_auth(
-        &request,
-        ingress_signature_verifier,
-        current_time,
-        registry_version,
-    )
-    .and_then(|targets| {
-        if targets.contains(&request.content().canister_id()) {
-            Ok(())
-        } else {
-            Err(CanisterNotInDelegationTargets(
-                request.content().canister_id(),
-            ))
-        }
-    })
-}
-
 fn public_key_from_bytes(
     pubkey: &[u8],
 ) -> Result<(UserPublicKey, KeyBytesContentType), AuthenticationError> {
     user_public_key_from_bytes(pubkey).map_err(InvalidPublicKey)
-}
-
-/// An enum representing a set of canister IDs.
-#[derive(Debug, Eq, PartialEq)]
-pub enum CanisterIdSet {
-    /// The entire domain of canister IDs.
-    All,
-    /// A subet of canister IDs.
-    Some(BTreeSet<CanisterId>),
-}
-
-impl CanisterIdSet {
-    pub fn contains(&self, canister_id: &CanisterId) -> bool {
-        match self {
-            Self::All => true,
-            Self::Some(c) => c.contains(canister_id),
-        }
-    }
-
-    fn intersect(self, other: Self) -> Self {
-        match (self, other) {
-            (Self::All, other) => other,
-            (me, Self::All) => me,
-            (Self::Some(c1), Self::Some(c2)) => Self::Some(c1.intersection(&c2).cloned().collect()),
-        }
-    }
 }
 
 #[cfg(test)]

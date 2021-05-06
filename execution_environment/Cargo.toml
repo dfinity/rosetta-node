@@ -5,7 +5,6 @@ edition = "2018"
 
 [dependencies]
 candid = "0.6.15"
-canister_sandbox = { path = "../canister_sandbox" }
 ic-base-types = { path = "../types/base_types" }
 ic-config = { path = "../config" }
 ic-cow-state = { path = "../cow_state" }

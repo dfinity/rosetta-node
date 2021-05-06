@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use super::*;
 use rand_chacha::rand_core::{RngCore, SeedableRng};
 // The following test was disabled because the current params are too large for

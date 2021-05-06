@@ -5,7 +5,6 @@ mod store_tests;
 use lazy_static::lazy_static;
 use url::Url;
 
-use ic_canister_client::{HttpClient, HttpContentType};
 use ic_rosetta_api::models::{
     AccountBalanceRequest, AccountBalanceResponse, ApiError, Envelopes, NetworkListResponse,
     NetworkRequest, PartialBlockIdentifier, TransactionIdentifier,
@@ -83,12 +82,14 @@ impl TestLedger {
     async fn last_submitted(&self) -> Result<Option<HashedBlock>, ApiError> {
         match self.submit_queue.read().await.last() {
             Some(b) => Ok(Some(b.clone())),
-            None => self.read_blocks().await.last(),
+            None => self.read_blocks().await.last_verified(),
         }
     }
 
     async fn add_block(&self, hb: HashedBlock) -> Result<(), ApiError> {
-        self.blockchain.write().await.add_block(hb)
+        let mut blockchain = self.blockchain.write().await;
+        blockchain.block_store.mark_last_verified(hb.index)?;
+        blockchain.add_block(hb)
     }
 }
 
@@ -96,6 +97,27 @@ impl Default for TestLedger {
     fn default() -> Self {
         Self::new()
     }
+}
+
+async fn post_json_request(
+    http_client: &reqwest::Client,
+    url: &str,
+    body: Vec<u8>,
+) -> Result<(Vec<u8>, reqwest::StatusCode), String> {
+    let resp = http_client
+        .post(url)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(body)
+        .send()
+        .await
+        .map_err(|err| format!("sending post request failed with {}: ", err))?;
+    let resp_status = resp.status();
+    let resp_body = resp
+        .bytes()
+        .await
+        .map_err(|err| format!("receive post response failed with {}: ", err))?
+        .to_vec();
+    Ok((resp_body, resp_status))
 }
 
 #[async_trait]
@@ -110,6 +132,7 @@ impl LedgerAccess for TestLedger {
         {
             let mut blockchain = self.blockchain.write().await;
             for hb in queue.iter() {
+                blockchain.block_store.mark_last_verified(hb.index)?;
                 blockchain.add_block(hb.clone())?;
             }
         }
@@ -121,10 +144,6 @@ impl LedgerAccess for TestLedger {
 
     fn ledger_canister_id(&self) -> &CanisterId {
         &self.canister_id
-    }
-
-    fn agent_client(&self) -> &HttpClient {
-        panic!("Agent client not available");
     }
 
     fn testnet_url(&self) -> &Url {
@@ -186,9 +205,9 @@ impl LedgerAccess for TestLedger {
     }
 
     async fn chain_length(&self) -> BlockHeight {
-        match self.blockchain.read().await.synced_to() {
+        match self.blockchain.read().await.last_verified().unwrap() {
             None => 0,
-            Some((_, block_index)) => block_index + 1,
+            Some(hb) => hb.index + 1,
         }
     }
 }
@@ -252,19 +271,17 @@ async fn smoke_test_with_server() {
         log::info!("Server thread done");
     });
 
-    let agent_client = HttpClient::new();
+    let http_client = reqwest::Client::new();
 
     let msg = NetworkRequest::new(req_handler.network_id());
     let http_body = serde_json::to_vec(&msg).unwrap();
-    let (res, _) = agent_client
-        .send_post_request(
-            &format!("http://{}/network/list", addr),
-            Some(HttpContentType::JSON),
-            Some(http_body),
-            None,
-        )
-        .await
-        .unwrap();
+    let (res, _) = post_json_request(
+        &http_client,
+        &format!("http://{}/network/list", addr),
+        http_body,
+    )
+    .await
+    .unwrap();
     let resp: NetworkListResponse = serde_json::from_slice(&res).unwrap();
 
     assert_eq!(resp.network_identifiers[0], req_handler.network_id());
@@ -275,15 +292,13 @@ async fn smoke_test_with_server() {
     );
 
     let http_body = serde_json::to_vec(&msg).unwrap();
-    let (res, _) = agent_client
-        .send_post_request(
-            &format!("http://{}/account/balance", addr),
-            Some(HttpContentType::JSON),
-            Some(http_body),
-            None,
-        )
-        .await
-        .unwrap();
+    let (res, _) = post_json_request(
+        &http_client,
+        &format!("http://{}/account/balance", addr),
+        http_body,
+    )
+    .await
+    .unwrap();
     let res: AccountBalanceResponse = serde_json::from_slice(&res).unwrap();
 
     assert_eq!(

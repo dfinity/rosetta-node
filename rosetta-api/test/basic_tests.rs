@@ -4,9 +4,8 @@ use ic_rosetta_api::models::*;
 
 use ic_rosetta_api::convert::{amount_, block_id, from_hash, timestamp, to_hash};
 use ic_rosetta_api::ledger_client::LedgerAccess;
-use ic_rosetta_api::{RosettaRequestHandler, API_VERSION, MIDDLEWARE_VERSION, NODE_VERSION};
+use ic_rosetta_api::{RosettaRequestHandler, API_VERSION, NODE_VERSION};
 
-use serde_json::map::Map;
 use std::sync::Arc;
 
 #[actix_rt::test]
@@ -30,7 +29,14 @@ async fn smoke_test() {
 
     assert_eq!(
         scribe.blockchain.len() as u64,
-        ledger.read_blocks().await.last().unwrap().unwrap().index + 1
+        ledger
+            .read_blocks()
+            .await
+            .last_verified()
+            .unwrap()
+            .unwrap()
+            .index
+            + 1
     );
 
     for i in 0..num_accounts {
@@ -70,11 +76,29 @@ async fn smoke_test() {
     ledger.blockchain.write().await.try_prune(&Some(10), 0).ok();
     let expected_first_block = chain_len - 11;
     assert_eq!(
-        ledger.read_blocks().await.first().unwrap().unwrap().index as usize,
+        ledger
+            .read_blocks()
+            .await
+            .first_verified()
+            .unwrap()
+            .unwrap()
+            .index as usize,
         expected_first_block
     );
-    let b = ledger.read_blocks().await.last().unwrap().unwrap().index;
-    let a = ledger.read_blocks().await.first().unwrap().unwrap().index;
+    let b = ledger
+        .read_blocks()
+        .await
+        .last_verified()
+        .unwrap()
+        .unwrap()
+        .index;
+    let a = ledger
+        .read_blocks()
+        .await
+        .first_verified()
+        .unwrap()
+        .unwrap()
+        .index;
     assert_eq!(b - a, 10);
 
     let msg = NetworkRequest::new(req_handler.network_id());
@@ -99,8 +123,8 @@ async fn smoke_test() {
             Version::new(
                 API_VERSION.to_string(),
                 NODE_VERSION.to_string(),
-                Some(MIDDLEWARE_VERSION.to_string()),
-                Some(Map::new())
+                None,
+                None,
             ),
             Allow::new(
                 vec![OperationStatus::new("COMPLETED".to_string(), true)],
@@ -113,12 +137,17 @@ async fn smoke_test() {
                 vec![
                     Error::new(&ApiError::InternalError(true, None)),
                     Error::new(&ApiError::InvalidRequest(false, None)),
+                    Error::new(&ApiError::NotAvailableOffline(false, None)),
                     Error::new(&ApiError::InvalidNetworkId(false, None)),
                     Error::new(&ApiError::InvalidAccountId(false, None)),
                     Error::new(&ApiError::InvalidBlockId(false, None)),
+                    Error::new(&ApiError::InvalidPublicKey(false, None)),
                     Error::new(&ApiError::MempoolTransactionMissing(false, None)),
                     Error::new(&ApiError::BlockchainEmpty(false, None)),
                     Error::new(&ApiError::InvalidTransaction(false, None)),
+                    Error::new(&ApiError::ICError(false, None)),
+                    Error::new(&ApiError::TransactionRejected(false, None)),
+                    Error::new(&ApiError::TransactionExpired),
                 ],
                 true
             )
@@ -148,6 +177,24 @@ async fn smoke_test() {
             vec![amount_(*scribe.balance_book.get(&acc_id(0)).unwrap()).unwrap()]
         ))
     );
+
+    let (acc_id, _ed_kp, pk, _pid) = ic_rosetta_test_utils::make_user(4);
+    let msg = ConstructionDeriveRequest::new(req_handler.network_id(), pk);
+    let res = req_handler.construction_derive(msg).await;
+    assert_eq!(
+        res,
+        Ok(ConstructionDeriveResponse {
+            address: None,
+            account_identifier: Some(to_model_account_identifier(&acc_id)),
+            metadata: None
+        })
+    );
+
+    let (_acc_id, _ed_kp, mut pk, _pid) = ic_rosetta_test_utils::make_user(4);
+    pk.curve_type = CurveType::SECP256K1;
+    let msg = ConstructionDeriveRequest::new(req_handler.network_id(), pk);
+    let res = req_handler.construction_derive(msg).await;
+    assert!(res.is_err(), "This pk should not have been accepted");
 }
 
 #[actix_rt::test]
@@ -320,8 +367,8 @@ async fn balances_test() {
 
 fn verify_balances(scribe: &Scribe, blocks: &Blocks, start_idx: usize) {
     for hb in scribe.blockchain.iter().skip(start_idx) {
-        assert_eq!(*hb, blocks.get_at(hb.index).unwrap());
-        assert_eq!(*hb, blocks.get(hb.hash).unwrap());
+        assert_eq!(*hb, blocks.get_verified_at(hb.index).unwrap());
+        assert_eq!(*hb, blocks.get_verified(hb.hash).unwrap());
         assert!(blocks.get_balances_at(hb.index).is_ok());
         for (account, amount) in scribe.balance_history.get(hb.index as usize).unwrap() {
             assert_eq!(
@@ -345,8 +392,32 @@ async fn load_from_store_test() {
     let mut blocks = Blocks::new_on_disk(tmpdir.path().into()).unwrap();
     for hb in &scribe.blockchain {
         blocks.add_block(hb.clone()).unwrap();
+        if hb.index < 20 {
+            blocks.block_store.mark_last_verified(hb.index).unwrap();
+        }
     }
     let balances_at_10 = blocks.get_balances_at(10).unwrap();
+
+    assert!(blocks.get_verified_at(10).is_ok());
+    assert!(blocks.get_balances_at(10).is_ok());
+    assert!(blocks.get_verified_at(20).is_err());
+    assert!(blocks.get_balances_at(20).is_err());
+
+    drop(blocks);
+
+    let mut blocks = Blocks::new_on_disk(tmpdir.path().into()).unwrap();
+    blocks.load_from_store().unwrap();
+
+    assert!(blocks.get_verified_at(10).is_ok());
+    assert!(blocks.get_balances_at(10).is_ok());
+    assert!(blocks.get_verified_at(20).is_err());
+    assert!(blocks.get_balances_at(20).is_err());
+    blocks
+        .block_store
+        .mark_last_verified((scribe.blockchain.len() - 1) as u64)
+        .unwrap();
+    assert!(blocks.get_balances_at(20).is_ok());
+
     drop(blocks);
 
     let mut blocks = Blocks::new_on_disk(tmpdir.path().into()).unwrap();
@@ -359,8 +430,8 @@ async fn load_from_store_test() {
         .try_prune(&Some((scribe.blockchain.len() - 11) as u64), 0)
         .unwrap();
 
-    assert!(blocks.get_at(9).is_err());
-    assert!(blocks.get_at(10).is_ok());
+    assert!(blocks.get_verified_at(9).is_err());
+    assert!(blocks.get_verified_at(10).is_ok());
 
     drop(blocks);
 

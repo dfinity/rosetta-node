@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use ic_crypto::utils::TempCryptoComponent;
 use ic_interfaces::crypto::{
     NiDkgAlgorithm, Signable, SignableMock, ThresholdSigVerifier, ThresholdSigner,

@@ -26,7 +26,7 @@ use ic_types::{
         Finalization, FinalizationShare, HasHeight, Notarization, NotarizationShare, Payload,
         RandomBeacon, RandomBeaconShare, RandomTape, RandomTapeShare,
     },
-    Height, ReplicaVersion, Time,
+    Height, Time,
 };
 use rocksdb::{
     compaction_filter::{CompactionFilterFn, Decision},
@@ -38,52 +38,6 @@ use std::path::PathBuf;
 use std::sync::{Mutex, RwLock};
 use std::thread::JoinHandle;
 use std::{path::Path, sync::Arc};
-
-pub fn get_replica_version<P: AsRef<Path>>(filepath: P) -> Option<ReplicaVersion> {
-    std::fs::read_to_string(filepath)
-        .ok()
-        .and_then(|version_string| ReplicaVersion::try_from(version_string).ok())
-}
-
-pub fn set_replica_version<P: AsRef<Path>>(filepath: P, replica_version: &ReplicaVersion) {
-    std::fs::write(filepath, String::from(replica_version).as_str()).unwrap();
-}
-
-/// Check that the replica version of the pool matches that of this process. If
-/// it does not, archive the old pool directory and create a new one.
-pub fn ensure_persistent_pool_replica_version_compatibility(pool_path: PathBuf) {
-    let mut replica_version_file_path = pool_path.clone();
-    replica_version_file_path.push("replica_version");
-    let current_replica_version = get_replica_version(&replica_version_file_path);
-    let delete_existing = if let Some(replica_version) = current_replica_version.clone() {
-        replica_version != ReplicaVersion::default()
-    } else {
-        true
-    };
-
-    if delete_existing {
-        if pool_path.is_dir() {
-            let mut base_path = pool_path.clone();
-            assert!(base_path.pop());
-            let last_component = pool_path.file_name().unwrap();
-            let new_path = tempfile::Builder::new()
-                .prefix(last_component)
-                .suffix(
-                    current_replica_version
-                        .map(String::from)
-                        .unwrap_or_else(|| "unknown-version".to_string())
-                        .as_str(),
-                )
-                .tempdir_in(base_path)
-                .unwrap()
-                .into_path();
-
-            std::fs::rename(&pool_path, &new_path).ok();
-        }
-        std::fs::create_dir_all(&pool_path).unwrap();
-        set_replica_version(replica_version_file_path, &ReplicaVersion::default());
-    }
-}
 
 // Macro that panics when result is not ok, printing the error.
 macro_rules! check_ok {
@@ -1200,7 +1154,6 @@ mod tests {
         crypto::{ThresholdSigShare, ThresholdSigShareOf},
     };
     use slog::Drain;
-    use std::convert::TryFrom;
     use std::panic;
     use std::path::Path;
     use std::time::Duration;
@@ -1959,51 +1912,5 @@ mod tests {
                 assert_eq!(pool.get_timestamp(&msg_id), Some(time_0));
             }
         });
-    }
-
-    #[test]
-    fn test_ensure_persistent_pool_replica_version_compatibility() {
-        ic_test_utilities::artifact_pool_config::with_test_pool_config(|config| {
-            ensure_persistent_pool_replica_version_compatibility(config.persistent_pool_db_path());
-            let mut replica_version_file_path = config.persistent_pool_db_path();
-            replica_version_file_path.push("replica_version");
-
-            // Ensure that a file was added indicating which replica version the
-            // directory was made with.
-            assert_eq!(
-                ReplicaVersion::default(),
-                get_replica_version(&replica_version_file_path).unwrap()
-            );
-            let mut random_file_path = config.persistent_pool_db_path();
-            random_file_path.push("random_file");
-            std::fs::write(&random_file_path, "stuff").unwrap();
-
-            ensure_persistent_pool_replica_version_compatibility(config.persistent_pool_db_path());
-
-            // Ensure that the directory was not deleted by checking for the file.
-            assert_eq!(std::fs::read_to_string(&random_file_path).unwrap(), "stuff");
-
-            set_replica_version(
-                &replica_version_file_path,
-                &ReplicaVersion::try_from("somerandomversion").unwrap(),
-            );
-
-            ensure_persistent_pool_replica_version_compatibility(config.persistent_pool_db_path());
-
-            // Now that the folder has a different replica version it should
-            // have been deleted and created with the new replica version.
-            assert!(std::fs::metadata(&random_file_path).is_err());
-            random_file_path.pop();
-            random_file_path.pop();
-
-            for path in std::fs::read_dir(&random_file_path).unwrap() {
-                println!("Name: {}", path.unwrap().path().display());
-            }
-
-            assert_eq!(
-                ReplicaVersion::default(),
-                get_replica_version(replica_version_file_path).unwrap()
-            );
-        })
     }
 }

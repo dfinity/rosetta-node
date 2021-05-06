@@ -20,11 +20,8 @@ use ic_types::{
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, RwLock};
 
-/// Payload builder wrapper
-pub type PayloadBuilderArc = Arc<dyn PayloadBuilder>;
-
-// tag::interface[]
-/// Payload builder trait
+/// The PayloadBuilder is responsible for creating and validating payload that
+/// is included in consensus blocks.
 pub trait PayloadBuilder: Send + Sync {
     /// Produces a payload that is valid given `past_payloads` and `context`.
     ///
@@ -56,7 +53,6 @@ pub trait PayloadBuilder: Send + Sync {
         context: &ValidationContext,
     ) -> ValidationResult<PayloadValidationError>;
 }
-// end::interface[]
 
 /// Cache of sets of message ids for past payloads. The index used here is a
 /// tuple (Height, HashOfBatchPayload) for two reasons:
@@ -104,27 +100,14 @@ impl PayloadBuilderImpl {
     pub fn new(
         ingress_selector: Arc<dyn IngressSelector>,
         xnet_payload_builder: Arc<dyn XNetPayloadBuilder>,
-        metrics: PayloadBuilderMetrics,
+        metrics: MetricsRegistry,
     ) -> Self {
         Self {
             ingress_selector,
             xnet_payload_builder,
-            metrics,
+            metrics: PayloadBuilderMetrics::new(metrics),
             ingress_payload_cache: RwLock::new(BTreeMap::new()),
         }
-    }
-
-    /// Helper to create PayloadBuilder wrapper
-    pub fn new_rc(
-        ingress_selector: Arc<dyn IngressSelector>,
-        xnet_payload_builder: Arc<dyn XNetPayloadBuilder>,
-        metrics_registry: MetricsRegistry,
-    ) -> PayloadBuilderArc {
-        Arc::new(PayloadBuilderImpl::new(
-            ingress_selector,
-            xnet_payload_builder,
-            PayloadBuilderMetrics::new(metrics_registry),
-        ))
     }
 }
 
@@ -290,12 +273,11 @@ mod test {
             let xnet_payload_builder =
                 FakeXNetPayloadBuilder::make(provided_certified_streams.clone());
             let metrics_registry = MetricsRegistry::new();
-            let metrics = PayloadBuilderMetrics::new(metrics_registry);
 
             let ingress_selector = Arc::new(ingress_selector);
             let xnet_payload_builder = Arc::new(xnet_payload_builder);
             let payload_builder =
-                PayloadBuilderImpl::new(ingress_selector, xnet_payload_builder, metrics);
+                PayloadBuilderImpl::new(ingress_selector, xnet_payload_builder, metrics_registry);
 
             let prev_payloads = Vec::new();
             let context = ValidationContext {

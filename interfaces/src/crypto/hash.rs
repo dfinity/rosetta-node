@@ -13,7 +13,8 @@ use ic_types::messages::{HttpCanisterUpdate, MessageId, SignedRequestBytes};
 use std::hash::Hash;
 
 /// The domain separator to be used when calculating the sender signature for a
-/// request to the Internet Computer according to the public specification.
+/// request to the Internet Computer according to the
+/// [interface specification](https://sdk.dfinity.org/docs/interface-spec/index.html).
 pub const DOMAIN_IC_REQUEST: &[u8; 11] = b"\x0Aic-request";
 
 pub(crate) const DOMAIN_NOTARIZATION_CONTENT: &str = "notarization_content_domain";
@@ -65,12 +66,15 @@ const DOMAIN_CERTIFICATION_MESSAGE: &str = "certification_message_domain";
 pub trait CryptoHashable: CryptoHashDomain + Hash {}
 impl<T> CryptoHashable for T where T: CryptoHashDomain + Hash {}
 
+/// A type that specifies a domain for a cryptographic hash.
+///
 /// This trait is sealed and can only be implemented by types that are
 /// explicitly approved by the Github owners of this file (that is, the
 /// crypto team) via an implementation of the `CryptoHashDomainSeal`. Explicit
 /// approval is required for security reasons to ensure proper domain
 /// separation.
 pub trait CryptoHashDomain: private::CryptoHashDomainSeal {
+    /// Returns the domain separator used in cryptographic hashes.
     fn domain(&self) -> String;
 }
 mod private {

@@ -6,8 +6,7 @@ use ic_types::{
     ingress::WasmResult,
     messages::{CallContextId, CallbackId, MessageId},
     methods::Callback,
-    user_id_into_protobuf, user_id_try_from_protobuf, CanisterId, Cycles, Funds, ICPError, UserId,
-    ICP,
+    user_id_into_protobuf, user_id_try_from_protobuf, CanisterId, Cycles, Funds, UserId, ICP,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -56,11 +55,11 @@ impl CallContext {
     /// Updates the available cycles in the call context based on how much
     /// cycles the canister requested to keep.
     ///
-    /// Returns a `CallContextError::InsufficientCycles` if `cycles` is
+    /// Returns a `CallContextError::InsufficientCyclesInCall` if `cycles` is
     /// more than what's available in the call context.
     pub fn withdraw_cycles(&mut self, cycles: Cycles) -> Result<(), CallContextError> {
         if self.available_cycles < cycles {
-            return Err(CallContextError::InsufficientCycles {
+            return Err(CallContextError::InsufficientCyclesInCall {
                 available: self.available_cycles,
                 requested: cycles,
             });
@@ -121,44 +120,19 @@ impl TryFrom<pb::CallContext> for CallContext {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CallContextError {
-    InsufficientCycles {
+    InsufficientCyclesInCall {
         available: Cycles,
         requested: Cycles,
     },
-    InsufficientICP {
-        available: u64,
-        requested: u64,
-    },
-}
-
-impl From<ICPError> for CallContextError {
-    fn from(err: ICPError) -> Self {
-        match err {
-            ICPError::OutOfICP {
-                available,
-                requested,
-            } => CallContextError::InsufficientICP {
-                available,
-                requested,
-            },
-        }
-    }
 }
 
 impl Into<HypervisorError> for CallContextError {
     fn into(self) -> HypervisorError {
         match self {
-            CallContextError::InsufficientCycles {
+            CallContextError::InsufficientCyclesInCall {
                 available,
                 requested,
-            } => HypervisorError::InsufficientCycles {
-                available,
-                requested,
-            },
-            CallContextError::InsufficientICP {
-                available,
-                requested,
-            } => HypervisorError::InsufficientICP {
+            } => HypervisorError::InsufficientCyclesInCall {
                 available,
                 requested,
             },
@@ -748,7 +722,7 @@ mod tests {
             ccm.call_context_mut(cc_id)
                 .unwrap()
                 .withdraw_cycles(Cycles::from(40)),
-            Err(CallContextError::InsufficientCycles {
+            Err(CallContextError::InsufficientCyclesInCall {
                 available: Cycles::from(30),
                 requested: Cycles::from(40),
             })

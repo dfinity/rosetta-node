@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use super::*;
 use crate::secret_key_store::volatile_store::VolatileSecretKeyStore;
 use ic_crypto_internal_test_vectors::unhex::hex_to_32_bytes;

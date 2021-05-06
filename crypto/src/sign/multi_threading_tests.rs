@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 use super::*;
 use crate::common::test_utils::basic_sig::TestVector::ED25519_STABILITY_1;
 use crate::common::test_utils::mock_csp::{

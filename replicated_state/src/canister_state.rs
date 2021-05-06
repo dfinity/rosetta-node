@@ -5,13 +5,12 @@ pub mod system_state;
 use crate::canister_state::system_state::{CanisterStatus, SystemState};
 use crate::StateError;
 pub use execution_state::{EmbedderCache, ExecutionState, ExportedFunctions, Global};
-use ic_base_types::NumSeconds;
 use ic_interfaces::messages::CanisterInputMessage;
 use ic_types::{
     messages::{Ingress, Request, RequestOrResponse, Response},
     methods::SystemMethod,
     xnet::QueueId,
-    AccumulatedPriority, CanisterId, CanisterStatusType, ComputeAllocation, Cycles, ExecutionRound,
+    AccumulatedPriority, CanisterId, CanisterStatusType, ComputeAllocation, ExecutionRound,
     NumBytes, PrincipalId, QueryAllocation, QueueIndex,
 };
 use phantom_newtype::AmountOf;
@@ -71,21 +70,14 @@ pub struct CanisterState {
 
 impl CanisterState {
     pub fn new(
-        canister_id: CanisterId,
-        controller: PrincipalId,
-        initial_cycles: Cycles,
-        freeze_threshold: NumSeconds,
-    ) -> CanisterState {
-        CanisterState {
-            // By default, a canister is "running".
-            system_state: SystemState::new_running(
-                canister_id,
-                controller,
-                initial_cycles,
-                freeze_threshold,
-            ),
-            execution_state: None,
-            scheduler_state: SchedulerState::default(),
+        system_state: SystemState,
+        execution_state: Option<ExecutionState>,
+        scheduler_state: SchedulerState,
+    ) -> Self {
+        Self {
+            execution_state,
+            system_state,
+            scheduler_state,
         }
     }
 
@@ -292,10 +284,12 @@ pub mod testing {
 #[cfg(test)]
 mod test {
     use super::*;
+    use ic_base_types::NumSeconds;
     use ic_test_utilities::types::{
         ids::{canister_test_id, user_test_id},
         messages::{RequestBuilder, ResponseBuilder},
     };
+    use ic_types::Cycles;
     use ic_wasm_types::BinaryEncodedWasm;
 
     const INITIAL_CYCLES: Cycles = Cycles::new(1 << 36);
@@ -304,12 +298,15 @@ mod test {
     where
         F: FnOnce(CanisterState) -> R,
     {
-        f(CanisterState::new(
+        let scheduler_state = SchedulerState::default();
+        let system_state = SystemState::new_running(
             canister_test_id(42),
             user_test_id(24).get(),
             INITIAL_CYCLES,
             NumSeconds::from(100_000),
-        ))
+        );
+        let canister_state = CanisterState::new(system_state, None, scheduler_state);
+        f(canister_state)
     }
 
     #[test]

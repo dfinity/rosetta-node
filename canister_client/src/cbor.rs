@@ -3,7 +3,6 @@ use crate::{
     sign_submit,
 };
 use ic_crypto_tree_hash::{LabeledTree, Path};
-use ic_types::Time;
 use ic_types::{
     messages::{
         Blob, Certificate, HttpCanisterUpdate, HttpReadContent, HttpReadState,
@@ -12,6 +11,7 @@ use ic_types::{
     },
     CanisterId,
 };
+use ic_types::{time::current_time, Time};
 use serde::Deserialize;
 use serde_cbor::value::Value as CBOR;
 use std::convert::TryFrom;
@@ -226,7 +226,7 @@ impl Agent {
     }
 
     fn expiry_time(&self) -> Time {
-        self.time_source.get_relative_time() + Duration::from_secs(4 * 60)
+        current_time() + Duration::from_secs(4 * 60)
     }
 }
 

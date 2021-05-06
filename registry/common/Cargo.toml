@@ -41,7 +41,3 @@ leb128 = "0.2.4"
 
 [build-dependencies]
 prost-build = "0.7.0"
-
-[[test]]
-name = "test"
-path = "tests/registry-test.rs"

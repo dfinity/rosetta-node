@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Tests for the POP of the Encryption Key
 use super::*;
 

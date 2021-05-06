@@ -67,9 +67,6 @@ impl IngressHandler for IngressManager {
             // If the message is too large, consider the ingress message invalid
             let size = ingress_object.count_bytes();
             if size > max_ingress_bytes_per_message {
-                // TODO: This should not happen if all replicas are honest since http_handler
-                // already checks the size. We should be able to penalize the replica who
-                // originally forwarded this message.
                 warn!(
                     self.log,
                     "ingress_message_remove_unvalidated";

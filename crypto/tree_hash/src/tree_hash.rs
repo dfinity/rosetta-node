@@ -1,3 +1,6 @@
+//! Builders for `Witness` and `HashTree` structures, and other
+//! helpers for processing these structures.
+
 use crate::hasher::Hasher;
 use crate::{
     flatmap, Digest, FlatMap, HashTree, HashTreeBuilder, Label, LabeledTree, MixedHashTree, Path,
@@ -79,7 +82,9 @@ fn into_hash_tree(mut hash_trees: VecDeque<HashTree>) -> HashTree {
         }
         std::mem::swap(&mut hash_trees, &mut combined_trees);
     }
-    hash_trees.pop_front().unwrap()
+    hash_trees
+        .pop_front()
+        .expect("Missing element from hash_trees")
 }
 
 fn write_labeled_tree<T: Debug>(
@@ -87,7 +92,8 @@ fn write_labeled_tree<T: Debug>(
     level: u8,
     f: &mut fmt::Formatter<'_>,
 ) -> fmt::Result {
-    let indent = String::from_utf8(vec![b' '; (level * 8) as usize]).unwrap();
+    let indent =
+        String::from_utf8(vec![b' '; (level * 8) as usize]).expect("String was not valid utf8");
     match tree {
         LabeledTree::Leaf(t) => writeln!(f, "{}\\__ leaf:{:?}", indent, t),
         LabeledTree::SubTree(children) => {
@@ -101,7 +107,8 @@ fn write_labeled_tree<T: Debug>(
 }
 
 fn write_hash_tree(tree: &HashTree, level: u8, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    let indent = String::from_utf8(vec![b' '; (level * 8) as usize]).unwrap();
+    let indent =
+        String::from_utf8(vec![b' '; (level * 8) as usize]).expect("String was not valid utf8");
     match tree {
         HashTree::Leaf { digest } => writeln!(f, "{}\\__leaf:{:?}", indent, digest),
         HashTree::Fork {
@@ -389,6 +396,7 @@ pub fn first_sub_witness(witness: &Witness) -> Option<(&Label, &Witness)> {
     }
 }
 
+/// An implementation of the [`WitnessGenerator`]-trait.
 #[derive(PartialEq, Eq, Clone)]
 pub struct WitnessGeneratorImpl {
     orig_tree: LabeledTree<Digest>,
@@ -406,6 +414,7 @@ fn smallest_label(hash_tree: &HashTree) -> Label {
     }
 }
 
+// Returns the lagest label in `hash_tree`.
 fn largest_label(hash_tree: &HashTree) -> Label {
     let mut largest = hash_tree;
     while let HashTree::Fork { right_tree, .. } = largest {
@@ -417,6 +426,8 @@ fn largest_label(hash_tree: &HashTree) -> Label {
     }
 }
 
+// Returns true iff any of the labels in `labels` is within the range
+// defined by the given `hash_tree`.
 fn any_is_in_range(hash_tree: &HashTree, labels: &[Label]) -> bool {
     let smallest = smallest_label(hash_tree);
     let largest = largest_label(hash_tree);
@@ -628,8 +639,8 @@ impl WitnessGeneratorImpl {
                     for label in children.keys() {
                         curr_path.push(label.to_owned());
                         let sub_witness = self.witness_impl::<Builder, _>(
-                            children.get(label).unwrap(),
-                            orig_children.get(label).unwrap(),
+                            children.get(label).expect("Could not get label"),
+                            orig_children.get(label).expect("Could not get label"),
                             find_subtree_node(label, hash_tree),
                             curr_path,
                         )?;
@@ -817,15 +828,15 @@ pub fn sparse_labeled_tree_from_paths(paths: &mut [Path]) -> LabeledTree<()> {
                         if i < path.len() - 1 {
                             // Add a subtree for the label on the path.
                             map.try_append(label.clone(), LabeledTree::SubTree(FlatMap::new()))
-                                .unwrap();
+                                .expect("Could not append label to map")
                         } else {
                             // The last label on the path is always a leaf.
                             map.try_append(label.clone(), LabeledTree::Leaf(()))
-                                .unwrap();
+                                .expect("Could not append label to map")
                         }
                     }
                     // Traverse to the newly created tree.
-                    tree = map.get_mut(label).unwrap();
+                    tree = map.get_mut(label).expect("Could not get label from map");
                 }
             }
         }
@@ -902,6 +913,7 @@ enum ActiveNode {
     },
 }
 
+/// An implementation of the [`HashTreeBuilder`]-trait.
 pub struct HashTreeBuilderImpl {
     labeled_tree: Option<LabeledTree<Digest>>,
     hash_tree: Option<HashTree>,
@@ -1034,7 +1046,7 @@ impl HashTreeBuilder for HashTreeBuilderImpl {
                     self.hash_tree = Some(HashTree::Leaf { digest });
                 } else {
                     // In a subtree.
-                    match self.curr_path.pop().unwrap() {
+                    match self.curr_path.pop().expect("Path was empty") {
                         ActiveNode::SubTree {
                             mut children,
                             label,
@@ -1119,7 +1131,7 @@ impl HashTreeBuilder for HashTreeBuilderImpl {
                     self.hash_tree = Some(hash_tree);
                 } else {
                     // In a subtree.
-                    match self.curr_path.pop().unwrap() {
+                    match self.curr_path.pop().expect("Path was empty") {
                         ActiveNode::SubTree {
                             mut children,
                             label,
@@ -1147,10 +1159,12 @@ impl HashTreeBuilder for HashTreeBuilderImpl {
     }
 
     fn witness_generator(&self) -> Option<Self::WitnessGenerator> {
-        self.as_labeled_tree()
-            .map(|orig_tree| WitnessGeneratorImpl {
+        match (self.as_labeled_tree(), self.as_hash_tree()) {
+            (Some(orig_tree), Some(hash_tree)) => Some(WitnessGeneratorImpl {
                 orig_tree,
-                hash_tree: self.as_hash_tree().unwrap(),
-            })
+                hash_tree,
+            }),
+            _ => None,
+        }
     }
 }

@@ -6,7 +6,7 @@ use ic_metrics::{
 use prometheus::{HistogramVec, IntCounterVec, IntGauge};
 use std::sync::Arc;
 
-// Struct holding only Prometeous metric objects. Hence, it is thread-safe iff
+// Struct holding only Prometheus metric objects. Hence, it is thread-safe iff
 // the data members are thread-safe.
 pub(crate) struct HttpHandlerMetrics {
     pub(crate) requests: Arc<HistogramVec>,
@@ -20,7 +20,7 @@ pub(crate) struct HttpHandlerMetrics {
 // There is a mismatch between the labels and the public spec.
 // The `type` label corresponds to the `request type` in the public spec.
 // The `request_type` label corresponds to the API endpoint.
-// Naming convensions:
+// Naming conventions:
 //   1. If you include the `type` label, prefix your metric name with
 // `replica_http`.
 impl HttpHandlerMetrics {

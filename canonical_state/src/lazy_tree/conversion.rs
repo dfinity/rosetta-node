@@ -1,3 +1,5 @@
+//! Conversion from `ReplicatedState` to `LazyTree`.
+
 use super::{blob, fork, num, string, Lazy, LazyFork, LazyTree};
 use crate::encoding::{encode_message, encode_metadata, encode_stream_header};
 use ic_replicated_state::{
@@ -379,9 +381,9 @@ fn subnets_as_tree(
     })
 }
 
-// Serializes globals into a flat byte array.  All globals are
-// converted into u64 and encoded using Little-Endian encoding because
-// it's more natural for Wasm than Big-Endian.
+/// Serializes globals into a flat byte array.  All globals are
+/// converted into u64 and encoded using Little-Endian encoding because
+/// it's more natural for Wasm than Big-Endian.
 fn raw_globals(typed_globals: &[Global]) -> Vec<u8> {
     let mut raw = Vec::with_capacity(typed_globals.len() * std::mem::size_of::<u64>());
     for g in typed_globals.iter() {

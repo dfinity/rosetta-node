@@ -271,7 +271,7 @@ pub fn plaintext_from_bytes(bytes: &[Chunk; NUM_CHUNKS]) -> Vec<isize> {
 pub fn public_coefficients_to_miracl(
     public_coefficients: &PublicCoefficientsBytes,
 ) -> Result<Vec<ECP2>, ()> {
-    // TODO (CRP-816): Return malformed public key
+    // TODO (CRP-816): Return CryptoError::MalformedPublicKey instead of ()
     public_coefficients
         .coefficients
         .iter()

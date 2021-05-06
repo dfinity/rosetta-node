@@ -3,7 +3,7 @@ use crate::ledger_client::Balances;
 use crate::models::ApiError;
 
 use ledger_canister::{AccountIdentifier, BlockHeight, EncodedBlock, HashOf, ICPTs};
-use log::{debug, error};
+use log::{debug, error, trace};
 use serde::{Deserialize, Serialize};
 
 use std::collections::VecDeque;
@@ -58,12 +58,15 @@ pub trait BlockStore {
     fn prune(&mut self, hb: &HashedBlock, balances: &Balances) -> Result<(), String>;
     fn first_snapshot(&self) -> Option<&(HashedBlock, Balances)>;
     fn first(&self) -> Result<Option<HashedBlock>, BlockStoreError>;
+    fn last_verified(&self) -> Option<BlockHeight>;
+    fn mark_last_verified(&mut self, h: BlockHeight) -> Result<(), BlockStoreError>;
 }
 
 pub struct InMemoryStore {
     inner: VecDeque<HashedBlock>,
     base_idx: u64,
     genesis: Option<HashedBlock>,
+    last_verified_idx: Option<BlockHeight>,
 }
 
 impl InMemoryStore {
@@ -72,6 +75,7 @@ impl InMemoryStore {
             inner: VecDeque::new(),
             base_idx: 0,
             genesis: None,
+            last_verified_idx: None,
         }
     }
 }
@@ -122,11 +126,26 @@ impl BlockStore for InMemoryStore {
     fn first(&self) -> Result<Option<HashedBlock>, BlockStoreError> {
         Ok(self.inner.front().cloned())
     }
+
+    fn last_verified(&self) -> Option<BlockHeight> {
+        self.last_verified_idx
+    }
+
+    fn mark_last_verified(&mut self, h: BlockHeight) -> Result<(), BlockStoreError> {
+        if let Some(hh) = self.last_verified_idx {
+            if h < hh {
+                panic!("New last verified index lower than the old one");
+            }
+        }
+        self.last_verified_idx = Some(h);
+        Ok(())
+    }
 }
 
 pub struct OnDiskStore {
     location: PathBuf,
     first_block_snapshot: Option<(HashedBlock, Balances)>,
+    last_verified_idx: Option<BlockHeight>,
 }
 
 impl OnDiskStore {
@@ -134,6 +153,7 @@ impl OnDiskStore {
         let mut store = Self {
             location,
             first_block_snapshot: None,
+            last_verified_idx: None,
         };
         store.first_block_snapshot = store
             .read_oldest_block_snapshot()
@@ -147,6 +167,7 @@ impl OnDiskStore {
                 }
             })?;
         }
+        store.last_verified_idx = store.read_last_verified().map_err(BlockStoreError::Other)?;
         Ok(store)
     }
 
@@ -156,6 +177,24 @@ impl OnDiskStore {
 
     fn oldest_block_snapshot_file_name(&self) -> Box<Path> {
         self.location.join("oldest_block_snapshot.json").into()
+    }
+
+    fn last_verified_idx_file_name(&self) -> Box<Path> {
+        self.location.join("last_verified_idx.json").into()
+    }
+
+    fn read_last_verified(&self) -> Result<Option<BlockHeight>, String> {
+        let file_name = self.last_verified_idx_file_name();
+        let file = OpenOptions::new().read(true).open(file_name);
+        match file.map_err(|e| e.kind()) {
+            Ok(f) => {
+                debug!("Loading last verified idx");
+                let h: BlockHeight = serde_json::from_reader(f).map_err(|e| e.to_string())?;
+                Ok(Some(h))
+            }
+            Err(std::io::ErrorKind::NotFound) => Ok(None),
+            Err(e) => Err(format!("Reading file failed: {:?}", e)),
+        }
     }
 
     fn read_oldest_block_snapshot(&self) -> Result<Option<(HashedBlock, Balances)>, String> {
@@ -290,5 +329,42 @@ impl BlockStore for OnDiskStore {
                 Err(e) => Err(e),
             }
         }
+    }
+
+    fn last_verified(&self) -> Option<BlockHeight> {
+        self.last_verified_idx
+    }
+
+    fn mark_last_verified(&mut self, h: BlockHeight) -> Result<(), BlockStoreError> {
+        if let Some(hh) = self.last_verified_idx {
+            if h < hh {
+                panic!(
+                    "New last verified index lower than the old one. New: {}, old: {}",
+                    h, hh
+                );
+            }
+            if h == hh {
+                return Ok(());
+            }
+        }
+
+        trace!("Writing last verified idx. Block height: {}", h);
+        let file_name = self.last_verified_idx_file_name();
+        let file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&file_name)
+            .map_err(|e| BlockStoreError::Other(e.to_string()))?;
+
+        serde_json::to_writer(&file, &h).map_err(|e| BlockStoreError::Other(e.to_string()))?;
+        file.sync_all().map_err(|e| {
+            let msg = format!("Syncing last verified idx file after write failed: {:?}", e);
+            error!("{}", msg);
+            BlockStoreError::Other(msg)
+        })?;
+
+        self.last_verified_idx = Some(h);
+        Ok(())
     }
 }

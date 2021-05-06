@@ -19,6 +19,7 @@ use ic_registry_provisional_whitelist::ProvisionalWhitelist;
 use ic_registry_subnet_type::SubnetType;
 use ic_replicated_state::{
     CallOrigin, CanisterState, CanisterStatus, CyclesAccountError, ExecutionState, ReplicatedState,
+    SchedulerState, SystemState,
 };
 use ic_state_layout::{CanisterLayout, CheckpointLayout, RwPolicy};
 use ic_types::{
@@ -833,14 +834,8 @@ impl CanisterManager {
         Result<(NumBytes, CanisterState), CanisterManagerError>,
     ) {
         let canister_id = context.canister_id;
-        let mut new_canister = CanisterState::new(
-            canister_id,
-            context.sender,
-            old_canister.system_state.cycles_account.cycles_balance(),
-            self.config.default_freeze_threshold,
-        );
         let layout = canister_layout(&canister_layout_path, &canister_id);
-        match ExecutionState::new(
+        let execution_state = match ExecutionState::new(
             context.wasm_module,
             layout.raw_path(),
             WasmValidationLimits {
@@ -848,11 +843,17 @@ impl CanisterManager {
                 max_functions: self.config.max_functions,
             },
         ) {
-            Ok(execution_state) => new_canister.execution_state = Some(execution_state),
+            Ok(execution_state) => Some(execution_state),
             Err(err) => {
                 return (instructions_limit, Err((canister_id, err).into()));
             }
-        }
+        };
+
+        let mut system_state = old_canister.system_state.clone();
+        // According to spec, we must clear stable memory on install and reinstall.
+        system_state.clear_stable_memory();
+        let scheduler_state = old_canister.scheduler_state.clone();
+        let new_canister = CanisterState::new(system_state, execution_state, scheduler_state);
 
         let (mut new_canister, result) = self.hypervisor.execute_empty(new_canister).get_no_pause();
         match result {
@@ -1115,12 +1116,14 @@ impl CanisterManager {
         };
 
         // Canister id available. Create the new canister.
-        let mut new_canister = CanisterState::new(
+        let system_state = SystemState::new_running(
             new_canister_id,
             sender,
             cycles,
             self.config.default_freeze_threshold,
         );
+        let scheduler_state = SchedulerState::default();
+        let mut new_canister = CanisterState::new(system_state, None, scheduler_state);
 
         self.do_update_settings(settings, &mut new_canister);
 
@@ -1576,7 +1579,9 @@ pub fn uninstall_canister(
     let mut rejects = Vec::new();
     let canister_id = canister.canister_id();
     if let Some(call_context_manager) = canister.system_state.call_context_manager_mut() {
-        // Remove all call contexts and prepare reject responses.
+        // Mark all call contexts as deleted and prepare reject responses.
+        // Note that callbacks will be unregistered at a later point once they are
+        // received.
         for call_context in call_context_manager.call_contexts_mut().values_mut() {
             // Mark the call context as deleted.
             call_context.mark_deleted();

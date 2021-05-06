@@ -395,7 +395,7 @@ impl SecretKey {
         if self.bte_nodes.is_empty() {
             return;
         }
-        let now = self.current().unwrap();
+        let now = self.current().expect("bte_nodes unexpectedly empty");
         for i in 0..sys.lambda_t {
             if i < now.tau.len() {
                 epoch.push(now.tau[i]);
@@ -470,7 +470,10 @@ impl SecretKey {
                     }
                 }
             }
-            self.bte_nodes.pop_back().unwrap().zeroize();
+            self.bte_nodes
+                .pop_back()
+                .expect("bte_nodes unexpectedly empty")
+                .zeroize();
         }
 
         let g1 = ECP::generator();
@@ -483,7 +486,7 @@ impl SecretKey {
         //   * The current epoch is now 01101.
         //   * We can still derive the keys for 01110 and 01111 from 0111.
         //   * We can no longer decrypt 01100.
-        let mut node = self.bte_nodes.pop_back().unwrap();
+        let mut node = self.bte_nodes.pop_back().expect("self.bte_nodes was empty");
         let mut n = node.tau.len();
         // Nothing to do if `node.tau` is already `epoch`.
         if n == epoch.len() {
@@ -495,7 +498,7 @@ impl SecretKey {
         //   b_acc = b * product [d_i^tau_i | i <- [1..n]]
         //   f_acc = f0 * product [f_i^tau_i | i <- [1..n]]
         let mut b_acc = node.b.clone();
-        let mut f_acc = ftau_partial(&node.tau, sys).unwrap();
+        let mut f_acc = ftau_partial(&node.tau, sys).expect("node.tau not the expected size");
         let mut tau = node.tau.clone();
         while n < epoch.len() {
             if epoch[n] == Bit::Zero {
@@ -506,7 +509,7 @@ impl SecretKey {
 
                 let mut a_blind = g1.mul(&delta);
                 a_blind.add(&node.a);
-                let mut b_blind = d_t.pop_front().unwrap();
+                let mut b_blind = d_t.pop_front().expect("d_t not sufficiently large");
                 b_blind.add(&b_acc);
                 let mut ftmp = f_acc.clone();
                 ftmp.add(&sys.f[n]);
@@ -539,7 +542,7 @@ impl SecretKey {
             } else {
                 // Update accumulators.
                 f_acc.add(&sys.f[n]);
-                b_acc.add(&d_t.pop_front().unwrap());
+                b_acc.add(&d_t.pop_front().expect("d_t not sufficiently large"));
             }
             tau.push(epoch[n]);
             n += 1;
@@ -716,7 +719,7 @@ pub fn enc_single(
     let cc = pk.mul2(&spec_r, &g1, &m);
     let rr = g1.mul(&spec_r);
     let ss = g1.mul(&s);
-    let id = ftau_partial(tau, sys).unwrap();
+    let id = ftau_partial(tau, sys).expect("tau not the expected size");
     let mut zz = id.mul(&spec_r);
     zz.add(&sys.h.mul(&s));
     SingleCiphertext { cc, rr, ss, zz }
@@ -730,10 +733,10 @@ pub fn dec_single(dks: &mut SecretKey, ct: &SingleCiphertext, sys: &SysParam) ->
     let g1 = ECP::generator();
     let g2 = ECP2::generator();
 
-    let dk = dks.current().unwrap();
+    let dk = dks.current().expect("No current node in nkey");
 
     // Sanity check.
-    let id = ftau_partial(&dk.tau, sys).unwrap();
+    let id = ftau_partial(&dk.tau, sys).expect("tau not the expected size");
 
     let mut g1neg = g1.clone();
     g1neg.neg();
@@ -750,7 +753,7 @@ pub fn dec_single(dks: &mut SecretKey, ct: &SingleCiphertext, sys: &SysParam) ->
     x = pair::fexp(&x);
 
     let base = pair::fexp(&pair::ate(&g2, &g1));
-    baby_giant(&x, &base, 0, CHUNK_SIZE).unwrap()
+    baby_giant(&x, &base, 0, CHUNK_SIZE).expect("Invalid ciphertext")
 }
 
 pub struct CRSZ {
@@ -805,16 +808,22 @@ pub fn enc_chunks(
     sys: &SysParam,
     rng: &mut impl RAND,
 ) -> Option<(CRSZ, ToxicWaste)> {
+    if sij.is_empty() {
+        return None;
+    }
+
     // do
     //   chunks <- headMay allChunks
     //   guard $ all (== chunks) allChunks
+
     let all_chunks: LinkedList<_> = sij.iter().map(Vec::len).collect();
-    let chunks = *all_chunks.front().unwrap();
+    let chunks = *all_chunks.front().expect("sij was empty");
     for si in sij.iter() {
         if si.len() != chunks {
             return None; // Chunk lengths disagree.
         }
     }
+
     use miracl_core::bls12381::pair::g1mul;
     use miracl_core::bls12381::pair::g2mul;
     let g1 = ECP::generator();
@@ -854,7 +863,7 @@ pub fn enc_chunks(
         .collect();
 
     let extended_tau = extend_tau_with_associated_data(&cc, &rr, &ss, &tau, associated_data);
-    let id = ftau(&extended_tau, sys).unwrap();
+    let id = ftau(&extended_tau, sys).expect("extended_tau not the correct size");
     let mut zz = Vec::new();
     for j in 0..chunks {
         let mut tmp = g2mul(&id, &spec_r[j]);
@@ -1085,7 +1094,7 @@ pub fn verify_ciphertext_integrity(
     let g1 = ECP::generator();
     let extended_tau =
         extend_tau_with_associated_data(&crsz.cc, &crsz.rr, &crsz.ss, &tau, associated_data);
-    let id = ftau(&extended_tau, sys).unwrap();
+    let id = ftau(&extended_tau, sys).expect("extended_tau not the correct size");
 
     // check for all j:
     //   e(g1, Z_j) = e(R_j, f_0 \Prod_{i=0}^{\lambda) f_i^{\tau_i) * e(S_j, h)

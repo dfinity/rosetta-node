@@ -11,13 +11,14 @@ use ic_registry_routing_table::{CanisterIdRange, RoutingTable};
 use ic_registry_subnet_type::SubnetType;
 use ic_replicated_state::{
     canister_state::QUEUE_INDEX_NONE, replicated_state::LABEL_VALUE_CANISTER_NOT_FOUND,
-    CanisterState, ReplicatedState, Stream,
+    ReplicatedState, Stream,
 };
 use ic_test_utilities::{
     metrics::{
         fetch_histogram_stats, fetch_histogram_vec_count, fetch_int_counter, fetch_int_counter_vec,
         fetch_int_gauge_vec, metric_vec, nonzero_values, HistogramStats, MetricVec,
     },
+    state::new_canister_state,
     types::ids::{user_test_id, SUBNET_12, SUBNET_23},
     types::messages::{RequestBuilder, ResponseBuilder},
     types::xnet::{StreamHeaderBuilder, StreamSliceBuilder},
@@ -88,7 +89,7 @@ fn induct_loopback_stream_empty_loopback_stream() {
     with_test_replica_logger(|log| {
         let (stream_handler, mut initial_state, metrics_registry) = new_fixture(&log);
 
-        let initial_canister_state = CanisterState::new(
+        let initial_canister_state = new_canister_state(
             *LOCAL_CANISTER,
             user_test_id(24).get(),
             *INITIAL_CYCLES,
@@ -123,7 +124,7 @@ fn induct_loopback_stream_reject_response() {
     with_test_replica_logger(|log| {
         let (stream_handler, mut initial_state, metrics_registry) = new_fixture(&log);
 
-        let initial_canister_state = CanisterState::new(
+        let initial_canister_state = new_canister_state(
             *LOCAL_CANISTER,
             user_test_id(24).get(),
             *INITIAL_CYCLES,
@@ -190,7 +191,7 @@ fn induct_loopback_stream_success() {
         let (stream_handler, mut initial_state, metrics_registry) = new_fixture(&log);
         let mut expected_state = initial_state.clone();
 
-        let initial_canister_state = CanisterState::new(
+        let initial_canister_state = new_canister_state(
             *LOCAL_CANISTER,
             user_test_id(24).get(),
             *INITIAL_CYCLES,
@@ -208,7 +209,7 @@ fn induct_loopback_stream_success() {
         initial_state.put_streams(btreemap![LOCAL_SUBNET => loopback_stream.clone()]);
 
         // Expecting a canister state with the 2 messages inducted...
-        let mut expected_canister_state = CanisterState::new(
+        let mut expected_canister_state = new_canister_state(
             *LOCAL_CANISTER,
             user_test_id(24).get(),
             *INITIAL_CYCLES,
@@ -539,7 +540,7 @@ fn induct_stream_slices_partial_success() {
         let mut expected_state = initial_state.clone();
 
         // Canister with a reservation for one incoming response.
-        let mut initial_canister_state = CanisterState::new(
+        let mut initial_canister_state = new_canister_state(
             *LOCAL_CANISTER,
             user_test_id(24).get(),
             *INITIAL_CYCLES,
@@ -710,7 +711,7 @@ fn process_certified_stream_slices_success() {
         let mut expected_state = initial_state.clone();
 
         // The initial state consists of a blank CanisterState...
-        let initial_canister_state = CanisterState::new(
+        let initial_canister_state = new_canister_state(
             *LOCAL_CANISTER,
             user_test_id(24).get(),
             *INITIAL_CYCLES,
@@ -753,7 +754,7 @@ fn process_certified_stream_slices_success() {
 
         //
         // The expected `CanisterState` has...
-        let mut expected_canister_state = CanisterState::new(
+        let mut expected_canister_state = new_canister_state(
             *LOCAL_CANISTER,
             user_test_id(24).get(),
             *INITIAL_CYCLES,

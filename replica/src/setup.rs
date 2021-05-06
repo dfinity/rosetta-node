@@ -210,12 +210,7 @@ pub fn setup_crypto_registry(
     logger: ReplicaLogger,
     prepare_registry_data_provider: impl FnOnce(&CryptoComponent, ProtoRegistryDataProvider),
 ) -> (std::sync::Arc<RegistryClientImpl>, CryptoComponent) {
-    // TODO(DFN-67): Remove this hack.
-    // Here, we have a chicken-egg problem par excellence: The crypto component
-    // needs the registry, and the registry needs the crypto component to generate
-    // the keys for tests.
-    // We need a callback to allow tests to provide additional key material in the
-    // registry.
+    // TODO(OR4-61)
     let (crypto, registry) = if config.registry_client.data_provider.is_none() {
         let data_provider = ProtoRegistryDataProvider::new();
         let registry = Arc::new(RegistryClientImpl::new(

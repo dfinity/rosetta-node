@@ -10,7 +10,6 @@ use miracl_core::hmac;
 use miracl_core::rand::RAND;
 use rand_chacha::rand_core::{RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
-use std::convert::TryFrom;
 
 #[cfg(test)]
 mod tests;
@@ -184,7 +183,11 @@ impl RAND_ChaCha20 {
 
 impl RAND for RAND_ChaCha20 {
     fn seed(&mut self, _rawlen: usize, raw: &[u8]) {
-        self.chacha20 = ChaCha20Rng::from_seed(<[u8; 32]>::try_from(raw).unwrap());
+        // Copy first 32 bytes from raw to raw32
+        let mut raw32 = [0u8; 32];
+        let copying = std::cmp::min(raw.len(), raw32.len());
+        raw32[0..copying].copy_from_slice(&raw[0..copying]);
+        self.chacha20 = ChaCha20Rng::from_seed(raw32);
     }
 
     fn getbyte(&mut self) -> u8 {

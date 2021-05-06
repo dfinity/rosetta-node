@@ -1,3 +1,4 @@
+//! Errors related to loading the transcript.
 use crate::crypto::error::InvalidArgumentError;
 use crate::crypto::threshold_sig::ni_dkg::errors::{
     FsEncryptionPublicKeyNotInRegistryError, MalformedFsEncryptionPublicKeyError,
@@ -5,6 +6,8 @@ use crate::crypto::threshold_sig::ni_dkg::errors::{
 use crate::registry::RegistryClientError;
 use core::fmt;
 
+/// Occurs if loading a transcript using `NiDkgAlgorithm::load_transcript`
+/// fails.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum DkgLoadTranscriptError {
     FsEncryptionPublicKeyNotInRegistry(FsEncryptionPublicKeyNotInRegistryError),

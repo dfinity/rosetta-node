@@ -1,8 +1,10 @@
 //! The artifact manager implementation.
-//! Artifact Manager component manages all the Artifact Pools (consensus_pool,
-//! ingress_pool, state_sync_pool, dkg_pool, certification_pool).
-//! It provides an interface to Gossip allowing it to interact with all the
-//! pools without knowing artifact related details.
+//!
+//! The artifact manager component manages all the artifact pools (*Consensus*
+//! pool, ingress pool, state sync pool, DKG pool, and certification pool).
+//!
+//! It provides an interface to *Gossip* enabling it to interact with all the
+//! pools without knowing artifact-related details.
 use crate::actors::{ClientActor, NewArtifact};
 use actix::prelude::Addr;
 use ic_interfaces::{
@@ -22,19 +24,20 @@ use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::sync::Arc;
 
-/// In order to let ArtifactManager manage ArtifactClient that can be
-/// parameterized by different artifact types, it has to use trait object and
-/// there has to be a translation between various artifact sub-types to the
-/// top-level enum types. SomeArtifactClient achieves both goals by acting as a
-/// middleman.
+/// In order to let the artifact manager manage artifact clients, which can be
+/// parameterized by different artifact types, it has to use trait objects.
+///Consequently, there has to be a translation between various artifact
+/// sub-types to the top-level enum types. The trait `SomeArtifactClient`
+/// achieves both goals by acting as a middleman.
 ///
 /// The trick of this translation is to erase the type parameter from all
-/// interface functions. So member functions of this trait mostly resembles
-/// those of ArtifactClient, but uses top-level artifact types. The translation
-/// is mostly handled via `From/Into`, `TryFrom/Into`, `AsMut` and `AsRef`
-/// traits that are automatically derived between artifact subtypes and the
-/// top-level types.
+/// interface functions. As a result, member functions of this trait mostly
+/// resemble those of `ArtifactClient`, but use top-level artifact types. The
+/// translation is mostly handled via `From/Into`, `TryFrom/Into`, `AsMut` and
+/// `AsRef` traits that are automatically derived between artifact subtypes and
+/// the top-level types.
 trait SomeArtifactClient: Send + Sync {
+    /// The method is called when an artifact is received.
     fn on_artifact(
         &self,
         time_source: &dyn TimeSource,
@@ -42,34 +45,48 @@ trait SomeArtifactClient: Send + Sync {
         advert: p2p::GossipAdvert,
         peer_id: NodeId,
     ) -> Result<(), OnArtifactError<artifact::Artifact>>;
+
+    /// The method indicates whether an artifact exists.
     fn has_artifact(&self, msg_id: &artifact::ArtifactId) -> Result<bool, ()>;
+
+    /// The method returns a validated artifact with the given ID, or an error.
     fn get_validated_by_identifier(
         &self,
         msg_id: &artifact::ArtifactId,
     ) -> Result<Option<Box<dyn ChunkableArtifact>>, ()>;
+
+    /// THe method adds the client's filter to the given artifact filter.
     fn get_filter(&self, filter: &mut artifact::ArtifactFilter);
+
+    /// The method returns all validated artifacts that match the given filter.
     fn get_all_validated_by_filter(
         &self,
         filter: &artifact::ArtifactFilter,
     ) -> Vec<p2p::GossipAdvert>;
+
+    /// The method returns the remaining quota for a given peer and artifact
+    /// tag.
     fn get_remaining_quota(&self, tag: artifact::ArtifactTag, peer_id: NodeId) -> Option<usize>;
+
+    /// The method returns a priority function for a given artifact tag.
     fn get_priority_function(&self, tag: artifact::ArtifactTag) -> Option<ArtifactPriorityFn>;
+
+    /// The method returns a chunk tracker for a given artifact ID.
     fn get_chunk_tracker(
         &self,
         id: &artifact::ArtifactId,
     ) -> Option<Box<dyn Chunkable + Send + Sync>>;
 }
 
+/// Implementation struct for `SomeArtifactClient`.
 struct SomeArtifactClientImpl<Artifact: ArtifactKind + 'static> {
+    /// Reference to the artifact client.
     client: Arc<dyn ArtifactClient<Artifact>>,
+    /// The address of the client actor.
     addr: Addr<ClientActor<Artifact>>,
 }
 
-// The `Arc` wrapper below is unfortunate because Rust does not accept the
-// alternative:
-//
-//     impl<Artifact: ArtifactKind, Client: ArtifactClient<Artifact>>
-//         SomeArtifactClient for Client
+/// Trait implementation for `SomeArtifactClient`.
 impl<Artifact: ArtifactKind> SomeArtifactClient for SomeArtifactClientImpl<Artifact>
 where
     Artifact::SerializeAs: TryFrom<artifact::Artifact, Error = artifact::Artifact>,
@@ -83,6 +100,7 @@ where
     Artifact::Attribute: 'static,
     Artifact::Id: 'static,
 {
+    /// The method is called when the given artifact is received.
     fn on_artifact(
         &self,
         time_source: &dyn TimeSource,
@@ -120,6 +138,7 @@ where
         }
     }
 
+    /// The method checks if the artifact with the given ID is available.
     fn has_artifact(&self, msg_id: &artifact::ArtifactId) -> Result<bool, ()> {
         match msg_id.try_into() {
             Ok(id) => Ok(self.client.as_ref().has_artifact(id)),
@@ -127,7 +146,8 @@ where
         }
     }
 
-    fn get_validated_by_identifier<'b>(
+    /// The method returns the validated artifact for the given ID.
+    fn get_validated_by_identifier(
         &self,
         msg_id: &artifact::ArtifactId,
     ) -> Result<Option<Box<dyn ChunkableArtifact>>, ()> {
@@ -141,10 +161,12 @@ where
         }
     }
 
+    /// The method gets the client's filter and adds it to the artifact filter.
     fn get_filter(&self, filter: &mut artifact::ArtifactFilter) {
         *filter.as_mut() = self.client.as_ref().get_filter()
     }
 
+    /// The method returns all validated adverts.
     fn get_all_validated_by_filter(
         &self,
         filter: &artifact::ArtifactFilter,
@@ -157,6 +179,7 @@ where
             .collect::<Vec<_>>()
     }
 
+    /// The method returns the remaining quota for the peer with the given ID.s
     fn get_remaining_quota(&self, tag: artifact::ArtifactTag, peer_id: NodeId) -> Option<usize> {
         if tag == Artifact::TAG {
             Some(self.client.as_ref().get_remaining_quota(peer_id))
@@ -165,6 +188,7 @@ where
         }
     }
 
+    /// The method returns the priority function.
     fn get_priority_function(&self, tag: artifact::ArtifactTag) -> Option<ArtifactPriorityFn> {
         if tag == Artifact::TAG {
             let func = self.client.as_ref().get_priority_function()?;
@@ -181,6 +205,7 @@ where
         }
     }
 
+    /// The method returns the artifact chunk tracker.
     fn get_chunk_tracker(
         &self,
         artifact_id: &artifact::ArtifactId,
@@ -192,32 +217,30 @@ where
     }
 }
 
-/// The ArtifactManager maintains a list of ArtifactClients, and is generic in
+/// The artifact manager maintains a list of artifact clients, and is generic in
 /// the client type. It mostly just forwards function calls to each client
 /// depending on the artifact type.
 ///
-/// For each client, there is both an actor component, and an ArtifactClient
+/// For each client, there is both an actor component and an artifact client
 /// component. The steps to create a client is:
 ///
-/// 1. Create both the actor and ArtifactClient components.
-/// 2. Actor is run in an arbiter.
-/// 3. The ArtifactClient and actor address are then added to an ArtifactManager
-///    through an ArtifactManagerMaker.
+/// 1. Create both the actor and artifact client components.
+/// 2. The actor is run in an arbiter.
+/// 3. The artifact client and actor address are then added to an artifact
+/// manager    through an artifact manager maker.
 ///
-/// After we finish adding all clients to the 'ArtifactManagerMaker', an
-/// 'ArtifactManager' is created.
-//
-// WARN: DO NOT ADD LIFETIME TO THIS STRUCT!
-// Please talk to Paul or Eftychis if you really have to.
-// We will convince you that you shouldn't.
+/// After all clients are added to the `ArtifactManagerMaker`, an
+/// `ArtifactManager` is created.
 #[allow(clippy::type_complexity)]
 pub struct ArtifactManagerImpl {
+    /// The time source.
     time_source: Arc<dyn TimeSource>,
+    /// The clients for each artifact tag.
     clients: HashMap<ArtifactTag, Box<dyn SomeArtifactClient>>,
 }
 
 impl ArtifactManagerImpl {
-    /// Return a new 'ArtifactManager'.
+    /// The constructor creates an `ArtifactManagerImpl` instance.
     pub fn new(time_source: Arc<dyn TimeSource>) -> Self {
         Self {
             time_source,
@@ -227,14 +250,14 @@ impl ArtifactManagerImpl {
 }
 
 impl ArtifactManager for ArtifactManagerImpl {
-    /// When a new artifact is received by Gossip, it is forwarded to
-    /// ArtifactManager via the on_artifact call, which then forwards them
-    /// to be process by a corresponding ArtifactClient based on the
-    /// artifact type. Return `OnArtifactError::NotProcessed` if no clients
+    /// When a new artifact is received by *Gossip*, it is forwarded to
+    /// the artifact manager via an `on_artifact` call, which then forwards it
+    /// to be processed by the corresponding artifact client based on the
+    /// artifact type.
+    ///
+    ///The method returns an `OnArtifactError::NotProcessed` if no clients
     /// were able to process it or an `OnArtifactError::ArtifactPoolError`
     /// if any other error has occurred.
-    ///
-    /// See `ArtifactClient::on_artifact` for more details.
     fn on_artifact(
         &self,
         msg: artifact::Artifact,
@@ -248,8 +271,8 @@ impl ArtifactManager for ArtifactManagerImpl {
         Err(OnArtifactError::NotProcessed(Box::new(msg)))
     }
 
-    /// Checks if any of the ArtifactClient already has the artifact in the pool
-    /// by the given identifier.
+    /// The method checks if any of the artifact clients already have the
+    /// artifact with the given ID in the pool.
     fn has_artifact(&self, message_id: &artifact::ArtifactId) -> bool {
         let tag: ArtifactTag = message_id.into();
 
@@ -259,14 +282,13 @@ impl ArtifactManager for ArtifactManagerImpl {
         }
     }
 
-    /// Return a validated artifact by its identifier, or `None` if not found.
-    // TODO: Currently it is not easy to return a reference to
-    // the caller as some of the pools have the artifacts in the persistent
-    // memory. This needs to be revisited.
+    /// The method returns a validated artifact with the given identifier if
+    /// available.
     fn get_validated_by_identifier(
         &self,
         message_id: &artifact::ArtifactId,
     ) -> Option<Box<dyn ChunkableArtifact + '_>> {
+        // TODO: P2P-513
         let tag: ArtifactTag = message_id.into();
 
         match self.clients.get(&tag) {
@@ -277,9 +299,7 @@ impl ArtifactManager for ArtifactManagerImpl {
         }
     }
 
-    /// Gets the filter that needs to be sent with re-transmission request to
-    /// other peers. This filter should be a collection of all filters returned
-    /// by the ArtifactClients.
+    /// The method returns a collection of all filters from all clients.
     ///
     /// See `ArtifactClient::get_filter` for more details.
     fn get_filter(&self) -> artifact::ArtifactFilter {
@@ -290,7 +310,8 @@ impl ArtifactManager for ArtifactManagerImpl {
         filter
     }
 
-    /// Get adverts of all validated artifacts by the filter from all clients.
+    /// The method returns adverts of all validated artifacts by the filter from
+    /// all clients.
     ///
     /// See `ArtifactClient::get_all_validated_by_filter` for more details.
     fn get_all_validated_by_filter(
@@ -306,8 +327,9 @@ impl ArtifactManager for ArtifactManagerImpl {
         adverts.collect()
     }
 
-    /// Gets the remaining quota the given peer is allowed to consume for a
-    /// specific client that is identified by the given artifact tag.
+    /// The method returns the remaining quota the given peer is allowed to
+    /// consume for a specific client that is identified by the given
+    /// artifact tag.
     ///
     /// See `ArtifactClient::get_remaining_quota` for more details.
     fn get_remaining_quota(&self, tag: artifact::ArtifactTag, peer_id: NodeId) -> Option<usize> {
@@ -316,8 +338,8 @@ impl ArtifactManager for ArtifactManagerImpl {
             .and_then(|client| client.get_remaining_quota(tag, peer_id))
     }
 
-    /// Return the priority function for a specific client that is identified by
-    /// the given artifact tag.
+    /// The method returns the priority function for a specific client that is
+    /// identified by the given artifact tag.
     ///
     /// See `ArtifactClient::get_priority_function` for more details.
     fn get_priority_function(&self, tag: artifact::ArtifactTag) -> Option<ArtifactPriorityFn> {
@@ -326,7 +348,7 @@ impl ArtifactManager for ArtifactManagerImpl {
             .and_then(|client| client.get_priority_function(tag))
     }
 
-    /// Get Chunk tracker for an advert.
+    /// The method returns the chunk tracker for an advert with the given ID.
     ///
     /// See `ArtifactClient::get_chunk_tracker` for more details
     fn get_chunk_tracker(
@@ -341,10 +363,10 @@ impl ArtifactManager for ArtifactManagerImpl {
     }
 }
 
-/// The ArtifactManagerMaker is a helper to create an ArtifactManager after we
-/// add each client. It is separated from the ArtifactManager interface because
-/// we want all clients to be added only once, and ArtifactManager can not be
-/// modified after creation.
+/// The `ArtifactManagerMaker` is a helper to create an `ArtifactManager` after
+/// adding each client. It is separated from the `ArtifactManager` interface to
+/// ensure that all clients are added only once, and that the `ArtifactManager`
+/// can not be modified after creation.
 #[allow(clippy::type_complexity)]
 pub struct ArtifactManagerMaker {
     time_source: Arc<dyn TimeSource>,
@@ -352,14 +374,15 @@ pub struct ArtifactManagerMaker {
 }
 
 impl ArtifactManagerMaker {
-    /// Return a new 'ArtifactManagerMaker'.
+    /// The constructor creates an `ArtifactManagerMaker` instance.
     pub fn new(time_source: Arc<dyn TimeSource>) -> Self {
         Self {
             time_source,
             clients: HashMap::new(),
         }
     }
-    /// Add a new ArtifactClient (that is already wrapped in Arc) to be managed.
+    /// The method adds a new `ArtifactClient` (that is already wrapped in
+    /// `Arc`) to be managed.
     pub fn add_arc_client<Artifact: ArtifactKind + 'static>(
         &mut self,
         client: Arc<dyn ArtifactClient<Artifact>>,
@@ -381,7 +404,7 @@ impl ArtifactManagerMaker {
             .insert(tag, Box::new(SomeArtifactClientImpl { client, addr }));
     }
 
-    /// Add a new ArtifactClient to be managed.
+    /// The method adds a new `ArtifactClient` to be managed.
     pub fn add_client<Artifact: ArtifactKind + 'static, Client: 'static>(
         &mut self,
         client: Client,
@@ -409,8 +432,8 @@ impl ArtifactManagerMaker {
         );
     }
 
-    /// Finish by creating an ArtifactManager component that manages all
-    /// clients.
+    /// The method finishes the collection of `ArtifactClient` components and
+    /// creates an `ArtifactManager` component that manages all clients.
     pub fn finish(self) -> Arc<dyn ArtifactManager> {
         Arc::new(ArtifactManagerImpl {
             time_source: self.time_source,

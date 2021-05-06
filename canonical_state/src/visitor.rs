@@ -1,5 +1,5 @@
-//! This module provides utilities to build traversals of the node state as if
-//! it was a state in canonical form.
+//! Utilities for traversing the Replicated State as if it was a state in
+//! canonical form.
 
 /// Data structure controlling the traversal of the state tree.
 #[derive(Debug, PartialEq, Eq)]
@@ -115,7 +115,7 @@ pub fn subtree<V: Visitor>(
     v.end_subtree()
 }
 
-// Enter edge labeled as `name` and execute `f` if it was not skipped.
+/// Enter edge labeled as `name` and execute `f` if it was not skipped.
 pub fn with_edge<V: Visitor, Name: AsRef<[u8]>>(
     v: &mut V,
     name: Name,

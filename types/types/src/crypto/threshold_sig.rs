@@ -3,7 +3,7 @@ use crate::crypto::threshold_sig::ni_dkg::NiDkgTranscript;
 use crate::crypto::AlgorithmId;
 use ic_crypto_internal_types::sign::threshold_sig::ni_dkg::CspNiDkgTranscript;
 use ic_crypto_internal_types::sign::threshold_sig::public_key::bls12_381;
-pub use ic_crypto_internal_types::sign::threshold_sig::public_key::bls12_381::ThresholdSigPublicKeyError;
+pub use ic_crypto_internal_types::sign::threshold_sig::public_key::bls12_381::ThresholdSigPublicKeyBytesConversionError;
 use ic_crypto_internal_types::sign::threshold_sig::public_key::CspThresholdSigPublicKey;
 use ic_protobuf::registry::crypto::v1::AlgorithmId as AlgorithmIdProto;
 use ic_protobuf::registry::crypto::v1::PublicKey as PublicKeyProto;
@@ -16,6 +16,7 @@ pub mod ni_dkg;
 #[cfg(test)]
 mod tests;
 
+/// A threshold signature public key.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ThresholdSigPublicKey {
     internal: CspThresholdSigPublicKey,
@@ -62,11 +63,11 @@ impl From<ThresholdSigPublicKey> for bls12_381::PublicKeyBytes {
 }
 
 impl TryFrom<PublicKeyProto> for ThresholdSigPublicKey {
-    type Error = ThresholdSigPublicKeyError;
+    type Error = ThresholdSigPublicKeyBytesConversionError;
 
     fn try_from(public_key: PublicKeyProto) -> Result<Self, Self::Error> {
         if AlgorithmId::from(public_key.algorithm) != AlgorithmId::ThresBls12_381 {
-            return Err(ThresholdSigPublicKeyError::Malformed {
+            return Err(ThresholdSigPublicKeyBytesConversionError::Malformed {
                 key_bytes: Some(public_key.key_value),
                 internal_error: format!(
                     "Invalid algorithm: expected {:?} but got {:?}",
@@ -77,7 +78,7 @@ impl TryFrom<PublicKeyProto> for ThresholdSigPublicKey {
         }
         const PUBKEY_LEN: usize = bls12_381::PublicKeyBytes::SIZE;
         if public_key.key_value.len() != PUBKEY_LEN {
-            return Err(ThresholdSigPublicKeyError::Malformed {
+            return Err(ThresholdSigPublicKeyBytesConversionError::Malformed {
                 internal_error: format!(
                     "Invalid length: expected {} but got {}",
                     PUBKEY_LEN,

@@ -134,8 +134,8 @@ impl CyclesAccountManagerConfig {
             xnet_byte_transmission_fee: Cycles::new(70_000),
             ingress_message_reception_fee: Cycles::new(22_600_000),
             ingress_byte_reception_fee: Cycles::new(140_000),
-            // $50 per GiB per year => 50e12 Cycles per year
-            gib_storage_per_second_fee: Cycles::new(1_600_000),
+            // 40 SDR per GiB per year => 40e12 Cycles per year
+            gib_storage_per_second_fee: Cycles::new(1_270_000),
         }
     }
 
@@ -153,8 +153,8 @@ impl CyclesAccountManagerConfig {
             xnet_byte_transmission_fee: Cycles::new(1_000),
             ingress_message_reception_fee: Cycles::new(1_200_000),
             ingress_byte_reception_fee: Cycles::new(2_000),
-            // $5 per GiB per year => 5e12 Cycles per year
-            gib_storage_per_second_fee: Cycles::new(160_000),
+            // 4 SDR per GiB per year => 4e12 Cycles per year
+            gib_storage_per_second_fee: Cycles::new(127_000),
         }
     }
 

@@ -1,3 +1,6 @@
+#![forbid(unsafe_code)]
+#![deny(clippy::unwrap_used)]
+
 //! Common methods for working with BLS12-381 primitives
 
 pub mod serde;

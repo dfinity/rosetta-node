@@ -2,7 +2,7 @@ mod framework;
 
 use crate::framework::ConsensusDriver;
 use ic_artifact_pool::{consensus_pool, dkg_pool};
-use ic_consensus::{certification::CertifierImpl, dkg, ConsensusImpl};
+use ic_consensus::{certification::CertifierImpl, consensus::ConsensusImpl, dkg};
 use ic_consensus_message::make_genesis;
 use ic_interfaces::{state_manager::Labeled, time_source::TimeSource};
 use ic_logger::replica_logger::no_op_logger;

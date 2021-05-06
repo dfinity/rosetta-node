@@ -9,7 +9,7 @@ pub const ED25519_MSG_1_RFC8032_HEX: &str = "";
 pub const ED25519_SIG_1_RFC8032_HEX: &str = "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b";
 
 // Ed25519 test vectors with DER-encoded public keys.
-// Generated using (https://github.com/dfinity-lab/ic-webauthn-cli),
+// Generated using ic-webauthn-cli,
 // and some other tools for post-processing.
 pub const ED25519_PK_1_HEX: &str =
     "B3997656BA51FF6DA37B61D8D549EC80717266ECF48FB5DA52B654412634844C";
@@ -59,7 +59,7 @@ pub const ECDSA_P256_SIG_2_DER_HEX: &str = "3045022100e4e74ecff065dfbcc00cd1a7ea
 pub const WEBAUTHN_MSG_2_HEX: &str = "9bc7b89a00c2aa9105a648bf57d85b5b3c669fd1e4b9ebafcdf525b35ea5a645055f622a2713513422fa8b8c360a962b0f64e7aa1b0b6b0bbd5f6e26775a285fcdf716577a";
 
 // A DER-wrapped COSE ECDSA-P256 public key.
-// (from https://docs.dfinity.systems/spec/public/#authentication-webauthn)
+// (from https://sdk.dfinity.org/docs/interface-spec/index.html#signatures)
 pub const ECDSA_P256_PK_3_COSE_DER_WRAPPED_HEX: &str = "305E300C060A2B0601040183B8430101034E00A50102032620012158207FFD83632072FD1BFEAF3FBAA43146E0EF95C3F55E3994A41BBF2B5174D771DA22582032497EED0A7F6F000928765B8318162CFD80A94E525A6A368C2363063D04E6ED";
 
 // ECDSA_PK_DER_HEX was generated via the following commands:

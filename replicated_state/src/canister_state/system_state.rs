@@ -62,8 +62,7 @@ pub struct SystemState {
     /// empty blob.
     ///
     /// See also:
-    ///   * https://github.com/dfinity-lab/ic-ref/pull/143
-    ///   * https://docs.dfinity.systems/spec/public/#system-api-certified-data
+    ///   * https://sdk.dfinity.org/docs/interface-spec/index.html#system-api-certified-data
     pub certified_data: Vec<u8>,
 
     pub canister_metrics: CanisterMetrics,

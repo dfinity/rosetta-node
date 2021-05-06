@@ -1,4 +1,3 @@
-pub mod canister;
 pub mod conversion_rate;
 pub mod crypto;
 pub mod firewall;

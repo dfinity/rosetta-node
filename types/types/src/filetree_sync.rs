@@ -129,7 +129,7 @@ impl Chunkable for FileTreeSyncChunksTracker {
         Box::new(v.into_iter())
     }
 
-    fn get_artifact_indentifier(&self) -> CryptoHash {
+    fn get_artifact_identifier(&self) -> CryptoHash {
         unimplemented!();
     }
 

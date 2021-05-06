@@ -1,3 +1,4 @@
+//! Utilities for interactive Distributed Key Generation (DKG).
 use super::*;
 use crate::common::utils::dkg::utils::{
     crypto_for, dealer_and_receiver_keys, dealings, encryption_public_keys,
@@ -22,6 +23,8 @@ use std::sync::Arc;
 #[cfg(test)]
 mod tests;
 
+/// A config used to create an initial interactive DKG transcript. Such a
+/// transcript is used to bootstrap a subnet for testing purposes.
 pub struct InitialDkgConfig {
     dkg_config: dkg::Config,
 }
@@ -72,9 +75,8 @@ impl InitialDkgConfig {
 /// Creates an initial DKG transcript.
 ///
 /// The transcript is created by performing the DKG protocol in a _centralized_
-/// manner. Creating the initial DKG transcript this way is insecure. This
-/// temporary solution will be replaced eventually (see also CRP-410).
-///
+/// manner. This method must only be used for testing purposes since the
+/// transcript is generated in a centralized manner.
 ///
 /// # Panics
 /// * If the `receiver_keys` don't match the receivers in the

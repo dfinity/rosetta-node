@@ -1,138 +1,73 @@
-use ic_protobuf::p2p::v1 as pb;
-use ic_protobuf::proxy::ProtoProxy;
-/// Peer Management maintains datastructures on adverts and download state
-/// per peer as defined in the spec
-///
-/// A replica connects to peers according to the latest subnet record
-/// membership used by consensus and the predecessor subnet record.
-/// For each such peer the peer manager manages the list
-/// of adverts and in flight chunk downloads.
-///
-/// The following data structures represent the state of the peer manager
-/// and all ongoing download activity.
-///
-/// ```text
-///   +---------------------+
-///   |Download manager     |
-///   |----------- ---------|   +------------------+    +----------+     +----------+
-///   |UnderconstructionList|-->|Artifact          |....|Artifact  |.....|Artifact  |
-///   |                     |   |Download          |    |Download  |     |Download  |
-///   |                     |   |Tracker#1         |    |Tracker#2 |     |Tracker#N |
-///   |                     |   |requested_instant |    |          |     |          |
-///   |                     |   +------------------+    +----------+     +----------+
-///   |                     |
-///   |                     |
-///   |          PeerList   |-->+-------------------------------------------+---> ....
-///   |                     |   |Peer#1  (PeerContext)                      |
-///   |                     |   +-------------------------------------------+
-///   +---------------------+   |Peer Inflight Chunk "requested" map        |
-///                             +-----------------------+-------------------+
-///                             |Key                    |Value              |
-///                             +-----------------------+-------------------+
-///                             |ArtifactID +ChunkID    |requested_instant  |
-///                             +-----------------------+-------------------+
-///                             |...                    |                   |
-///                             +-----------------------+-------------------+
-/// ```
-///
-/// Locking Hierarchy:
-///    Peer Context lock
-///    Under construction list lock
-///    Prioritizer Lock (R/W)
-///    Advert tracker Lock (R/W)
-///
-/// Note on locking: Only the download_next_compute_work() workflow
-/// *requires* acquisition of multiple/all locks in the correct order.
-///
-///    a. Peer context lock to update the peercontext 'requested' list.
-///
-///    b. Under construction list lock  to add new artifacts being constructed.
-///
-///    c. Prioritizer lock to iterate over adverts that are eligible for
-///    download
-///
-///    d. Advert tracker lock to mark a download attempt on a advert.
-///
-/// All other workflows viz. 'on_timeout' 'on_chunk' etc DO NOT
-/// require locks to be acquired simultaneously. The general approach
-/// is to lock and copy out the state and then immediately drop the
-/// lock before proceeding to acquire the next lock. The pattern is
-///
-///  // copy sate and drop locks!!!
-///  let state = advert_tracker.lock().unwrap().[state].clone();
-///  // next lock
-///  prioritizer.lock().unwrap();
-///
-/// Locking hierarchy is irrelevant if only 1 lock is acquired at a time.
-///
-/// In theory the above locking rules prevent 'Circular Waits' and thus
-/// guarantee deadlock avoidance.
-pub(crate) trait DownloadManager {
-    // Send adverts to all peers
-    fn send_advert_to_peers(&self, gossip_advert: GossipAdvert);
-
-    // React to advert from a peer
-    fn on_advert(&self, gossip_advert: GossipAdvert, peer_id: NodeId);
-
-    // Download chunks for the next prioritized advert
-    fn download_next(&self, peer_id: NodeId) -> Result<(), Box<dyn Error>>;
-
-    // Send a chunk to a peer
-    fn send_chunk_to_peer(&self, gossip_chunk: GossipChunk, peer_id: NodeId);
-
-    // React to a chunk received from a peer
-    fn on_chunk(&self, gossip_chunk: GossipChunk, peer_id: NodeId);
-
-    // React to a connection-related event received from Transport
-    fn peer_connection_down(&self, peer_id: NodeId);
-    fn peer_connection_up(&self, peer_id: NodeId);
-
-    // React to a retransmission request received. Get adverts of all
-    // validated artifacts for the requested filter and send them to the peer.
-    fn on_retransmission_request(
-        &self,
-        gossip_re_request: &GossipRetransmissionRequest,
-        peer_id: NodeId,
-    ) -> P2PResult<()>;
-
-    // Send a retransmission request to a peer
-    fn send_retransmission_request(&self, peer_id: NodeId);
-
-    // The on_timer method is invoked periodically by the gossip
-    // component to perform p2p book keeping tasks.
-    //
-    // These tasks include
-    // a. calling download_next for all peers every N seconds when the
-    // priority function changes,
-    // b. checking for chunk download timeouts and
-    // c. Polling the registry for subnet membership changes.
-    fn on_timer(&self, event_handler: &Arc<dyn P2PEventHandlerControl>);
-}
-// End DownloadManager trait
-
-pub(crate) trait PeerManager {
-    // Return current list of peers managed by the peer manager
-    fn get_current_peer_ids(&self) -> Vec<NodeId>;
-
-    // set the list of peers
-    fn set_current_peer_ids(&self, new_peers: Vec<NodeId>);
-
-    // adds one peer to the list of current peers
-    fn add_peer(
-        &self,
-        peer: NodeId,
-        node_record: &NodeRecord,
-        registry_version: RegistryVersion,
-        event_handler: &Arc<dyn P2PEventHandlerControl>,
-    ) -> P2PResult<()>;
-
-    // removes a peer from the list of current peers
-    fn remove_peer(&self, peer: NodeId, registry_version: RegistryVersion);
-}
-// End PeerManager trait
+//! The download manager maintains data structures on adverts and download state
+//! per peer.
+//!
+//! A replica connects to all peers that are listed in the current subnet record
+//! or the subnet record preceding the current record.
+//! For each connected peer, the peer manager manages the list
+//! of adverts and ongoing chunk downloads.
+//!
+//! The following data structures represent the state of the download manager
+//! and all ongoing download activity.
+//!
+//! ```text
+//!   +---------------------+
+//!   |Download manager     |
+//!   |----------- ---------|   +------------------+    +----------+     +----------+
+//!   |UnderconstructionList|-->|Artifact          |....|Artifact  |.....|Artifact  |
+//!   |                     |   |Download          |    |Download  |     |Download  |
+//!   |                     |   |Tracker#1         |    |Tracker#2 |     |Tracker#N |
+//!   |                     |   |requested_instant |    |          |     |          |
+//!   |                     |   +------------------+    +----------+     +----------+
+//!   |                     |
+//!   |                     |
+//!   |          PeerList   |-->+-------------------------------------------+---> ....
+//!   |                     |   |Peer#1  (PeerContext)                      |
+//!   |                     |   +-------------------------------------------+
+//!   +---------------------+   |Peer In-flight Chunk "requested" map       |
+//!                             +-----------------------+-------------------+
+//!                             |Key                    |Value              |
+//!                             +-----------------------+-------------------+
+//!                             |ArtifactID +ChunkID    |requested_instant  |
+//!                             +-----------------------+-------------------+
+//!                             |...                    |                   |
+//!                             +-----------------------+-------------------+
+//! ```
+//!
+//! Locking is required to protect the data structures. The locking Hierarchy
+//! is as follows:
+//! 1) Peer context lock
+//! 2) Under construction list lock
+//! 3) Prioritizer Lock (R/W)
+//! 4) Advert tracker Lock (R/W)
+//!
+//! Note that only the `download_next_compute_work()` workflow
+//! *requires* the acquisition of multiple/all locks in the correct order:
+//!
+//! 1) Peer context lock to update the peer context "requested" list.
+//! 2) Under construction list lock to add new artifacts being constructed.
+//! 3) Prioritizer lock to iterate over adverts that are eligible for download.
+//! 4) Advert tracker lock to mark a download attempt on a advert.
+//!
+//! All other workflows, viz. `on_timeout()`, `on_chunk()` and so forth DO NOT
+//! require locks to be acquired simultaneously. The general approach
+//! is to lock and copy out the state and then immediately drop the
+//! lock before proceeding to acquire the next lock. The pattern is as
+//! follows:
+//!
+//!  // Copy state and drop locks.</br>
+//!  `let state = advert_tracker.lock().unwrap().[state].clone();`</br>
+//!  // Acquire the next lock.</br>
+//!  `prioritizer.lock().unwrap();`
+//!
+//! The locking hierarchy is irrelevant if only 1 lock is acquired at a time.
+//!
+//! In theory, the above locking rules prevent "circular waits" and thus
+//! guarantee deadlock avoidance.
 
 use ic_interfaces::registry::RegistryClient;
 use ic_interfaces::{artifact_manager::ArtifactManager, transport::Transport};
+use ic_protobuf::p2p::v1 as pb;
+use ic_protobuf::proxy::ProtoProxy;
 use ic_types::{
     artifact::{Artifact, ArtifactId},
     chunkable::{ArtifactErrorCode, ChunkId},
@@ -176,33 +111,123 @@ use ic_types::{transport::TransportErrorCode, RegistryVersion};
 use std::collections::HashSet;
 use std::ops::DerefMut;
 
-/// For each peer a node tracks the chunks it requested from it,
-/// identified by their artifact_id and chunk_id
+/// The download manager maintains data structures on adverts and download state
+/// per peer.
+pub(crate) trait DownloadManager {
+    /// The method sends adverts to all peers.
+    fn send_advert_to_peers(&self, gossip_advert: GossipAdvert);
+
+    /// The method reacts to an advert received from the peer with the given
+    /// node ID.
+    fn on_advert(&self, gossip_advert: GossipAdvert, peer_id: NodeId);
+
+    /// The method downloads chunks for adverts with the highest priority from
+    /// the given peer.
+    fn download_next(&self, peer_id: NodeId) -> Result<(), Box<dyn Error>>;
+
+    /// The method sends a chunk to the peer with the given node ID.
+    fn send_chunk_to_peer(&self, gossip_chunk: GossipChunk, peer_id: NodeId);
+
+    /// The method reacts to a chunk received from the peer with the given node
+    /// ID.
+    fn on_chunk(&self, gossip_chunk: GossipChunk, peer_id: NodeId);
+
+    /// The method reacts to a disconnect event event for the peer with the
+    /// given node ID.
+    fn peer_connection_down(&self, peer_id: NodeId);
+
+    /// The method reacts to a connect event event for the peer with the given
+    /// node ID.
+    fn peer_connection_up(&self, peer_id: NodeId);
+
+    /// The method reacts to a retransmission request.
+    ///
+    /// It collects adverts of all validated artifacts for the requested filter
+    /// and sends them to the peer.
+    fn on_retransmission_request(
+        &self,
+        gossip_re_request: &GossipRetransmissionRequest,
+        peer_id: NodeId,
+    ) -> P2PResult<()>;
+
+    /// The method sends a retransmission request to the peer with the given
+    /// node ID.
+    fn send_retransmission_request(&self, peer_id: NodeId);
+
+    /// The method is invoked periodically by the gossip component to perform
+    /// p2p book keeping tasks.
+    ///
+    /// These tasks include the following:
+    ///
+    /// a) Call 'download_next' for all peers when the priority function
+    /// changes.</br>
+    /// b) Check for chunk download timeouts.</br>
+    /// c) Poll the registry for subnet membership changes.
+    fn on_timer(&self, event_handler: &Arc<dyn P2PEventHandlerControl>);
+}
+
+/// The peer manager manages the list of current peers.
+pub(crate) trait PeerManager {
+    /// The method returns the current list of peers.
+    fn get_current_peer_ids(&self) -> Vec<NodeId>;
+
+    /// The method sets the list of peers to the given list.
+    fn set_current_peer_ids(&self, new_peers: Vec<NodeId>);
+
+    /// The method adds the given peer to the list of current peers.
+    fn add_peer(
+        &self,
+        peer: NodeId,
+        node_record: &NodeRecord,
+        registry_version: RegistryVersion,
+        event_handler: &Arc<dyn P2PEventHandlerControl>,
+    ) -> P2PResult<()>;
+
+    /// The method removes the given peer from the list of current peers.
+    fn remove_peer(&self, peer: NodeId, registry_version: RegistryVersion);
+}
+
+/// A node tracks the chunks it requested from each peer.
+/// A chunk is identified by the artifact ID and chunk ID.
+/// This struct defines a look-up key composed of an artifact ID and chunk ID.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct GossipRequestTrackerKey {
-    artifact_id: ArtifactId, // Artifact ID for the in flight chunk request
-    chunk_id: ChunkId,       // Chunk ID for the in flight chunk request
+    /// The artifact ID of the requested chunk.
+    artifact_id: ArtifactId,
+    /// The chunk ID of the requested chunk.
+    chunk_id: ChunkId,
 }
 
-// Per peer chunk request tracker for a chunk request sent to a peer.
-// Tracking begins when a request is dispatched and concludes when
-// a. MAX_CHUNK_WAIT_MS time has elapsed without a response from the peer OR
-// b. the peer responds with the chunk or an error message.
+/// A per-peer chunk request tracker for a chunk request sent to a peer.
+/// Tracking begins when a request is dispatched and concludes when
+///
+/// a) 'MAX_CHUNK_WAIT_MS' time has elapsed without a response from the peer OR
+/// </br> b) the peer responds with the chunk or an error message.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct GossipRequestTracker {
-    requested_instant: Instant, // Instant when the request was initiated
+    /// Instant when the request was initiated.
+    requested_instant: Instant,
 }
 
+/// The peer context for a certain peer.
+/// It keeps track of the requested chunks at any point in time.
 #[allow(dead_code)]
 #[derive(Clone)]
 pub struct PeerContext {
+    /// The node ID of the peer.
     peer_id: NodeId,
+    /// The dictionary containing the requested chunks.
     requested: HashMap<GossipRequestTrackerKey, GossipRequestTracker>,
+    /// The time when the peer was disconnected.
     disconnect_time: Option<SystemTime>,
+    /// The time of the last processed retransmission request from this peer.
     last_retransmission_request_processed_time: Instant,
 }
 
+/// A `NodeId` can be converted into a `PeerContext`.
 impl From<NodeId> for PeerContext {
+    /// The function returns a new peer context associated with the given node
+    /// ID.
     fn from(peer_id: NodeId) -> Self {
         PeerContext {
             peer_id,
@@ -213,55 +238,82 @@ impl From<NodeId> for PeerContext {
     }
 }
 
+/// The dictionary mapping node IDs to peer contexts.
 type PeerContextDictionary = HashMap<NodeId, PeerContext>;
 
+/// The cache used to check if a certain artifact has been received recently.
 type ReceiveCheckCache = LruCache<CryptoHash, ()>;
 
+/// An implementation of the `PeerManager` trait.
 pub(crate) struct PeerManagerImpl {
+    /// The node ID of the peer.
     node_id: NodeId,
-    _subnet_id: SubnetId,
+    /// The logger.
     log: ReplicaLogger,
+    /// The dictionary containing all peer contexts.
     current_peers: Arc<Mutex<PeerContextDictionary>>,
+    /// The underlying *Transport*.
     transport: Arc<dyn Transport>,
+    /// The transport client type.
     transport_client_type: TransportClientType,
 }
 
+/// An implementation of the `DownloadManager` trait.
 pub(crate) struct DownloadManagerImpl {
+    /// The node ID of the peer.
     node_id: NodeId,
+    /// The subnet ID.
     subnet_id: SubnetId,
+    /// The registry client.
     registry_client: Arc<dyn RegistryClient>,
+    /// The artifact manager.
     artifact_manager: Arc<dyn ArtifactManager>,
+    /// The download prioritizer.
     prioritizer: Arc<dyn DownloadPrioritizer>,
+    /// The peer manager.
     peer_manager: Arc<dyn PeerManager + Send + Sync>,
-    // This is correct, current_peers is shared at the moment between the download manager
-    // and the peer manager. Keeping it in just one would require too big of an overhaul.
+    /// The set of current peers, which is shared between the download manager
+    /// and the peer manager.
     current_peers: Arc<Mutex<PeerContextDictionary>>,
-    // Transport provides a thin layer hiding its actor nature. This
-    // should be substituted with the actor address.
+    /// The underlying *Transport* layer.
     transport: Arc<dyn Transport>,
+    /// The flow mapper.
     flow_mapper: Arc<FlowMapper>,
+    /// The *Transport* client type.
     transport_client_type: TransportClientType,
+    /// The list of artifacts that is under construction.
     artifacts_under_construction: RwLock<ArtifactDownloadListImpl>,
+    /// The logger.
     log: ReplicaLogger,
+    /// The download management metrics.
     metrics: DownloadManagementMetrics,
+    /// The *Gossip* configuration.
     gossip_config: GossipConfig,
+    /// The cache that is used to check if an artifact has been downloaded
+    /// recently.
     receive_check_caches: RwLock<HashMap<NodeId, ReceiveCheckCache>>,
+    /// The priority function invocation time.
     pfn_invocation_instant: Mutex<Instant>,
+    /// The last registry refresh time.
     registry_refresh_instant: Mutex<Instant>,
+    /// The last retransmission request time.
     retransmission_request_instant: Mutex<Instant>,
 }
 
+/// `DownloadManagerImpl` implements the `DownloadManager` trait.
 impl DownloadManager for DownloadManagerImpl {
+    /// The method sends adverts to all peers.
     fn send_advert_to_peers(&self, gossip_advert: GossipAdvert) {
         let current_peers = self.peer_manager.get_current_peer_ids();
         self.send_advert_to_peer_list(gossip_advert, current_peers);
     }
 
+    /// The method downloads chunks for adverts with the highest priority from
+    /// the given peer.
     fn on_advert(&self, gossip_advert: GossipAdvert, peer_id: NodeId) {
-        // Precondition ensured by gossip_protocol.on_advert():
-        // Corresponding artifact is not in the artifact pool
-
-        // Check if we've seen this artifact before
+        // The precondition ensured by gossip_protocol.on_advert() is that
+        // the corresponding artifact is not in the artifact pool.
+        // Check if we have seen this artifact before:
         if self
             .receive_check_caches
             .read()
@@ -269,7 +321,7 @@ impl DownloadManager for DownloadManagerImpl {
             .values()
             .any(|cache| cache.contains(&gossip_advert.integrity_hash))
         {
-            // Ignore advert
+            // If yes, the advert is ignored.
             return;
         }
 
@@ -282,33 +334,32 @@ impl DownloadManager for DownloadManagerImpl {
         self.metrics.adverts_received.inc();
     }
 
-    /// The download_next(i) subroutine looks at the Adverts Queue for
-    /// peer i and finds the highest-priority advert that is not
-    /// already being downloaded from other peers more times in
-    /// parallel than the maximum duplicity, and for which there is
-    /// room to store the corresponding artifact in the un-validated
-    /// artifact pool of peer i.  If such an advert is found, the node
-    /// adds a tracker for the advert to the Requested
-    /// Queue of peer i, and sends a chunk requests for the corresponding
-    /// artifact.
-
+    /// The method starts downloading a chunk of the highest-priority
+    /// artifact in the request queue if sufficient bandwidth is
+    /// available.
+    ///
+    /// The method looks at the adverts queue for the given peer i and
+    /// retrieves the highest-priority advert that is not already
+    /// being downloaded from other peers more times in parallel than
+    /// the maximum duplicity and for which there is room to store the
+    /// corresponding artifact in the unvalidated artifact pool of
+    /// peer i. If such an advert is found, the node adds a tracker
+    /// for the advert to the requested queue of peer i, and sends a
+    /// chunk requests for the corresponding artifact.
+    ///
     /// The node also sets a download timeout for this chunk request
-    /// with a duration that is appropriate size of the chunk. Every x
-    /// seconds, the node iterates over the requested chunks and
-    /// checks timed out requests. The timed out requests are removed
-    /// from the Requested Queue of peer and a history of such
-    /// timeouts is retained (TODO), Future calls download_next(i)
-    /// take into account the download timeout history to de-prioritize
-    /// the time request from being fetched again from same peer that
-    /// time outs in the past.
-
-    /// This is a security feature, because in case no duplicity is
-    /// allowed, a bad peer could otherwise maintain a “monopoly” on
+    /// with a duration that is appropriate for the size of the chunk.
+    /// Periodically, the node iterates over the requested chunks and
+    /// checks timed-out requests. The timed-out requests are removed
+    /// from the requested queue of this peer and a history of such
+    /// time-outs is retained.  Future download_next(i) calls take the
+    /// download time-out history into account, de-prioritizing the
+    /// request for peers that timed out in the past.
+    ///
+    /// This is a security requirement because in case no duplicity is
+    /// allowed, a bad peer could otherwise maintain a "monopoly" on
     /// providing the node with a particular artifact and prevent the
-    /// node from ever receiving
-
-    // Start downloading a chunk of the highest-priority artifact in
-    // the requests queue, if bandwidth allows.
+    /// node from ever receiving it.
     fn download_next(&self, peer_id: NodeId) -> Result<(), Box<dyn Error>> {
         self.metrics.download_next_calls.inc();
         let start_time = Instant::now();
@@ -320,7 +371,30 @@ impl DownloadManager for DownloadManagerImpl {
         Ok(())
     }
 
-    // This function is called when a new chunk is received
+    /// The method sends a chunk to the peer with the given node ID.
+    fn send_chunk_to_peer(&self, gossip_chunk: GossipChunk, peer_id: NodeId) {
+        trace!(
+            self.log,
+            "Node-{:?} sent chunk data  ->{:?} {:?}",
+            self.node_id,
+            peer_id,
+            gossip_chunk
+        );
+        let message = GossipMessage::Chunk(gossip_chunk);
+        let flow_tag = self.flow_mapper.map(&message);
+        self.transport_send(message, peer_id, flow_tag)
+            .map(|_| self.metrics.chunks_sent.inc())
+            .unwrap_or_else(|e| {
+                // Transport and gossip implement fixed-sized queues for flow control.
+                // Logging is performed at a lower level to avoid being spammed by misbehaving
+                // nodes. Errors are ignored as protocol violations.
+                trace!(self.log, "Send chunk failed: peer {:?} {:?} ", peer_id, e);
+                self.metrics.chunk_send_failed.inc();
+            });
+    }
+
+    /// The method reacts to a chunk received from the peer with the given node
+    /// ID.
     fn on_chunk(&self, gossip_chunk: GossipChunk, peer_id: NodeId) {
         trace!(
             self.log,
@@ -330,14 +404,13 @@ impl DownloadManager for DownloadManagerImpl {
             gossip_chunk
         );
 
-        // Remove the chunk request tracker
+        // Remove the chunk request tracker.
         let mut current_peers = self.current_peers.lock().unwrap();
         if let Some(peer_context) = current_peers.get_mut(&peer_id) {
             if let Some(tracker) = peer_context.requested.remove(&GossipRequestTrackerKey {
                 artifact_id: gossip_chunk.artifact_id.clone(),
                 chunk_id: gossip_chunk.chunk_id,
             }) {
-                // TODO: move this to artifact.rs
                 let artifact_type = match &gossip_chunk.artifact_id {
                     ArtifactId::ConsensusMessage(_) => "consensus",
                     ArtifactId::IngressMessage(_) => "ingress",
@@ -358,18 +431,17 @@ impl DownloadManager for DownloadManagerImpl {
                     gossip_chunk.chunk_id,
                     peer_id.get()
                 );
-                self.metrics.chunks_unsolicited_or_timedout.inc();
+                self.metrics.chunks_unsolicited_or_timed_out.inc();
             }
         }
 
-        // Check if the request has been served; If an error is
-        // returned it means that artifact "chunk" cannot be served by
-        // this peer.  We mark this chunk download as failed but
-        // continue to track this advert under the peer for other
-        // chunks (as this might be useful for statesync)
-        // This situation is possible if one of the replicas
+        // Check if the request has been served. If an error is
+        // returned, the artifact chunk cannot be served by this peer.
+        // In this case, the chunk download is marked as failed but
+        // the advert is still being tracked for other chunks (as this might be useful
+        // for StateSync). This situation is possible if one of the replicas
         // misses a part of the artifact due to corruption or progress
-        // (If the peer has a higher executed height now, it might
+        // (if the peer has a higher executed height now, it might
         // have changed its state and thus may only be able to serve
         // some but not all chunks of the artifact the node is
         // interested in).
@@ -401,13 +473,13 @@ impl DownloadManager for DownloadManagerImpl {
             return;
         }
 
-        // increment received chunks counter
+        // Increment the received chunks counter.
         self.metrics.chunks_received.inc();
 
-        // feed the chunk to artifact tracker
+        // Feed the chunk to artifact tracker-
         let mut artifacts_under_construction = self.artifacts_under_construction.write().unwrap();
 
-        // Find the tracker to feed the chunk
+        // Find the tracker to feed the chunk.
         let artifact_tracker = artifacts_under_construction.get_tracker(&gossip_chunk.artifact_id);
         if artifact_tracker.is_none() {
             trace!(
@@ -427,12 +499,12 @@ impl DownloadManager for DownloadManagerImpl {
         }
         let artifact_tracker = artifact_tracker.unwrap();
 
-        // feed the chunk to the tracker
+        // Feed the chunk to the tracker.
         let completed_artifact = match artifact_tracker
             .chunkable
             .add_chunk(gossip_chunk.artifact_chunk.unwrap())
         {
-            // Artifact assembly is complete
+            // Artifact assembly is complete.
             Ok(artifact) => Some(artifact),
             Err(ArtifactErrorCode::ChunksMoreNeeded) => None,
             Err(ArtifactErrorCode::ChunkVerificationFailed) => {
@@ -446,19 +518,19 @@ impl DownloadManager for DownloadManagerImpl {
                 self.metrics.chunks_verification_failed.inc();
                 None
             }
-        }; // End Match feeding the chunk
+        };
 
+        // Return if the artifact is complete.
         if completed_artifact.is_none() {
             return;
         }
 
-        // record metrics
+        // Record metrics.
         self.metrics.artifacts_received.inc();
 
         let completed_artifact = completed_artifact.unwrap();
 
-        // Check whether the artifact matches the advertised integrity hash
-        // Get the advert so one could extract the IH
+        // Check whether the artifact matches the advertised integrity hash.
         let advert = match self
             .prioritizer
             .get_advert_from_peer(&gossip_chunk.artifact_id, &peer_id)
@@ -475,9 +547,9 @@ impl DownloadManager for DownloadManagerImpl {
                 return;
             }
         };
-        // Check if the artifacts IH matches the advertized one
-        // This construct is not nice, but it works until there is a better way
-        // to compute the integrity hash over all variants of an enum.
+        // Check if the artifact's integrity hash matches the advertised hash
+        // This construction to compute the integrity hash over all variants of an enum
+        // may be updated in the future.
         let expected_ih = match &completed_artifact {
             Artifact::ConsensusMessage(msg) => ic_crypto::crypto_hash(msg).get(),
             Artifact::IngressMessage(msg) => ic_crypto::crypto_hash(msg).get(),
@@ -500,8 +572,8 @@ impl DownloadManager for DownloadManagerImpl {
             );
             self.metrics.integrity_hash_check_failed.inc();
 
-            // Now we must delete the advert from this particular peer and leave
-            // to Gossip to refetch the artifact from another node.
+            // The advert is deleted from this particular peer. Gossip may fetch the
+            // artifact again from another peer.
             let _ = self.prioritizer.delete_advert_from_peer(
                 &gossip_chunk.artifact_id,
                 peer_id,
@@ -510,7 +582,7 @@ impl DownloadManager for DownloadManagerImpl {
             return;
         }
 
-        // Add artifact hash to receive check set
+        // Add the artifact hash to the receive check set.
         let charged_peer = artifact_tracker.peer_id;
         self.receive_check_caches
             .write()
@@ -519,18 +591,18 @@ impl DownloadManager for DownloadManagerImpl {
             .unwrap()
             .put(advert.integrity_hash.clone(), ());
 
-        // Artifact is complete and integrity hash is ok!! cleanup the all
-        // its adverts from all peers
+        // The artifact is complete and the integrity hash is okay.
+        // Clean up the adverts for all peers:
         let _ = self
             .prioritizer
             .delete_advert(&gossip_chunk.artifact_id, AdvertTrackerFinalAction::Success);
         artifacts_under_construction.remove_tracker(&gossip_chunk.artifact_id);
 
-        // Drop the locks before calling client callbacks
+        // Drop the locks before calling client callbacks.
         std::mem::drop(artifacts_under_construction);
         std::mem::drop(current_peers);
 
-        // Client callbacks
+        // Client callbacks.
         trace!(
             self.log,
             "Node-{:?} received artifact from Node-{:?} ->{:?}",
@@ -550,6 +622,8 @@ impl DownloadManager for DownloadManagerImpl {
         }
     }
 
+    /// The method reacts to a disconnect event event for the peer with the
+    /// given node ID.
     fn peer_connection_down(&self, peer_id: NodeId) {
         self.metrics.connection_down_events.inc();
         let now = SystemTime::now();
@@ -565,6 +639,8 @@ impl DownloadManager for DownloadManagerImpl {
         };
     }
 
+    /// The method reacts to a connect event event for the peer with the given
+    /// node ID.
     fn peer_connection_up(&self, peer_id: NodeId) {
         self.metrics.connection_up_events.inc();
         let _now = SystemTime::now();
@@ -607,6 +683,7 @@ impl DownloadManager for DownloadManagerImpl {
         self.send_retransmission_request(peer_id);
     }
 
+    /// The method reacts to a retransmission request.
     fn on_retransmission_request(
         &self,
         gossip_re_request: &GossipRetransmissionRequest,
@@ -639,9 +716,9 @@ impl DownloadManager for DownloadManagerImpl {
                 }
             })?;
 
-        // A retransmission request was received from a peer, so clear the send queues
-        // and respond to the re-transmission request by sending all the adverts that
-        // satisfy the filter.
+        // A retransmission request was received from a peer.
+        // The send queues are cleared and a response is sent containing all the adverts
+        // that satisfy the filter.
         self.transport
             .clear_send_queues(self.transport_client_type, &peer_id);
 
@@ -654,6 +731,8 @@ impl DownloadManager for DownloadManagerImpl {
         Ok(())
     }
 
+    /// The method sends a retransmission request to the peer with the given
+    /// node ID.
     fn send_retransmission_request(&self, peer_id: NodeId) {
         let filter = self.artifact_manager.get_filter();
         let message = GossipMessage::RetransmissionRequest(GossipRetransmissionRequest { filter });
@@ -675,27 +754,8 @@ impl DownloadManager for DownloadManagerImpl {
             .observe(start_time.elapsed().as_millis() as f64)
     }
 
-    fn send_chunk_to_peer(&self, gossip_chunk: GossipChunk, peer_id: NodeId) {
-        trace!(
-            self.log,
-            "Node-{:?} sent chunk data  ->{:?} {:?}",
-            self.node_id,
-            peer_id,
-            gossip_chunk
-        );
-        let message = GossipMessage::Chunk(gossip_chunk);
-        let flow_tag = self.flow_mapper.map(&message);
-        self.transport_send(message, peer_id, flow_tag)
-            .map(|_| self.metrics.chunks_sent.inc())
-            .unwrap_or_else(|e| {
-                // Transport and gossip implement fixed sized queues for flow control.
-                // Log at a lower level to avoid being log spammed by a misbehaving node.
-                // Ignore errors as protocol violations
-                trace!(self.log, "Send chunk failed: peer {:?} {:?} ", peer_id, e);
-                self.metrics.chunk_send_failed.inc();
-            });
-    }
-
+    /// The method is invoked periodically by the *Gossip* component to perform
+    /// P2P book keeping tasks.
     fn on_timer(&self, event_handler: &Arc<dyn P2PEventHandlerControl>) {
         let (update_priority_fns, retransmission_request, refresh_registry) =
             self.get_timer_tasks();
@@ -711,7 +771,7 @@ impl DownloadManager for DownloadManagerImpl {
         }
 
         if retransmission_request {
-            // send retranmission request to all peers
+            // Send a retransmission request to all peers.
             let current_peers = self.peer_manager.get_current_peer_ids();
             for peer in current_peers {
                 self.send_retransmission_request(peer);
@@ -722,24 +782,25 @@ impl DownloadManager for DownloadManagerImpl {
             self.refresh_registry(&event_handler);
         }
 
-        // Process peers for timeout chunks
-        let mut timedout_peers = Vec::new();
+        // Collect the peers with timed-out requests.
+        let mut timed_out_peers = Vec::new();
         for (node_id, peer_context) in self.current_peers.lock().unwrap().iter_mut() {
-            if self.process_timedout_requests(node_id, peer_context) {
-                timedout_peers.push(*node_id);
+            if self.process_timed_out_requests(node_id, peer_context) {
+                timed_out_peers.push(*node_id);
             }
         }
 
-        // Process timeout artifacts
-        self.process_timedout_artifacts();
+        // Process timed-out artifacts.
+        self.process_timed_out_artifacts();
 
-        // calculate the set of peers that need to evaluated by the download manager.
+        // Compute the set of peers that need to be evaluated by the download manager.
         let peer_ids = if update_priority_fns {
             self.peer_manager.get_current_peer_ids().into_iter()
         } else {
-            timedout_peers.into_iter()
+            timed_out_peers.into_iter()
         };
 
+        // Invoke download_next(i) for each peer i.
         for peer_id in peer_ids {
             let _ = self.download_next(peer_id);
         }
@@ -747,7 +808,7 @@ impl DownloadManager for DownloadManagerImpl {
 }
 
 impl DownloadManagerImpl {
-    /// constructor
+    /// The constructor creates a DownloadManagerImpl instance.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         node_id: NodeId,
@@ -765,11 +826,9 @@ impl DownloadManagerImpl {
         let gossip_config =
             crate::p2p::P2P::fetch_gossip_config(registry_client.clone(), subnet_id);
 
-        // TODO use it in construction of peer management and download manager
         let current_peers = Arc::new(Mutex::new(PeerContextDictionary::default()));
         let peer_manager = Arc::new(PeerManagerImpl {
             node_id,
-            _subnet_id: subnet_id,
             log: log.clone(),
             transport: transport.clone(),
             transport_client_type,
@@ -805,12 +864,13 @@ impl DownloadManagerImpl {
             })
     }
 
-    // HELPER: get a list of task to be performed by this timer invocation
+    /// This helper method returns a list of tasks to be performed by this timer
+    /// invocation.
     fn get_timer_tasks(&self) -> (bool, bool, bool) {
         let mut update_priority_fns = false;
         let mut refresh_registry = false;
         let mut retransmission_request = false;
-        // check if priority function should be updated
+        // Check if the priority function should be updated.
         {
             let mut pfn_invocation_instant = self.pfn_invocation_instant.lock().unwrap();
             if pfn_invocation_instant.elapsed().as_millis()
@@ -821,7 +881,7 @@ impl DownloadManagerImpl {
             }
         }
 
-        // Check if retransmission request needs to be sent
+        // Check if a retransmission request needs to be sent.
         {
             let mut retransmission_request_instant =
                 self.retransmission_request_instant.lock().unwrap();
@@ -833,7 +893,7 @@ impl DownloadManagerImpl {
             }
         }
 
-        // Check if registry has to be refreshed
+        // Check if the registry has to be refreshed.
         {
             let mut registry_refresh_instant = self.registry_refresh_instant.lock().unwrap();
             if registry_refresh_instant.elapsed().as_millis()
@@ -850,7 +910,7 @@ impl DownloadManagerImpl {
         }
     }
 
-    // Update the peer_manager state based on the latest registry value
+    // Update the peer manager state based on the latest registry value.
     pub fn refresh_registry(&self, event_handler: &Arc<dyn P2PEventHandlerControl>) {
         let registry_version = self.registry_client.get_latest_version();
         self.registry_client
@@ -874,7 +934,7 @@ impl DownloadManagerImpl {
             })
     }
 
-    /// Transport helpers
+    /// The method sends the given message over transport to the given peer.
     fn transport_send(
         &self,
         message: GossipMessage,
@@ -893,7 +953,7 @@ impl DownloadManagerImpl {
             .map_err(|e| {
                 trace!(
                     self.log,
-                    "failed to send gossip message to peer {:?}: {:?}",
+                    "Failed to send gossip message to peer {:?}: {:?}",
                     peer_id,
                     e
                 );
@@ -901,6 +961,7 @@ impl DownloadManagerImpl {
             })?)
     }
 
+    /// The method sends the given advert to the given list of peers.
     fn send_advert_to_peer_list(&self, gossip_advert: GossipAdvert, peer_ids: Vec<NodeId>) {
         let message = GossipMessage::Advert(gossip_advert.clone());
         let flow_tag = self.flow_mapper.map(&message);
@@ -911,8 +972,6 @@ impl DownloadManagerImpl {
                     // Ignore advert send failures
                     self.metrics.adverts_send_failed.inc();
                 });
-
-            // Debugging
             trace!(
                 self.log,
                 "Node-{:?} sent gossip advert ->{:?} {:?}",
@@ -923,6 +982,7 @@ impl DownloadManagerImpl {
         }
     }
 
+    /// The method sends the given chunk requests to the given peer.
     fn send_chunk_requests(&self, requests: Vec<GossipChunkRequest>, peer_id: NodeId) {
         for request in requests {
             let message = GossipMessage::ChunkRequest(request);
@@ -944,20 +1004,22 @@ impl DownloadManagerImpl {
         }
     }
 
-    // Pre-flight check for initiating downloads from a peer.
-    // A peer may not be ready for downloads for various reasons like.
-    // - Peer's download request capacity has been reached.
-    // - The peer is not a current peer (peer rotated or unknown peer)
-    // - Peer was disconnected (TODO)
+    /// The method checks if a download from a peer can be initiated.
+    ///
+    /// A peer may not be ready for downloads for various reasons:
+    ///
+    /// a) The peer's download request capacity has been reached.</br>
+    /// b) The peer is not a current peer (e.g., it is an unknown peer or a peer
+    /// that was removed)</br>
+    /// c) The peer was disconnected (TODO -  P2P512)
     fn is_peer_ready_for_download<'a>(
         &self,
         peer_id: NodeId,
         peer_dictionary: &'a PeerContextDictionary,
     ) -> Result<&'a PeerContext, P2PError> {
         match peer_dictionary.get(&peer_id) {
-            // Check the peer is present
-            // and
-            // We have available capacity to stream chunks from this peer.
+            // Check that the peer is present and
+            // there is available capacity to stream chunks from this peer.
             Some(peer_context)
                 if peer_context.requested.len()
                     < self.gossip_config.max_artifact_streams_per_peer as usize =>
@@ -970,7 +1032,8 @@ impl DownloadManagerImpl {
         }
     }
 
-    // Get the request tracker for in-flight chunk request from a peer.
+    /// The method returns the request tracker for ongoing chunk requests from a
+    /// peer.
     fn get_peer_chunk_tracker<'a>(
         &self,
         peer_id: &NodeId,
@@ -985,19 +1048,12 @@ impl DownloadManagerImpl {
         })
     }
 
-    // Helper function for download_next
-    //
-    // Consolidated checks and conditions that dictate a chunks
-    // download eligibility from a peer.
-    //
-    // Parameter:
-    // peers                   peers for this node
-    // peer_id:                id for peer being evaluated
-    //
-    // artifact_id+chunk_id   identifiers for the chunk under download
-    //                         consideration
-    //
-    // Returns true if the chunk can be downloaded from a peer.
+    /// The method returns a chunk request if a chunk can be downloaded from the
+    /// given peer.
+    ///
+    /// This is a helper function for `download_next()`. It consolidates checks
+    /// and conditions that dictate a chunk's download eligibility from a
+    /// given peer.
     fn get_chunk_request(
         &self,
         peers: &PeerContextDictionary,
@@ -1005,15 +1061,14 @@ impl DownloadManagerImpl {
         advert_tracker: &AdvertTracker,
         chunk_id: ChunkId,
     ) -> Option<GossipChunkRequest> {
-        // Skip if the chunk download has been already attempted by
-        // this peer it doesn't matter if node currently downloading
-        // it OR has a failed attempted in this round.
+        // Skip if the chunk download has been already attempted even if the node is
+        // currently downloading it OR has a failed attempt in this round.
         if advert_tracker.peer_attempted(chunk_id, &peer_id) {
             None?
         }
 
-        // Skip if some other peer are downloading the chunk and max
-        // duplicity has been reached
+        // Skip if some other peer is downloading the chunk and maximum
+        // duplicity has been reached.
         let duplicity = advert_tracker
             .peers
             .iter()
@@ -1031,26 +1086,21 @@ impl DownloadManagerImpl {
             None?
         }
 
-        // peer has not attempted a chunk download in this round and will not
-        // violate duplicity constraints
+        // Since the peer has not attempted a chunk download in this round and will not
+        // violate duplicity constraints, a gossip chunk request is returned.
         Some(GossipChunkRequest {
             artifact_id: advert_tracker.advert.artifact_id.clone(),
             chunk_id,
         })
     }
 
-    // Helper function for download_next
-    //
-    // download_next_compute_work()
-    //
-    //  Looks at current state of peer manager and returns the next
-    //  set of downloads that can be initiated within the constraints
-    //  of the ICP protocol
+    /// The method returns the next set of downloads that can be initiated
+    /// within the constraints of the ICP protocol.
     fn download_next_compute_work(
         &self,
         peer_id: NodeId,
     ) -> Result<Vec<GossipChunkRequest>, impl Error> {
-        // get peer context
+        // Get the peer context.
         let mut current_peers = self.current_peers.lock().unwrap();
         let peer_context = self.is_peer_ready_for_download(peer_id, &current_peers)?;
         let requested_instant = Instant::now(); // function granularity for instant is good enough
@@ -1066,7 +1116,7 @@ impl DownloadManagerImpl {
 
         let mut requests = Vec::new();
         let mut artifacts_under_construction = self.artifacts_under_construction.write().unwrap();
-        // Prioritized iterator
+        // Get a prioritized iterator.
         let peer_advert_queues = self.prioritizer.get_peer_priority_queues(peer_id);
         let peer_advert_map = peer_advert_queues.peer_advert_map_ref.read().unwrap();
 
@@ -1080,7 +1130,7 @@ impl DownloadManagerImpl {
             let mut advert_tracker = advert_tracker.write().unwrap();
             let advert_tracker = advert_tracker.deref_mut();
 
-            // Try begin a download for the artifact and collect its chunk requests
+            // Try to begin a download for the artifact and collect its chunk requests.
             if let Some(artifact_tracker) = artifacts_under_construction.schedule_download(
                 peer_id,
                 &advert_tracker.advert,
@@ -1089,9 +1139,9 @@ impl DownloadManagerImpl {
                 self.artifact_manager.as_ref(),
             ) {
                 // Collect gossip requests that can be initiated for this artifact.
-                // get_chunk_request() returns chunk request for chunks that satisfy chunk
-                // download constraints  we collect them and record the download
-                // attempt
+                // The function get_chunk_request() returns requests for chunks that satisfy
+                // chunk download constraints. These requests are collected and download
+                // attempts are recorded.
                 let new_chunk_requests = artifact_tracker
                     .chunkable
                     .chunks_to_download()
@@ -1129,9 +1179,10 @@ impl DownloadManagerImpl {
         Ok(requests)
     }
 
-    /// Delete an advert from a particular peer.  If the deletion
-    /// results zero peers downloading the advert then cleanup the
-    /// under_construction entry too.
+    /// The method deletes the given advert from a particular peer.
+    ///
+    /// If the deletion results in zero peers downloading the advert, then the
+    /// entry in the under-construction list is cleaned up as well.
     fn delete_advert_from_peer(
         &self,
         peer_id: NodeId,
@@ -1143,19 +1194,21 @@ impl DownloadManagerImpl {
             peer_id,
             AdvertTrackerFinalAction::Abort,
         );
-        // remove the artifact from the under construction list
-        // if this peer was the last peer that with an advert
-        // tracker for this artifact, indicated by the previous
-        // call's return value.
+        // Remove the artifact from the under-construction list if this peer was the
+        // last peer with an advert tracker for this artifact, indicated by the
+        // previous call's return value.
         if ret.is_ok() {
             artifacts_under_construction.remove_tracker(&artifact_id);
         }
     }
 
-    // Called by on_timer(), checks if there are any timed out artifacts in the
-    // under construction list and removes them from the underconstruction list
-    fn process_timedout_artifacts(&self) {
-        // prune from the under construction list
+    /// The method processes timed-out artifacts.
+    ///
+    /// This method is called by the method on_timer(). It checks if there are
+    /// any timed-out artifacts in the under-construction list and removes
+    /// them from.
+    fn process_timed_out_artifacts(&self) {
+        // Prune the expired downloads from the under-construction list.
         let expired_downloads = self
             .artifacts_under_construction
             .write()
@@ -1167,25 +1220,28 @@ impl DownloadManagerImpl {
             .artifact_timeouts
             .inc_by(expired_downloads.len() as i64);
 
-        // add the timed-out adverts to the end of their respective
-        // priority queue in the prioritizer
+        // Add the timed-out adverts to the end of their respective
+        // priority queue in the prioritizer.
         expired_downloads.into_iter().for_each(|artifact_id| {
             let _ = self.prioritizer.reinsert_advert_at_tail(&artifact_id);
         });
     }
 
-    // Called by on_timer(), checks if there are any chunk request that timed out
-    // from this peer, returns true if this is the case
-    fn process_timedout_requests(&self, node_id: &NodeId, peer_context: &mut PeerContext) -> bool {
-        // Mark timeout chunks
-        let mut timedout_chunks: Vec<_> = Vec::new();
+    /// The method processes timed-out requests
+    ///
+    /// This method is called by the method on_timer(). It checks if there are
+    /// any chunk requests that timed out from the given peer and returns
+    /// "true" if this is the case.
+    fn process_timed_out_requests(&self, node_id: &NodeId, peer_context: &mut PeerContext) -> bool {
+        // Mark time-out chunks.
+        let mut timed_out_chunks: Vec<_> = Vec::new();
         let mut peer_timed_out: bool = false;
         peer_context.requested.retain(|key, tracker| {
-            let timedout = tracker.requested_instant.elapsed().as_millis()
+            let timed_out = tracker.requested_instant.elapsed().as_millis()
                 >= self.gossip_config.max_chunk_wait_ms as u128;
-            if timedout {
-                self.metrics.chunks_timedout.inc();
-                timedout_chunks.push((*node_id, key.chunk_id, key.artifact_id.clone()));
+            if timed_out {
+                self.metrics.chunks_timed_out.inc();
+                timed_out_chunks.push((*node_id, key.chunk_id, key.artifact_id.clone()));
                 peer_timed_out = true;
                 trace!(
                     self.log,
@@ -1197,45 +1253,49 @@ impl DownloadManagerImpl {
                     std::time::Instant::now()
                 )
             }
-            // Retain chunks that have not timeout
-            !timedout
+            // Retain chunks that have not timed out.
+            !timed_out
         });
 
-        for (node_id, chunk_id, artifact_id) in timedout_chunks.into_iter() {
-            self.process_timedout_chunk(&node_id, artifact_id, chunk_id)
+        for (node_id, chunk_id, artifact_id) in timed_out_chunks.into_iter() {
+            self.process_timed_out_chunk(&node_id, artifact_id, chunk_id)
         }
 
         peer_timed_out
     }
 
-    fn process_timedout_chunk(&self, node_id: &NodeId, artifact_id: ArtifactId, chunk_id: ChunkId) {
-        // Timeout chunk entry. Drop it and switch the
-        // preferred primary, so that the next node that
+    /// The method processes a timed-out chunk.
+    fn process_timed_out_chunk(
+        &self,
+        node_id: &NodeId,
+        artifact_id: ArtifactId,
+        chunk_id: ChunkId,
+    ) {
+        // Drop it and switch the preferred primary so that the next node that
         // advertised the chunk picks it up.
         let _ = self
             .prioritizer
             .get_advert_tracker_by_id(&artifact_id)
             .map(|advert_tracker| {
-                // unset the in progress flag.
+                // unset the in-progress flag.
                 let mut advert_tracker = advert_tracker.write().unwrap();
                 advert_tracker.unset_in_progress(chunk_id);
-                // If we have exhausted a round of download attempts
-                // (i.e. each peer that advertised has timeout once).
-                //
-                // Then
-                // we reset the attempts history so that peers can be
-                // probed once for the next round.
+                // If we have exhausted a round of download attempts (i.e., each peer that
+                // advertised it has timed out once), then reset the attempts
+                // history so that peers can be probed once for the next round.
                 if advert_tracker.is_attempts_round_complete(chunk_id) {
                     advert_tracker.attempts_round_reset(chunk_id)
                 }
             });
         #[rustfmt::skip]
-        trace!(self.log, "Timedout: Peer{:?} Artifact{:?} Chunk{:?}",
+        trace!(self.log, "Timed-out: Peer{:?} Artifact{:?} Chunk{:?}",
                node_id, chunk_id, artifact_id);
     }
 }
 
+/// `PeerManagerImpl` implements the `PeerManager` trait.
 impl PeerManager for PeerManagerImpl {
+    /// The method returns the current list of peers.
     fn get_current_peer_ids(&self) -> Vec<NodeId> {
         self.current_peers
             .lock()
@@ -1245,27 +1305,27 @@ impl PeerManager for PeerManagerImpl {
             .collect()
     }
 
-    // This method takes the list of the new nodes and update the current peers
-    // accordingly. It will remove all the peers that are not in the list, and add
-    // new ones.
-    // TODO: Allow for keeping several iterations of the current peers, per
-    // design spec.
+    /// The method sets the list of peers to the given list.
+    ///
+    /// All current peers that are not in the provided list are removed and new
+    /// ones are added.
     fn set_current_peer_ids(&self, new_peers: Vec<NodeId>) {
         let mut peers = self.current_peers.lock().unwrap();
 
-        // Remove peers that are not in the list of new peers
+        // Remove peers that are not in the list of new peers.
         let seen_peers: HashSet<NodeId> = new_peers.iter().map(|p| p.to_owned()).collect();
         peers.retain(|k, _| seen_peers.contains(k));
 
-        // Then add new entries
+        // Then, add the new peers.
         for peer in new_peers {
-            // If there is no such entry, we need to add it
+            // If there is no entry for this node ID, a peer context is added for it.
             peers
                 .entry(peer)
                 .or_insert_with(|| PeerContext::from(peer.to_owned()));
         }
     }
 
+    /// The method adds the given peer to the list of current peers.
     fn add_peer(
         &self,
         node_id: NodeId,
@@ -1273,15 +1333,15 @@ impl PeerManager for PeerManagerImpl {
         registry_version: RegistryVersion,
         event_handler: &Arc<dyn P2PEventHandlerControl>,
     ) -> P2PResult<()> {
+        // Only add other peers to the peer list.
         if node_id == self.node_id {
-            // Only add other peers to peer list
             return Err(P2PError {
                 p2p_error_code: P2PErrorCode::Failed,
             });
         }
 
-        // Add to the event handler & current peer and drop the lock before calling into
-        // transport
+        // Add the peer to the list of current peers and the event handler, and drop the
+        // lock before calling into transport.
         {
             let mut current_peers = self.current_peers.lock().unwrap();
 
@@ -1299,16 +1359,13 @@ impl PeerManager for PeerManagerImpl {
             }?;
         }
 
-        // Failed to start transport connection, so now remove the
-        // node from current peer list. This removal allows for
-        // re-connection attempt on the next registry refresh.
+        // If starting a transport connection failed, remove the
+        // node from current peer list. This removal makes it possible to attempt a
+        // re-connection on the next registry refresh.
         //
-        // TODO: DFN-1650 1. transport.start_connection() should be non
-        // fallible.  Instead, connection failures should be retried
-        // internally in transport.
-        //
-        // TODO: 2. Remove node from the event handler. Removal is
-        // not needed if TODO1 is implemented.
+        // TODO: P2P-511 transport.start_connection() should be non-fallible.
+        // Instead, connection failures should be retried internally in
+        // transport.
         self.transport
             .start_connections(
                 self.transport_client_type,
@@ -1326,6 +1383,7 @@ impl PeerManager for PeerManagerImpl {
             })
     }
 
+    /// The method removes the given peer from the list of current peers.
     fn remove_peer(&self, node_id: NodeId, registry_version: RegistryVersion) {
         let mut current_peers = self.current_peers.lock().unwrap();
         if let Err(e) =
@@ -1334,7 +1392,7 @@ impl PeerManager for PeerManagerImpl {
         {
             warn!(self.log, "stop connection failed {:?}: {:?}", node_id, e);
         }
-        // Remove the peer irrespective of status transport removal
+        // Remove the peer irrespective of the result of the stop_connections() call.
         current_peers.remove(&node_id);
     }
 }
@@ -1370,26 +1428,37 @@ pub mod tests {
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
+    /// This priority function always returns Priority::FetchNow.
     fn priority_fn_fetch_now_all(_: &ArtifactId, _: &ArtifactAttribute) -> Priority {
         Priority::FetchNow
     }
 
+    /// The test artifact manager.
     #[derive(Default)]
     pub(crate) struct TestArtifactManager {
+        /// The quota.
         pub quota: usize,
+        /// The number of chunks.
         pub num_chunks: u32,
     }
 
+    /// The test artifact.
     struct TestArtifact {
+        /// The number of chunks.
         num_chunks: u32,
+        /// The list of artifact chunks.
         chunks: Vec<ArtifactChunk>,
     }
 
+    /// `TestArtifact` implements the `Chunkable` trait.
     impl Chunkable for TestArtifact {
+        /// This method to return the artifact hash is not implemented as it is
+        /// not used.
         fn get_artifact_hash(&self) -> CryptoHash {
             unimplemented!()
         }
 
+        /// The method returns an Iterator over the chunks to download.
         fn chunks_to_download(&self) -> Box<dyn Iterator<Item = ChunkId>> {
             Box::new(
                 (0..self.num_chunks as u32)
@@ -1399,15 +1468,18 @@ pub mod tests {
             )
         }
 
-        fn get_artifact_indentifier(&self) -> CryptoHash {
+        /// The method to return the artifact ID is not implemented as it is not
+        /// used.
+        fn get_artifact_identifier(&self) -> CryptoHash {
             unimplemented!()
         }
 
+        /// The method adds the given chunk.
         fn add_chunk(
             &mut self,
-            _artifact_chunk: ArtifactChunk,
+            artifact_chunk: ArtifactChunk,
         ) -> Result<Artifact, ArtifactErrorCode> {
-            self.chunks.push(_artifact_chunk);
+            self.chunks.push(artifact_chunk);
             if self.chunks.len() == self.num_chunks as usize {
                 Ok(Artifact::StateSync(receive_check_test_create_message()))
             } else {
@@ -1415,16 +1487,20 @@ pub mod tests {
             }
         }
 
+        /// The method always simply returns "false".
         fn is_complete(&self) -> bool {
             false
         }
 
+        /// The returned chunk size is always zero.
         fn get_chunk_size(&self, _chunk_id: ChunkId) -> usize {
             0
         }
     }
 
+    /// The `TestArtifactManager` implements the `TestArtifact` trait.
     impl ArtifactManager for TestArtifactManager {
+        /// The method ignores the artifact and always returns Ok(()).
         fn on_artifact(
             &self,
             mut _msg: artifact::Artifact,
@@ -1434,10 +1510,14 @@ pub mod tests {
             Ok(())
         }
 
+        /// The method to test if an artifact is available is not implemented as
+        /// it is not used.
         fn has_artifact(&self, _message_id: &artifact::ArtifactId) -> bool {
             unimplemented!()
         }
 
+        /// The method to return a validated artifact is not implemented as
+        /// it is not used.
         fn get_validated_by_identifier(
             &self,
             _message_id: &artifact::ArtifactId,
@@ -1445,10 +1525,13 @@ pub mod tests {
             unimplemented!()
         }
 
+        /// The method to get the artifact filter is not implemented as
+        /// it is not used.
         fn get_filter(&self) -> artifact::ArtifactFilter {
             unimplemented!()
         }
-
+        /// The method to get the list of validated adverts is not implemented
+        /// as it is not used.
         fn get_all_validated_by_filter(
             &self,
             _filter: &artifact::ArtifactFilter,
@@ -1456,6 +1539,7 @@ pub mod tests {
             unimplemented!()
         }
 
+        /// The method returns the internal quota.
         fn get_remaining_quota(
             &self,
             _tag: artifact::ArtifactTag,
@@ -1464,10 +1548,13 @@ pub mod tests {
             Some(self.quota)
         }
 
+        /// The method returns the priority function that always uses
+        /// Priority::FetchAll.
         fn get_priority_function(&self, _: artifact::ArtifactTag) -> Option<ArtifactPriorityFn> {
             Some(Box::new(priority_fn_fetch_now_all))
         }
 
+        /// The method returns a new TestArtifact instance.
         fn get_chunk_tracker(
             &self,
             _id: &artifact::ArtifactId,
@@ -1480,6 +1567,8 @@ pub mod tests {
         }
     }
 
+    /// The function returns a new
+    /// ic_test_utilities::thread_transport::ThreadPort instance.
     fn get_transport(
         instance_id: u32,
         hub: Arc<Mutex<Hub>>,
@@ -1489,15 +1578,15 @@ pub mod tests {
         ThreadPort::new(node_test_id(instance_id as u64), hub, log)
     }
 
+    /// The function returns a new download manager with a registry.
     fn new_test_download_manager(num_replicas: u32, logger: &LoggerImpl) -> DownloadManagerImpl {
         let log: ReplicaLogger = logger.root.clone().into();
-        // AM
         let artifact_manager = TestArtifactManager {
             quota: 2 * 1024 * 1024 * 1024,
             num_chunks: 1,
         };
 
-        // Transport
+        // Set up transport.
         let hub_access: HubAccess = Arc::new(Mutex::new(Default::default()));
         for instance_id in 0..num_replicas {
             let thread_port = get_transport(instance_id, hub_access.clone(), logger);
@@ -1510,7 +1599,7 @@ pub mod tests {
         let transport_hub = hub_access.lock().unwrap();
         let tp = transport_hub.get(&node_test_id(0));
 
-        // prioritizer
+        // Set up the prioritizer.
         let metrics_registry = MetricsRegistry::new();
         let prioritizer = Arc::new(DownloadPrioritizerImpl::new(
             &artifact_manager,
@@ -1519,7 +1608,7 @@ pub mod tests {
 
         let flow_tags = vec![FlowTag::from(0)];
         let flow_mapper = Arc::new(FlowMapper::new(flow_tags));
-        // setup test registry
+        // Set up test registry
         let allocated_ports = allocate_ports("127.0.0.1", num_replicas as u16)
             .expect("Port allocation for test failed");
         let node_port_allocation: Vec<u16> = allocated_ports.iter().map(|np| np.port).collect();
@@ -1531,7 +1620,7 @@ pub mod tests {
         let registry_client = Arc::new(RegistryClientImpl::new(data_provider, None));
         registry_client.fetch_and_start_polling().unwrap();
 
-        // Create fake peers
+        // Create fake peers.
         let artifact_manager = Arc::new(artifact_manager);
         let event_handler = Arc::new(new_test_event_handler(MAX_ADVERT_BUFFER, node_test_id(0)));
         DownloadManagerImpl::new(
@@ -1549,6 +1638,7 @@ pub mod tests {
         .unwrap()
     }
 
+    /// The function adds the given number of adverts to the download manager.
     fn test_add_adverts(
         download_manager: &impl DownloadManager,
         range: Range<u32>,
@@ -1565,6 +1655,8 @@ pub mod tests {
         }
     }
 
+    /// The functions tests that the peer context drops all requests after a
+    /// time-out.
     fn test_timeout_peer(download_manager: &DownloadManagerImpl, node_id: &NodeId) {
         let sleep_duration = std::time::Duration::from_millis(
             (download_manager.gossip_config.max_chunk_wait_ms * 2) as u64,
@@ -1572,16 +1664,19 @@ pub mod tests {
         std::thread::sleep(sleep_duration);
         let mut current_peers = download_manager.current_peers.lock().unwrap();
         let peer_context = current_peers.get_mut(node_id).unwrap();
-        download_manager.process_timedout_requests(node_id, peer_context);
+        download_manager.process_timed_out_requests(node_id, peer_context);
         assert_eq!(peer_context.requested.len(), 0);
     }
 
+    /// This test function builds a new download manager.
     #[tokio::test]
     async fn build_new_download_manager() {
         let logger = p2p_test_setup_logger();
         let _download_manager = new_test_download_manager(1, &logger);
     }
 
+    /// This function tests the functionality to add adverts to the
+    /// download manager.
     #[tokio::test]
     async fn download_manager_add_adverts() {
         let logger = p2p_test_setup_logger();
@@ -1589,6 +1684,9 @@ pub mod tests {
         test_add_adverts(&download_manager, 0..1000, node_test_id(1));
     }
 
+    /// This function asserts that the chunks to be downloaded is correctly
+    /// upper bounded, where the upper bound is specified in the gossip
+    /// configuration.
     #[tokio::test]
     async fn download_manager_compute_work_basic() {
         let logger = p2p_test_setup_logger();
@@ -1602,9 +1700,9 @@ pub mod tests {
         let chunks_to_be_downloaded = download_manager
             .download_next_compute_work(node_test_id(num_replicas as u64 - 1))
             .unwrap();
-        assert!(
-            chunks_to_be_downloaded.len()
-                == download_manager.gossip_config.max_artifact_streams_per_peer as usize
+        assert_eq!(
+            chunks_to_be_downloaded.len(),
+            download_manager.gossip_config.max_artifact_streams_per_peer as usize
         );
         for (i, chunk_req) in chunks_to_be_downloaded.iter().enumerate() {
             assert_eq!(
@@ -1615,14 +1713,17 @@ pub mod tests {
         }
     }
 
+    /// This function tests the correct functioning when a single chunk times
+    /// out.
+    ///
+    /// All peers advertise the same set of adverts. A download is initiated at
+    /// the first peer. After it times out, the test verifies that the chunk
+    /// gets requested from the next peer.
+    /// Once the chunk has been requested from every peer, a new round of
+    /// download requests begins.
     #[tokio::test]
     async fn download_manager_single_chunked_timeout() {
-        // Advertise
-        // MAX_ARTIFACT_STREAMS_PER_PEER count number of adverts from N peers.
-        // i.e. all peers advertise the same set of adverts.
-        //
-        // Initiate the download from first peer, time it out and check it chunks get
-        // requested from next peer. Test that all peers are probed for the chunks.
+        // The total number of replicas is 4 in this test.
         let num_replicas = 4;
         let logger = p2p_test_setup_logger();
         let mut download_manager = new_test_download_manager(num_replicas, &logger);
@@ -1645,7 +1746,7 @@ pub mod tests {
         let request_queue_size =
             download_manager.gossip_config.max_artifact_streams_per_peer as usize;
 
-        // Skip 0th peer as its the requesting node
+        // Skip the first peer at index 0 as it is the requesting node.
         for peer_id in 1..num_replicas {
             test_add_adverts(
                 &download_manager,
@@ -1675,10 +1776,8 @@ pub mod tests {
             }
         }
 
-        // Test
-        //
-        // all peers have been probed once thus this attempt round is
-        // exhausted and new download attempts can start afresh
+        // All peers have been probed once. Thus, this attempt round is
+        // exhausted and download attempts can start afresh.
         for advert_id in 0..request_queue_size as u32 {
             let artifact_id = ArtifactId::FileTreeSync(advert_id.to_string());
             let advert_tracker = download_manager
@@ -1699,14 +1798,17 @@ pub mod tests {
         }
     }
 
+    /// This functions tests the correct functioning when chunks and artifacts
+    /// time out.
     #[tokio::test]
     async fn download_manager_timeout_artifact() {
+        // There are 3 nodes in total, Node 1 and 2 are actively used in the test.
         let num_replicas = 3;
         let logger = p2p_test_setup_logger();
         let mut download_manager = new_test_download_manager(num_replicas, &logger);
         download_manager.gossip_config.max_artifact_streams_per_peer = 1;
         download_manager.gossip_config.max_chunk_wait_ms = 1000;
-        // Node 1 and 2 both advertise advert 1 & 2
+        // Node 1 and 2 both advertise advert 1 and 2.
         for i in 1..num_replicas {
             test_add_adverts(
                 &download_manager,
@@ -1726,24 +1828,24 @@ pub mod tests {
             );
         }
 
-        // Timeout the artifact as well as the chunks
+        // Time out the artifact as well as the chunks.
         let sleep_duration = std::time::Duration::from_millis(
             (download_manager.gossip_config.max_chunk_wait_ms * 2) as u64,
         );
         std::thread::sleep(sleep_duration);
 
-        // Node 1 and 2 now both have moved forward and now advertise advert 3 &
-        // 4 while advert 1 & 2 have timed out
+        // Node 1 and 2 now both have moved forward and advertise advert 3 and
+        // 4 while advert 1 and 2 have timed out.
         for i in 1..num_replicas {
             test_add_adverts(&download_manager, 3..5, node_test_id(i as u64))
         }
 
-        // Test that chunks have timed out
+        // Test that chunks have timed out.
         for i in 1..num_replicas {
             test_timeout_peer(&download_manager, &node_test_id(i as u64))
         }
-        // Test that artifacts also have timed out
-        download_manager.process_timedout_artifacts();
+        // Test that artifacts also have timed out.
+        download_manager.process_timed_out_artifacts();
         {
             let artifacts_under_construction = download_manager
                 .artifacts_under_construction
@@ -1752,8 +1854,8 @@ pub mod tests {
             assert_eq!(artifacts_under_construction.len(), 0);
         }
 
-        // After advert 1 &  2 timeout download manager  must start downloading
-        // next artifact 3 & 4 now.
+        // After advert 1 and 2 have timed out, the download manager must start
+        // downloading the next artifacts 3 and 4 now.
         for i in 1..num_replicas {
             let chunks_to_be_downloaded = download_manager
                 .download_next_compute_work(node_test_id(i as u64))
@@ -1778,12 +1880,12 @@ pub mod tests {
         }
     }
 
+    /// The function tests the downloading of an artifact in multiple chunks in
+    /// parallel from multiple peers.
     #[tokio::test]
-    async fn download_manager_multichunked_artifacts_are_linearly_striped() {
-        // A artifact is multiple chunks is downloaded in parallel
-        // from multiple peer.  If 2 peers advertise a artifact with
-        // 40 chunks and each we have 20 download slots available for
-        // transport.
+    async fn download_manager_multi_chunked_artifacts_are_linearly_striped() {
+        // There are 3 peers in total. 2 peers advertise an artifact with 40 chunks.
+        // Each peer has 20 download slots available for transport.
         let num_peers = 3;
         let logger = p2p_test_setup_logger();
         let mut download_manager = new_test_download_manager(num_peers, &logger);
@@ -1793,10 +1895,9 @@ pub mod tests {
             num_chunks: request_queue_size * num_peers,
         });
 
-        // Each peer should be dowloading the node_id'th range of chunks. i.e.
-        //  Node1 downloads 0..20  half open range
-        //  Node2 download  20..40 half open range
-        //
+        // Each peer should download the node_id'th range of chunks, i.e.,
+        //  Node 1 downloads the chunks 0-19.
+        //  Node 2 downloads the chunks 20-39.
         let test_assert_compute_work_is_striped =
             |download_manager: &DownloadManagerImpl, node_id: NodeId, compute_work_count: u64| {
                 let chunks_to_be_downloaded = download_manager
@@ -1814,7 +1915,7 @@ pub mod tests {
                 }
             };
 
-        // advertise the artifact from all peers
+        // Advertise the artifact from all peers.
         for i in 1..num_peers {
             test_add_adverts(&download_manager, 0..1, node_test_id(i as u64))
         }
@@ -1828,16 +1929,20 @@ pub mod tests {
         }
     }
 
-    fn arb_nodeid() -> BoxedStrategy<NodeId> {
+    /// The function returns an arbitrary Node ID in a BoxedStrategy.
+    fn arbitrary_node_id() -> BoxedStrategy<NodeId> {
         any::<u64>().prop_map(node_test_id).boxed()
     }
 
+    /// The function returns a vector containing the given number of arbitrary
+    /// node IDs in a BoxedStrategy.
     fn arb_peer_list(min_size: usize) -> BoxedStrategy<Vec<NodeId>> {
-        prop::collection::hash_set(arb_nodeid(), min_size..100)
+        prop::collection::hash_set(arbitrary_node_id(), min_size..100)
             .prop_map(|hs| hs.into_iter().collect())
             .boxed()
     }
 
+    /// The function returns a simple state sync message.
     fn receive_check_test_create_message() -> StateSyncMessage {
         StateSyncMessage {
             height: Height::from(1),
@@ -1852,6 +1957,8 @@ pub mod tests {
         }
     }
 
+    /// The function returns a new chunk with the given chunk ID and artifact
+    /// ID.
     fn receive_check_test_create_chunk(chunk_id: ChunkId, artifact_id: ArtifactId) -> GossipChunk {
         let payload = vec![0; 8];
         let artifact_chunk = ArtifactChunk {
@@ -1867,6 +1974,7 @@ pub mod tests {
         }
     }
 
+    /// The function returns the given number of adverts.
     fn receive_check_test_create_adverts(range: Range<u32>) -> Vec<GossipAdvert> {
         let mut result = vec![];
         let msg = receive_check_test_create_message();
@@ -1882,9 +1990,15 @@ pub mod tests {
         result
     }
 
+    /// The function tests the processing of chunks.
+    ///
+    /// In particular, it tests that the cache contains the artifact hash(es)
+    /// afterwards and that the download manager does not consider
+    /// downloading the same artifact(s) again when receiving the corresponding
+    /// adverts again.
     #[tokio::test]
     async fn receive_check_test() {
-        // Initialize test
+        // Initialize the logger and download manager for the test.
         let logger = p2p_test_setup_logger();
         let download_manager = new_test_download_manager(2, &logger);
         //test_add_adverts(&download_manager, 0..1000, node_test_id(0));
@@ -1898,7 +2012,7 @@ pub mod tests {
             .download_next_compute_work(node_id)
             .unwrap();
 
-        // Add chunk(s)
+        // Add the chunk(s).
         for (i, chunk_req) in chunks_to_be_downloaded.iter().enumerate() {
             assert_eq!(
                 chunk_req.artifact_id,
@@ -1914,7 +2028,7 @@ pub mod tests {
             download_manager.on_chunk(gossip_chunk, node_id);
         }
 
-        // Test that the cache has the artifact(s)
+        // Test that the cache contains the artifact(s).
         let receive_check_caches = download_manager.receive_check_caches.read().unwrap();
         let cache = &receive_check_caches.get(&node_id).unwrap();
         for gossip_advert in &adverts {
@@ -1922,8 +2036,7 @@ pub mod tests {
         }
         std::mem::drop(receive_check_caches);
 
-        // Test that when seeing the artifact again we ignore it
-        // (or don't, depending on expect_dedup)
+        // Test that the artifact is ignored when providing the same adverts again.
         for gossip_advert in &adverts {
             download_manager.on_advert(gossip_advert.clone(), node_id);
         }
@@ -1935,6 +2048,8 @@ pub mod tests {
     }
 
     proptest! {
+        /// The function verifies that setting the same set of peer IDs does not change the
+        /// set of current peers.
         #[test]
         fn setting_same_set_of_nodes_changes_nothing(
             peers in arb_peer_list(0)
@@ -1947,16 +2062,15 @@ pub mod tests {
 
             let logger = p2p_test_setup_logger();
 
-            // Transport
+            // Transport:
             let hub_access: HubAccess = Arc::new(Mutex::new(Default::default()));
             let transport = get_transport(0, hub_access, &logger);
 
-            // Context
+            // Context:
             let transport_client_type = TransportClientType::P2P;
             transport.register_client(transport_client_type, Arc::new(new_test_event_handler( MAX_ADVERT_BUFFER, node_test_id(0)))).unwrap();
             let peer_manager = PeerManagerImpl {
                 node_id: node_test_id(0),
-                _subnet_id: subnet_test_id(0),
                 log: p2p_test_setup_logger().root.clone().into(),
                 current_peers,
                 transport,
@@ -1969,11 +2083,13 @@ pub mod tests {
             prop_assert_eq!(new_peers, current_peers)
         }
 
+        /// When providing a new list of peers, the function verifies that all current peers
+        /// are preserved that are also in the new list.
         #[test]
         fn when_setting_new_peers_old_ones_preserved(
             peer_list in arb_peer_list(3)
         ) {
-            // get the original peer list, split into three: a + b + c
+            // Get the original peer list, split into three: a + b + c
             // then produce:
             // old = a + b
             // new = a + c
@@ -2003,14 +2119,13 @@ pub mod tests {
             transport.register_client(transport_client_type, Arc::new(new_test_event_handler(MAX_ADVERT_BUFFER, node_test_id(0)))).unwrap();
             let peer_manager = PeerManagerImpl {
                 node_id: node_test_id(0),
-                _subnet_id: subnet_test_id(0),
                 log: p2p_test_setup_logger().root.clone().into(),
                 current_peers,
                 transport,
                 transport_client_type,
             };
 
-            // set property on one node
+            // Set property on one node.
             let mut current_peers = peer_manager.current_peers.lock().unwrap();
             let peer_context = current_peers.get_mut(&first_common);
             prop_assert!(peer_context.is_some());
@@ -2019,14 +2134,14 @@ pub mod tests {
             }
             std::mem::drop(current_peers);
 
-            // check that the new peers are correctly set
+            // Check that the new peers are correctly set.
             peer_manager.set_current_peer_ids(peers_new.clone());
             let mut new_peers = peer_manager.get_current_peer_ids();
             new_peers.sort_unstable();
             peers_new.sort_unstable();
             prop_assert_eq!(new_peers, peers_new);
 
-            // check that an old peer has preserved the property
+            // Check that an old peer has preserved the property.
             let mut current_peers = peer_manager.current_peers.lock().unwrap();
             let peer_context = current_peers.get_mut(&first_common);
             prop_assert!(peer_context.is_some());

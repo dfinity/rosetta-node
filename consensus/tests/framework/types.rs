@@ -3,7 +3,7 @@ use ic_artifact_pool::{
     certification_pool::CertificationPoolImpl, consensus_pool::ConsensusPoolImpl, dkg_pool,
 };
 use ic_config::artifact_pool::ArtifactPoolConfig;
-use ic_consensus::{dkg, ConsensusImpl};
+use ic_consensus::{consensus::ConsensusImpl, dkg};
 use ic_interfaces::{
     certification::Certifier,
     certified_stream_store::CertifiedStreamStore,

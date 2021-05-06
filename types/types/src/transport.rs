@@ -304,6 +304,7 @@ pub enum TransportErrorCode {
     /// Missing connection endpoint in NodeRecord
     NodeRecordMissingConnectionEndpoint,
 
+    /// Timeout expired
     TimeoutExpired,
 }
 

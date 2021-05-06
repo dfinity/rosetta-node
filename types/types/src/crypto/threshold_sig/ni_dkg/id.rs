@@ -1,3 +1,4 @@
+//! Types related to the non-interactive DKG ID.
 use super::*;
 use ic_protobuf::types::v1 as pb;
 
@@ -76,12 +77,17 @@ impl TryFrom<NiDkgIdProto> for NiDkgId {
     }
 }
 
+/// Occurs if the target ID size is invalid.
 #[derive(Debug, PartialEq, Eq)]
-pub struct InvalidNiDkgTargetIdSize;
+pub struct InvalidNiDkgTargetIdSizeError;
 
-pub fn ni_dkg_target_id(data: &[u8]) -> Result<NiDkgTargetId, InvalidNiDkgTargetIdSize> {
+/// Creates a target ID for the given data.
+///
+/// # Errors
+/// * InvalidNiDkgTargetIdSizeError: if the target ID size is invalid.
+pub fn ni_dkg_target_id(data: &[u8]) -> Result<NiDkgTargetId, InvalidNiDkgTargetIdSizeError> {
     if data.len() != NiDkgTargetId::SIZE {
-        return Err(InvalidNiDkgTargetIdSize);
+        return Err(InvalidNiDkgTargetIdSizeError);
     }
 
     let mut result = [0; NiDkgTargetId::SIZE];
@@ -89,11 +95,12 @@ pub fn ni_dkg_target_id(data: &[u8]) -> Result<NiDkgTargetId, InvalidNiDkgTarget
     Ok(NiDkgTargetId::new(result))
 }
 
+/// Occurs if the `NiDkgId` cannot be obtained from the corresponding protobuf.
 #[derive(Debug, PartialEq, Eq)]
 pub enum NiDkgIdFromProtoError {
     InvalidPrincipalId(PrincipalIdBlobParseError),
     InvalidDkgTag,
-    InvalidRemoteTargetIdSize(InvalidNiDkgTargetIdSize),
+    InvalidRemoteTargetIdSize(InvalidNiDkgTargetIdSizeError),
 }
 
 impl From<NiDkgIdFromProtoError> for ic_protobuf::proxy::ProxyDecodeError {

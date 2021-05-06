@@ -88,7 +88,7 @@ impl WASM {
 
         // It's not very consistent with the other `from_xx` functions to
         // optimize wasms here. This is because canisters are not optimized
-        // on CI; see  https://dfinity.atlassian.net/browse/OPS-178.
+        // on CI; see OPS-178.
         WASM::from_bytes(wasm_data).strip_debug_info()
     }
 
@@ -396,6 +396,16 @@ impl<'a> Canister<'a> {
         }
     }
 
+    /// Creates a fresh `Canister` from an existing one with a shared
+    /// runtime, targeted at a different `CanisterId`.
+    pub fn retarget(&self, canister_id: CanisterId) -> Self {
+        Self {
+            runtime: self.runtime,
+            canister_id,
+            wasm: None,
+        }
+    }
+
     pub fn canister_id(&self) -> CanisterId {
         self.canister_id
     }
@@ -621,14 +631,23 @@ impl<'a> Canister<'a> {
         Ok(())
     }
 
+    /// Tries to delete this canister.
+    pub async fn delete(&self) -> Result<(), String> {
+        self.runtime
+            .get_management_canister()
+            .update_("delete_canister", candid_multi_arity, (self.as_record(),))
+            .await?;
+        Ok(())
+    }
+
     /// Tries to stop this canister, waits for it to reach the Stopped state,
     /// then restarts it.
     ///
     /// This is expected to work only when the canister's controller is the
     /// anonymous user.
     ///
-    /// TODO(https://dfinity.atlassian.net/browse/EXE-59) Provide some IC-wide "wait for
-    /// empty queues" function to replace this in tests.
+    /// TODO(EXE-59): Provide some IC-wide "wait for empty queues" function to
+    /// replace this in tests.
     pub async fn stop_then_restart(&self) -> Result<(), String> {
         self.stop().await?;
         let start_res: Result<(), String> = self

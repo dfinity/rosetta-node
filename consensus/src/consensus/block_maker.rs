@@ -1,7 +1,7 @@
 #![deny(missing_docs)]
 use crate::{
     consensus::{
-        membership::Membership, metrics::BlockMakerMetrics, payload_builder::PayloadBuilderArc,
+        membership::Membership, metrics::BlockMakerMetrics, payload_builder::PayloadBuilder,
         pool_reader::PoolReader, prelude::*, utils::*, ConsensusCrypto,
     },
     dkg::create_payload,
@@ -33,7 +33,7 @@ pub struct BlockMaker {
     registry_client: Arc<dyn RegistryClient>,
     membership: Arc<Membership>,
     crypto: Arc<dyn ConsensusCrypto>,
-    payload_builder: PayloadBuilderArc,
+    payload_builder: Arc<dyn PayloadBuilder>,
     dkg_pool: Arc<RwLock<dyn DkgPool>>,
     state_manager: Arc<dyn StateManager<State = ReplicatedState>>,
     metrics: BlockMakerMetrics,
@@ -50,7 +50,7 @@ impl BlockMaker {
         registry_client: Arc<dyn RegistryClient>,
         membership: Arc<Membership>,
         crypto: Arc<dyn ConsensusCrypto>,
-        payload_builder: PayloadBuilderArc,
+        payload_builder: Arc<dyn PayloadBuilder>,
         dkg_pool: Arc<RwLock<dyn DkgPool>>,
         state_manager: Arc<dyn StateManager<State = ReplicatedState>>,
         metrics_registry: MetricsRegistry,
@@ -260,6 +260,9 @@ impl BlockMaker {
         )
     }
 
+    /// Construct a block proposal with specified validation context, parent
+    /// block, rank, and batch payload. This function completes the block by
+    /// adding a DKG payload and signs the block to obtain a block proposal.
     #[allow(clippy::too_many_arguments)]
     fn construct_block_proposal(
         &self,
@@ -358,7 +361,7 @@ impl BlockMaker {
         }
     }
 
-    /// Malicously propose blocks irrespective of the rank, based on the flags
+    /// Maliciously propose blocks irrespective of the rank, based on the flags
     /// received. If maliciously_propose_empty_blocks is set, propose only empty
     /// blocks. If maliciously_equivocation_blockmaker is set, propose
     /// multiple blocks at once.
@@ -522,6 +525,8 @@ fn already_proposed(pool: &PoolReader<'_>, h: Height, this_node: NodeId) -> bool
         .any(|p| p.signature.signer == this_node)
 }
 
+/// Determine how many DKG dealings are allowed in a single block by obtaining
+/// this value from the registry.
 fn dkg_dealings_per_block(
     registry_client: &dyn RegistryClient,
     version: RegistryVersion,

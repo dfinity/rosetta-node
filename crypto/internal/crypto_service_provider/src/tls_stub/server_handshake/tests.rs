@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use crate::api::tls_errors::CspTlsServerHandshakeError;
 use crate::api::CspTlsServerHandshake;
 use crate::secret_key_store::test_utils::TempSecretKeyStore;

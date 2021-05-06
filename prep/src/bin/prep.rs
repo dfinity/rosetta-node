@@ -17,7 +17,7 @@ use structopt::StructOpt;
 use thiserror::Error;
 use url::Url;
 
-use ic_prep::{
+use ic_prep_lib::{
     internet_computer::{IcConfig, TopologyConfig},
     node::{NodeConfiguration, NodeIndex},
     subnet_configuration::{SubnetConfig, SubnetIndex},

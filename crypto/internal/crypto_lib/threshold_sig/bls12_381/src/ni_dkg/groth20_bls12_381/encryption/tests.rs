@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Tests for the CLib NiDKG forward secure encryption
 pub use rand::Rng;
 pub use rand_chacha::ChaChaRng;

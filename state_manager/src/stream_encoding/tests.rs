@@ -1,9 +1,9 @@
 use super::*;
 use ic_base_types::NumSeconds;
 use ic_registry_subnet_type::SubnetType;
-use ic_replicated_state::{CanisterState, ReplicatedState};
+use ic_replicated_state::ReplicatedState;
 use ic_test_utilities::{
-    state::arb_stream,
+    state::{arb_stream, new_canister_state},
     types::ids::{canister_test_id, subnet_test_id, user_test_id},
 };
 use ic_types::{xnet::StreamSlice, Cycles};
@@ -23,7 +23,7 @@ proptest! {
         state.put_streams(streams);
 
         // Add some noise, for good measure.
-        state.put_canister_state(CanisterState::new(
+        state.put_canister_state(new_canister_state(
             canister_test_id(13),
             user_test_id(24).get(),
             INITIAL_CYCLES,

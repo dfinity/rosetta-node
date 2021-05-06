@@ -74,12 +74,12 @@ impl std::fmt::Display for WasmValidationError {
             ),
             Self::TooManyGlobals { defined, allowed } => write!(
                 f,
-                "Wasm module defined {} globals which excees the maximum number allowed {}.",
+                "Wasm module defined {} globals which exceeds the maximum number allowed {}.",
                 defined, allowed
             ),
             Self::TooManyFunctions { defined, allowed } => write!(
                 f,
-                "Wasm module defined {} functions which excees the maximum number allowed {}.",
+                "Wasm module defined {} functions which exceeds the maximum number allowed {}.",
                 defined, allowed
             ),
         }

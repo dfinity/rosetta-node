@@ -741,11 +741,13 @@ mod tests {
     // We create multiple artifacts for multiple heights, check that all of them are
     // written to the disk and can be restored.
     fn test_backup() {
+        use crate::backup::bytes_to_hex_str;
+
         ic_test_utilities::artifact_pool_config::with_test_pool_config(|pool_config| {
             let time_source = FastForwardTimeSource::new();
             let backup_dir = tempfile::Builder::new().tempdir().unwrap();
             let subnet_id = subnet_test_id(0);
-            let path = backup_dir
+            let root_path = backup_dir
                 .path()
                 .join(subnet_id.to_string())
                 .join(ic_types::ReplicaVersion::default().to_string());
@@ -757,15 +759,19 @@ mod tests {
                 no_op_logger(),
             );
 
-            let purging_interval = Duration::from_millis(5);
+            let purging_interval = Duration::from_millis(100);
             pool.backup = Some(Backup::new(
                 &pool,
-                path.clone(),
+                root_path.clone(),
                 // We purge all artifacts older than 5ms millisecond.
-                Duration::from_millis(5),
+                Duration::from_millis(100),
                 // We purge every 5 milliseconds.
                 purging_interval,
             ));
+
+            // All tests in this group work on artifacts inside the same group, so we extend
+            // the path with it.
+            let path = root_path.join("0");
 
             let random_beacon = RandomBeacon::fake(RandomBeaconContent::new(
                 Height::from(1),
@@ -873,13 +879,17 @@ mod tests {
                 "restored random beacon is identical with the original one"
             );
 
-            // Check backup for height 2
+            let notarization_path = path.join("2").join(format!(
+                "notarization_{}_{}.bin",
+                bytes_to_hex_str(&notarization.content.block),
+                bytes_to_hex_str(&ic_crypto::crypto_hash(&notarization)),
+            ));
             assert!(
                 path.join("2").join("random_tape.bin").exists(),
                 "random tape at height 2 was backed up"
             );
             assert!(
-                path.join("2").join("notarization_123_C4DBA8A9371944A635FA58163BE9F333E4776C9446AF0F6B2C895FE83A.bin").exists(),
+                notarization_path.exists(),
                 "notarization at height 2 was backed up"
             );
             assert_eq!(
@@ -896,10 +906,7 @@ mod tests {
                 random_tape, restored,
                 "restored random tape is identical with the original one"
             );
-            let mut file = fs::File::open(path.join("2").join(
-                "notarization_123_C4DBA8A9371944A635FA58163BE9F333E4776C9446AF0F6B2C895FE83A.bin",
-            ))
-            .unwrap();
+            let mut file = fs::File::open(notarization_path).unwrap();
             let mut buffer = Vec::new();
             file.read_to_end(&mut buffer).unwrap();
             let restored =
@@ -911,19 +918,21 @@ mod tests {
             );
 
             // Check backup for height 3
+            let finalization_path = path.join("3").join(format!(
+                "finalization_{}_{}.bin",
+                bytes_to_hex_str(&finalization.content.block),
+                bytes_to_hex_str(&ic_crypto::crypto_hash(&finalization)),
+            ));
             assert!(
-                    path.join("3").join("finalization_123_8B33F243D3EC97304AD9A9D9D9BCF5F6DEC5E56D56FDD3295DB855F259D4D.bin").exists(),
-                    "finalization at height 2 was backed up"
-                );
+                finalization_path.exists(),
+                "finalization at height 3 was backed up",
+            );
             assert_eq!(
                 fs::read_dir(path.join("3")).unwrap().count(),
                 1,
                 "only one artifact for height 3 was backed up"
             );
-            let mut file = fs::File::open(path.join("3").join(
-                "finalization_123_8B33F243D3EC97304AD9A9D9D9BCF5F6DEC5E56D56FDD3295DB855F259D4D.bin",
-            ))
-            .unwrap();
+            let mut file = fs::File::open(path.join("3").join(finalization_path)).unwrap();
             let mut buffer = Vec::new();
             file.read_to_end(&mut buffer).unwrap();
             let restored =
@@ -935,14 +944,17 @@ mod tests {
             );
 
             // Check backup for height 4
+            let proposal_path = path.join("4").join(format!(
+                "block_proposal_{}_{}.bin",
+                bytes_to_hex_str(&proposal.content.get_hash()),
+                bytes_to_hex_str(&ic_crypto::crypto_hash(&proposal)),
+            ));
             assert!(
                 path.join("4").join("catch_up_package.bin").exists(),
                 "catch-up package at height 4 was backed up"
             );
             assert!(
-                path.join("4")
-                    .join("block_proposal_54DB9DA9F14AE9D83174B9E5DBD2EAFF176EEAFF97A88278832F22BF37C383_A8B35DC41B629333A5D7B75BB35893F47734180474241F16655D09E5FF6C2.bin")
-                    .exists(),
+                proposal_path.exists(),
                 "block proposal at height 4 was backed up"
             );
             assert_eq!(
@@ -961,10 +973,7 @@ mod tests {
                 "restored catch-up package is identical with the original one"
             );
 
-            let mut file = fs::File::open(path.join("4").join(
-                "block_proposal_54DB9DA9F14AE9D83174B9E5DBD2EAFF176EEAFF97A88278832F22BF37C383_A8B35DC41B629333A5D7B75BB35893F47734180474241F16655D09E5FF6C2.bin",
-            ))
-            .unwrap();
+            let mut file = fs::File::open(proposal_path).unwrap();
             let mut buffer = Vec::new();
             file.read_to_end(&mut buffer).unwrap();
             let restored =
@@ -980,13 +989,16 @@ mod tests {
                 .set_time(time_source.get_relative_time() + 2 * purging_interval)
                 .unwrap();
 
-            // Before we purge, we sleep for 5ms, making sure artifacts are old enough.
-            // Note that we measure the age of artifacts using the FS timestamp and cannot
-            // fast-forward it.
-            std::thread::sleep(2 * purging_interval);
-            // This should cause purging.
-            pool.apply_changes(time_source.as_ref(), Vec::new());
-            pool.apply_changes(time_source.as_ref(), Vec::new());
+            // Before we purge, we sleep for one purging interval, making sure artifacts are
+            // old enough. Then we sleep again so that the group folder is
+            // removed as well. Note that we measure the age of artifacts using
+            // the FS timestamp and cannot fast-forward it.
+            for _ in 0..2 {
+                std::thread::sleep(2 * purging_interval);
+                // This should cause purging.
+                pool.apply_changes(time_source.as_ref(), Vec::new());
+                pool.apply_changes(time_source.as_ref(), Vec::new());
+            }
 
             // Make sure the subnet directory is empty, as we purged everything.
             assert_eq!(fs::read_dir(path).unwrap().count(), 0);
@@ -1059,8 +1071,9 @@ mod tests {
             // sync
             pool.apply_changes(time_source.as_ref(), Vec::new());
 
+            let group_path = &path.join("0");
             // We expect 3 folders for heights 0 to 2.
-            assert_eq!(fs::read_dir(&path).unwrap().count(), 3);
+            assert_eq!(fs::read_dir(&group_path).unwrap().count(), 3);
 
             // Let's sleep so that the previous heights are close to being purged.
             let sleep_time = purging_interval / 10 * 8;
@@ -1080,7 +1093,7 @@ mod tests {
             pool.apply_changes(time_source.as_ref(), Vec::new());
 
             // We expect 5 folders for heights 0 to 4.
-            assert_eq!(fs::read_dir(&path).unwrap().count(), 5);
+            assert_eq!(fs::read_dir(&group_path).unwrap().count(), 5);
 
             // We sleep just enough so that purging is overdue and the oldest artifacts are
             // approximately 1 purging interval old.
@@ -1096,9 +1109,40 @@ mod tests {
             pool.apply_changes(time_source.as_ref(), Vec::new());
 
             // We expect only 2 folders to survive the purging: 3, 4
-            assert_eq!(fs::read_dir(&path).unwrap().count(), 2);
-            assert!(path.join("3").exists());
-            assert!(path.join("4").exists());
+            assert_eq!(fs::read_dir(&group_path).unwrap().count(), 2);
+            assert!(group_path.join("3").exists());
+            assert!(group_path.join("4").exists());
+
+            let sleep_time = purging_interval + purging_interval / 10 * 3;
+            std::thread::sleep(sleep_time);
+            time_source
+                .set_time(time_source.get_relative_time() + sleep_time)
+                .unwrap();
+
+            // Trigger the purging.
+            pool.apply_changes(time_source.as_ref(), Vec::new());
+            // sync
+            pool.apply_changes(time_source.as_ref(), Vec::new());
+
+            // We deleted all artifacts, but the group folder was updated by this and needs
+            // to age now.
+            assert!(group_path.exists());
+            assert_eq!(fs::read_dir(&group_path).unwrap().count(), 0);
+
+            let sleep_time = purging_interval + purging_interval / 10 * 3;
+            std::thread::sleep(sleep_time);
+            time_source
+                .set_time(time_source.get_relative_time() + sleep_time)
+                .unwrap();
+
+            // Trigger the purging.
+            pool.apply_changes(time_source.as_ref(), Vec::new());
+            // sync
+            pool.apply_changes(time_source.as_ref(), Vec::new());
+
+            // The group folder expired and was deleted.
+            assert!(!group_path.exists());
+            assert_eq!(fs::read_dir(&path).unwrap().count(), 0);
         })
     }
 }

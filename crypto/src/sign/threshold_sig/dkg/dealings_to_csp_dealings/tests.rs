@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 use super::*;
 use crate::sign::threshold_sig::dkg::test_utils::{
     csp_pk_pop_dealing, csp_pk_pop_dealing_2, dealings_with, enc_pk_with_pop, keys_with,

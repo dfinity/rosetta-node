@@ -482,6 +482,8 @@ pub trait ThresholdSigner<T: Signable> {
     fn sign_threshold(&self, message: &T, dkg_id: DkgId) -> CryptoResult<ThresholdSigShareOf<T>>;
 }
 
+/// A Crypto Component interface to verify threshold signatures.
+///
 /// The methods in this trait depend on key material for the respective DKG ID
 /// to be present in the cache of the crypto component. To initialize this key
 /// material, the DKG transcript for the respective DKG ID must be loaded by

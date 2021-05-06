@@ -1,4 +1,4 @@
-//! Provides canonical CBOR encoding for canonical state tree leaves.
+//! Provides canonical CBOR encoding for Canonical State tree leaves.
 //!
 //! In order to maintain a stable canonical representation with support for
 //! forward and backward compatibility, mirror types are provided in the `types`

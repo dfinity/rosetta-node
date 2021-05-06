@@ -1,4 +1,5 @@
 #[macro_export]
+/// A macro to choose between running malicious code or the normal replica code.
 macro_rules! use_gossip_malicious_behavior_on_chunk_request {
     ($trait_self:ident, $malicious_code: expr, $replica_code_code:block) => {
         if $trait_self.malicious_flags.maliciously_gossip_drop_requests

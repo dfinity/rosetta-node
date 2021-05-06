@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use ic_crypto::utils::TempCryptoComponent;
 use ic_crypto::{
     threshold_sig_public_key_from_der, user_public_key_from_bytes, KeyBytesContentType,

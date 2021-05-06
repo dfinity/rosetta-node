@@ -17,6 +17,7 @@ use rand::{rngs::StdRng, seq::SliceRandom, thread_rng, SeedableRng};
 
 pub mod rosetta_api_serv;
 pub mod sample_data;
+pub mod zondax_gen;
 
 use rosetta_api_serv::RosettaApiHandle;
 
@@ -344,10 +345,13 @@ pub fn assert_ic_error(err: &RosettaError, code: u32, ic_http_status: u64, text:
 pub fn assert_canister_error(err: &RosettaError, code: u32, text: &str) {
     assert_eq!(err.code, code);
     let details = err.details.as_ref().unwrap();
-    assert!(details
-        .get("error_message")
-        .unwrap()
-        .as_str()
-        .unwrap()
-        .contains(text));
+    assert!(
+        details
+            .get("error_message")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains(text),
+        format!("rosetta error {:?} does not contain '{}'", err, text)
+    );
 }

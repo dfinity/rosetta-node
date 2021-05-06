@@ -970,11 +970,7 @@ impl ExecutionEnvironmentImpl {
             let log = self.log.clone();
             (
                 true,
-                output.and_then(move |(mut canister, cycles, result)| {
-                    let (result, heap_delta) = match result {
-                        Ok((result, heap_delta)) => (Ok(result), heap_delta),
-                        Err(err) => (Err(err), NumBytes::from(0)),
-                    };
+                output.and_then(move |(mut canister, cycles, heap_delta, result)| {
                     let action = canister
                         .system_state
                         .call_context_manager_mut()

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use strum_macros::EnumIter;
 
 #[allow(non_camel_case_types)]

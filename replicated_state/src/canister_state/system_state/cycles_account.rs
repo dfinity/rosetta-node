@@ -52,7 +52,7 @@ impl std::fmt::Display for CyclesAccountError {
 pub struct CyclesAccount {
     /// The current canister's cycles balance.
     cycles_balance: Cycles,
-    // TODO: Refactoring the cycles account. See exc-173.
+    // TODO(EXC-173): Refactoring the cycles account.
     /// Number of cycles consumed since the beginning of the replica.
     /// Used to update the metric `consumed_cycles_since_replica_started`
     /// at the end of every execution round.
@@ -139,7 +139,7 @@ impl From<pb::CyclesAccount> for CyclesAccount {
     fn from(value: pb::CyclesAccount) -> Self {
         Self {
             cycles_balance: Cycles::from(&value.cycles_balance),
-            // TODO: Refactoring the cycles account. See exc-173.
+            // TODO(EXC-173): Refactoring the cycles account.
             // Clearing up the tech debt mentioned above, will remove this field and
             // directly update the one from CanisterMetrics.
             // After loading CyclesAccount from checkpoint, we set this field

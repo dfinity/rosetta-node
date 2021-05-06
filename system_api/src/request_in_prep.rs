@@ -241,7 +241,7 @@ pub(crate) fn into_request(
         on_reply,
         on_reject,
         on_cleanup,
-    ))?;
+    ));
 
     Ok(Request {
         sender,

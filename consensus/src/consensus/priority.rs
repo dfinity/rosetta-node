@@ -103,8 +103,8 @@ fn compute_priority(
     attr: &ConsensusMessageAttribute,
 ) -> Priority {
     let height = attr.height();
-    // Ignore older than catch-up height
-    if height <= catch_up_height {
+    // Ignore older than the min of catch-up height and expected_batch_height
+    if height < expected_batch_height.min(catch_up_height) {
         return Drop;
     }
     // Other decisions depend on type, default is to fetch.

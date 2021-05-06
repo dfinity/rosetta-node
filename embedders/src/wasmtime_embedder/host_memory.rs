@@ -49,7 +49,6 @@ unsafe impl<C: ICMemoryCreator + Send + Sync> wasmtime::MemoryCreator for Wasmti
         guard_size: u64,
     ) -> Result<Box<dyn wasmtime::LinearMemory>, String> {
         unsafe {
-            // TODO mw: I think we should return an error if `Limits` is malformed.
             //Wasmtime 'guarantees' that these values are <= WASM_MAX_PAGES
             //and has asserts for that in its Memory implementation
             //but let's just clip to that without panicking in case they change

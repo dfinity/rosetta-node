@@ -7,27 +7,29 @@ use TraceEntry::{EndSubtree, EnterEdge, StartSubtree, VisitBlob, VisitNum};
 const MESSAGE_SIZE: usize = 3;
 const HEADER_SIZE: usize = 2;
 
-// Sample streams traversal:
-//
-// *- streams
-//    +- 0
-//    |  +- header → [b'H', 0]
-//    |  +- messages
-//    |     +- 0 → [b'M', 0, 0]
-//    |     +- 1 → [b'M', 0, 1]
-//    |     +- ...
-//    |     +- <msg_count> → [b'M', 0, <msg_count>]
-//    +- 1
-//    |  +- header → [b'H', 1]
-//    |  +- messages
-//    |     +- 0 → [b'M', 1, 0]
-//    |     +- ...
-//    +- ...
-//    |
-//    `- <stream_count>
-//       +- header → [b'H', <stream_count>]
-//       +- messages
-//          +- ...
+/// Sample streams traversal:
+///
+/// ```text
+/// *- streams
+///    +- 0
+///    |  +- header → [b'H', 0]
+///    |  +- messages
+///    |     +- 0 → [b'M', 0, 0]
+///    |     +- 1 → [b'M', 0, 1]
+///    |     +- ...
+///    |     +- <msg_count> → [b'M', 0, <msg_count>]
+///    +- 1
+///    |  +- header → [b'H', 1]
+///    |  +- messages
+///    |     +- 0 → [b'M', 1, 0]
+///    |     +- ...
+///    +- ...
+///    |
+///    `- <stream_count>
+///       +- header → [b'H', <stream_count>]
+///       +- messages
+///          +- ...
+/// ```
 fn traverse_streams<V: Visitor>(
     mut v: SizeLimitVisitor<V>,
     stream_count: usize,

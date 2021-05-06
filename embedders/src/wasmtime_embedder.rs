@@ -35,10 +35,8 @@ use wasmtime::{unix::StoreExt, Memory, Mutability, Store, Val, ValType};
 
 fn trap_to_error(err: anyhow::Error) -> HypervisorError {
     let message = format!("{}", err);
-    // https://github.com/bytecodealliance/wasmtime/pull/890
     let re_signature_mismatch =
         regex::Regex::new("expected \\d+ arguments, got \\d+").expect("signature mismatch regex");
-    // from wasmtime crates/runtime trap_code_to_expected_string
     if message.contains("wasm trap: call stack exhausted") {
         HypervisorError::Trapped(TrapCode::StackOverflow)
     } else if message.contains("wasm trap: out of bounds memory access") {
@@ -225,13 +223,11 @@ impl Embedder for WasmtimeEmbedder {
 
                 if current_heap_size < requested_size {
                     let delta = requested_size - current_heap_size;
-                    // TODO(mw, DFN-1305): I think it is OK to panic here. `requested_size` is
+                    // TODO(DFN-1305): It is OK to panic here. `requested_size` is
                     // value we store only after we've successfully grown module memory in some
                     // previous execution.
                     // Example: module starts with (memory 1 2) and calls (memory.grow 1). Then
                     // requested_size will be 2.
-                    // FixME: (kjo): We should not panic here if the grow  operation fails
-                    // Instead fail the instance creation
                     instance_memory.grow(delta).expect("memory grow failed");
                 }
                 instance_memory

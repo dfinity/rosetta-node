@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 mod allowed_clients {
     use crate::{AllowedClients, ClientsEmptyError, SomeOrAllNodes};
     use ic_protobuf::registry::crypto::v1::X509PublicKeyCert;

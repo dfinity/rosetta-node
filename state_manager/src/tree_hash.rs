@@ -70,8 +70,7 @@ mod tests {
     use ic_replicated_state::metadata_state::Stream;
     use ic_replicated_state::{
         page_map::{PageDelta, PageIndex, PAGE_SIZE},
-        CanisterState, ExecutionState, ExportedFunctions, Global, NumWasmPages, PageMap,
-        ReplicatedState,
+        ExecutionState, ExportedFunctions, Global, NumWasmPages, PageMap, ReplicatedState,
     };
     use ic_test_utilities::types::ids::{
         canister_test_id, message_test_id, subnet_test_id, user_test_id,
@@ -85,7 +84,7 @@ mod tests {
     use ic_base_types::NumSeconds;
     use ic_cow_state::CowMemoryManagerImpl;
     use ic_crypto_tree_hash::Digest;
-    use ic_test_utilities::types::messages::ResponseBuilder;
+    use ic_test_utilities::{state::new_canister_state, types::messages::ResponseBuilder};
     use ic_types::ingress::IngressStatus;
     use ic_types::messages::RequestOrResponse;
     use ic_wasm_types::BinaryEncodedWasm;
@@ -173,7 +172,7 @@ mod tests {
 
             let canister_id = canister_test_id(2);
             let controller = user_test_id(24);
-            let mut canister_state = CanisterState::new(
+            let mut canister_state = new_canister_state(
                 canister_id,
                 controller.get(),
                 INITIAL_CYCLES,

@@ -8,8 +8,8 @@ use ic_replicated_state::ReplicatedState;
 use ic_test_utilities::{state::arb_stream, types::ids::subnet_test_id};
 use proptest::prelude::*;
 
-/// A fixture consisting of a `ReplicatedState` wrapping a single stream,
-/// context about that stream (`begin`, `end`, `size`) and a `slice_begin` and
+/// A fixture consisting of a `ReplicatedState` wrapping a single stream;
+/// context about that stream (`begin`, `end`, `size`); and a `slice_begin` and
 /// `size_limit` values derived from these.
 #[derive(Clone, Debug)]
 struct Fixture {

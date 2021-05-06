@@ -37,7 +37,6 @@ use log::{debug, warn};
 
 pub const API_VERSION: &str = "1.4.10";
 pub const NODE_VERSION: &str = "1.0.2";
-pub const MIDDLEWARE_VERSION: &str = "0.2.7";
 
 fn to_index(height: BlockHeight) -> Result<i128, ApiError> {
     i128::try_from(height).map_err(|_| ApiError::InternalError(true, None))
@@ -68,7 +67,7 @@ fn create_parent_block_id(
 ) -> Result<BlockIdentifier, ApiError> {
     let idx = std::cmp::max(0, to_index(block.index)? - 1);
 
-    let parent = blocks.get_at(idx as u64)?;
+    let parent = blocks.get_verified_at(idx as u64)?;
     Ok(convert::block_id(&parent)?)
 }
 
@@ -86,7 +85,7 @@ fn get_block(
             if block_height < 0 {
                 return Err(ApiError::InvalidBlockId(false, None));
             }
-            let block = blocks.get_at(block_height as u64)?;
+            let block = blocks.get_verified_at(block_height as u64)?;
 
             if block.hash != hash {
                 return Err(ApiError::InvalidBlockId(false, None));
@@ -102,7 +101,7 @@ fn get_block(
                 return Err(ApiError::InvalidBlockId(false, None));
             }
             let idx = block_height as usize;
-            blocks.get_at(idx as u64)?
+            blocks.get_verified_at(idx as u64)?
         }
         Some(PartialBlockIdentifier {
             index: None,
@@ -110,14 +109,14 @@ fn get_block(
         }) => {
             let hash: ledger_canister::HashOf<ledger_canister::EncodedBlock> =
                 convert::to_hash(&block_hash)?;
-            blocks.get(hash)?
+            blocks.get_verified(hash)?
         }
         Some(PartialBlockIdentifier {
             index: None,
             hash: None,
         })
         | None => blocks
-            .last()?
+            .last_verified()?
             .ok_or(ApiError::BlockchainEmpty(false, None))?,
     };
 
@@ -164,7 +163,7 @@ impl RosettaRequestHandler {
         let block = get_block(&blocks, msg.block_identifier)?;
 
         let icp = blocks
-            .get_balances(block.hash)?
+            .get_balances_at(block.index)?
             .account_balance(&account_id);
         let amount = convert::amount_(icp)?;
         let b = convert::block_id(&block)?;
@@ -316,7 +315,13 @@ impl RosettaRequestHandler {
 
         let pk = msg.public_key;
 
-        // Do we need the curve?
+        if pk.curve_type != CurveType::EDWARDS25519 {
+            return Err(ApiError::InvalidPublicKey(
+                false,
+                into_error("Only EDWARDS25519 curve type is supported".to_string()),
+            ));
+        }
+
         let account_identifier = Some(account_from_public_key(pk)?);
         Ok(ConstructionDeriveResponse {
             account_identifier,
@@ -727,8 +732,8 @@ impl RosettaRequestHandler {
             Version::new(
                 API_VERSION.to_string(),
                 NODE_VERSION.to_string(),
-                Some(MIDDLEWARE_VERSION.to_string()),
-                Some(Map::new()),
+                None,
+                None,
             ),
             Allow::new(
                 vec![OperationStatus::new("COMPLETED".to_string(), true)],
@@ -741,12 +746,17 @@ impl RosettaRequestHandler {
                 vec![
                     Error::new(&ApiError::InternalError(true, None)),
                     Error::new(&ApiError::InvalidRequest(false, None)),
+                    Error::new(&ApiError::NotAvailableOffline(false, None)),
                     Error::new(&ApiError::InvalidNetworkId(false, None)),
                     Error::new(&ApiError::InvalidAccountId(false, None)),
                     Error::new(&ApiError::InvalidBlockId(false, None)),
+                    Error::new(&ApiError::InvalidPublicKey(false, None)),
                     Error::new(&ApiError::MempoolTransactionMissing(false, None)),
                     Error::new(&ApiError::BlockchainEmpty(false, None)),
                     Error::new(&ApiError::InvalidTransaction(false, None)),
+                    Error::new(&ApiError::ICError(false, None)),
+                    Error::new(&ApiError::TransactionRejected(false, None)),
+                    Error::new(&ApiError::TransactionExpired),
                 ],
                 true,
             ),
@@ -761,15 +771,15 @@ impl RosettaRequestHandler {
         verify_network_id(self.ledger.ledger_canister_id(), &msg.network_identifier)?;
         let blocks = self.ledger.read_blocks().await;
         let first = blocks
-            .first()?
+            .first_verified()?
             .ok_or(ApiError::BlockchainEmpty(true, None))?;
         let tip = blocks
-            .last()?
+            .last_verified()?
             .ok_or(ApiError::BlockchainEmpty(true, None))?;
         let tip_id = convert::block_id(&tip)?;
         let tip_timestamp = convert::timestamp(tip.block.decode().unwrap().timestamp.into())?;
         // Block at index 0 has to be there if tip was present
-        let genesis_block = blocks.get_at(0)?;
+        let genesis_block = blocks.get_verified_at(0)?;
         let genesis_block_id = convert::block_id(&genesis_block)?;
         let peers = vec![];
         let oldest_block_id = if first.index != 0 {
@@ -798,7 +808,7 @@ impl RosettaRequestHandler {
     ) -> Result<SearchTransactionsResponse, ApiError> {
         verify_network_id(self.ledger.ledger_canister_id(), &msg.network_identifier)?;
         let blocks = self.ledger.read_blocks().await;
-        let last_index = match blocks.last()? {
+        let last_index = match blocks.last_verified()? {
             Some(hb) => hb.index,
             None => 0,
         };
@@ -810,7 +820,7 @@ impl RosettaRequestHandler {
         // node, we may want to restrict iterations here to prevent DoS attacks.
         let mut txs = Vec::new();
         for i in (0..=last_index).rev() {
-            let hb = blocks.get_at(i)?;
+            let hb = blocks.get_verified_at(i)?;
             let b = hb
                 .block
                 .decode()
@@ -874,10 +884,16 @@ impl RosettaRequestHandler {
     }
 }
 
-fn make_sig_data(message_id: &MessageId) -> Vec<u8> {
+pub fn make_sig_data(message_id: &MessageId) -> Vec<u8> {
     // Lifted from canister_client::agent::sign_message_id
     let mut sig_data = vec![];
     sig_data.extend_from_slice(DOMAIN_IC_REQUEST);
     sig_data.extend_from_slice(message_id.as_bytes());
     sig_data
+}
+
+pub enum CyclesResponse {
+    CanisterCreated(CanisterId),
+    CanisterToppedUp(),
+    Refunded(String, Option<BlockHeight>),
 }

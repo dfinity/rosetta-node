@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use crate::keygen_utils::{add_keys_to_registry, TestKeygenCrypto};
 use ic_config::crypto::CryptoConfig;
 use ic_crypto::utils::{

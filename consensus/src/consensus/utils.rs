@@ -46,7 +46,7 @@ impl RoundRobin {
     }
 }
 
-/// Convert a CryptoHashable into a `ChaChaRng`
+/// Convert a CryptoHashable into a 32 bytes which can be used to seed a RNG
 pub fn crypto_hashable_to_seed<T: CryptoHashable>(hashable: &T) -> [u8; 32] {
     let hash = ic_crypto::crypto_hash(hashable);
     let CryptoHash(hash_bytes) = hash.get();
@@ -56,7 +56,8 @@ pub fn crypto_hashable_to_seed<T: CryptoHashable>(hashable: &T) -> [u8; 32] {
     seed
 }
 
-/// Calculate the required delay for blockmaking based on blockmaker's rank.
+/// Calculate the required delay for block making based on the block maker's
+/// rank.
 pub fn get_block_maker_delay(
     log: &ReplicaLogger,
     registry_client: &dyn RegistryClient,
@@ -89,7 +90,7 @@ pub fn is_root_subnet(
     }
 }
 
-/// Return true if the time since round start is greater than required block
+/// Return true if the time since round start is greater than the required block
 /// maker delay for the given rank.
 pub fn is_time_to_make_block(
     log: &ReplicaLogger,

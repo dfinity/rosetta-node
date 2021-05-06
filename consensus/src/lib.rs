@@ -8,5 +8,3 @@
 pub mod certification;
 pub mod consensus;
 pub mod dkg;
-
-pub use consensus::{generate_responses_to_subnet_calls, setup, ConsensusImpl};

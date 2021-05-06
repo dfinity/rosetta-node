@@ -137,11 +137,11 @@ where
             cycles_account_manager,
         ));
 
-        let payload_builder = PayloadBuilderImpl::new_rc(
+        let payload_builder = Arc::new(PayloadBuilderImpl::new(
             ingress_manager,
             Arc::new(FakeXNetPayloadBuilder::new()),
             metrics_registry,
-        );
+        ));
 
         test_fn(now, &mut consensus_pool, payload_builder.as_ref());
     })
@@ -159,6 +159,7 @@ fn setup_ingress_state(now: Time, state_manager: &mut StateManagerImpl) {
     let expiry = std::time::Duration::from_secs(MAX_INGRESS_TTL.as_secs() - 1);
     for i in 0..INGRESS_HISTORY_SIZE {
         let ingress = SignedIngressBuilder::new()
+            .method_name("provisional_create_canister_with_cycles")
             .method_payload(vec![seed; INGRESS_MESSAGE_SIZE])
             .nonce(i as u64)
             .expiry_time(now + expiry)
@@ -203,6 +204,7 @@ fn prepare_ingress_payload(now: Time, message_count: usize, seed: u8) -> Ingress
     let expiry = std::time::Duration::from_secs(MAX_INGRESS_TTL.as_secs() - 1);
     for i in 0..message_count {
         let ingress = SignedIngressBuilder::new()
+            .method_name("provisional_create_canister_with_cycles")
             .method_payload(vec![seed; INGRESS_MESSAGE_SIZE])
             .nonce(i as u64)
             .expiry_time(now + expiry)

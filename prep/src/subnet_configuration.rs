@@ -23,7 +23,7 @@ use ic_types::{
     crypto::{
         threshold_sig::{
             ni_dkg::{NiDkgTag, NiDkgTargetId},
-            ThresholdSigPublicKey, ThresholdSigPublicKeyError,
+            ThresholdSigPublicKey, ThresholdSigPublicKeyBytesConversionError,
         },
         CryptoError,
     },
@@ -105,7 +105,7 @@ pub enum InitializeSubnetError {
     #[error("threshold signature public key: {source}")]
     ThresholdSigPublicKey {
         #[from]
-        source: ThresholdSigPublicKeyError,
+        source: ThresholdSigPublicKeyBytesConversionError,
     },
 
     #[error("crypto error: {source}")]

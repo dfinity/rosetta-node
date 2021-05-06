@@ -1,3 +1,14 @@
+//! This crate provides the `CryptoComponent` and a set of static methods that
+//! allows Internet Computer nodes to perform crypto operations such as key
+//! generation, distributed key generation, hashing, signing, signature
+//! verification, TLS handshakes, and random number generation.
+//!
+//! Please refer to the 'Trait Implementations' section of the
+//! `CryptoComponentFatClient` to get an overview of the functionality offered
+//! by the `CryptoComponent`.
+#![forbid(unsafe_code)]
+#![deny(clippy::unwrap_used)]
+
 pub mod cli;
 mod common;
 mod hash;
@@ -37,13 +48,13 @@ use rand::{CryptoRng, Rng};
 use std::fmt;
 use std::sync::Arc;
 
+/// Defines the maximum number of entries contained in the
+/// `ThresholdSigDataStore`.
 pub const THRESHOLD_SIG_DATA_STORE_CAPACITY: usize = ThresholdSigDataStoreImpl::CAPACITY;
 
-/// Note: The implementation will be switched from a fat client to a thin
-/// client.  It is recommended to use the CryptoComponent type alias so that
-/// the transition is seamless. A very few users will want to keep using one
-/// specific implementation for a while; if you are one of those, refer to
-/// implementations directly.
+/// A type alias for `CryptoComponentFatClient<Csp<OsRng,
+/// ProtoSecretKeyStore>>`. See the Rust documentation of
+/// `CryptoComponentFatClient`.
 pub type CryptoComponent = CryptoComponentFatClient<Csp<OsRng, ProtoSecretKeyStore>>;
 
 /// A crypto component that offers limited functionality and can be used outside
@@ -80,6 +91,9 @@ impl<T> CryptoComponentForNonReplicaProcess for T where
 {
 }
 
+/// Allows Internet Computer nodes to perform crypto operations such as
+/// distributed key generation, signing, signature verification, and TLS
+/// handshakes.
 pub struct CryptoComponentFatClient<C: CryptoServiceProvider> {
     lockable_threshold_sig_data_store: LockableThresholdSigDataStore,
     csp: C,
@@ -89,28 +103,36 @@ pub struct CryptoComponentFatClient<C: CryptoServiceProvider> {
     logger: ReplicaLogger,
 }
 
+/// A `ThresholdSigDataStore` that is wrapped by a `RwLock`.
+///
+/// This is a store for data required to verify threshold signatures, see the
+/// Rust documentation of the `ThresholdSigDataStore` trait.
 pub struct LockableThresholdSigDataStore {
     threshold_sig_data_store: RwLock<ThresholdSigDataStoreImpl>,
 }
 
 #[allow(clippy::new_without_default)] // we don't need a default impl
 impl LockableThresholdSigDataStore {
+    /// Creates a store.
     pub fn new() -> Self {
         Self {
             threshold_sig_data_store: RwLock::new(ThresholdSigDataStoreImpl::new()),
         }
     }
 
+    /// Returns a write lock to the store.
     pub fn write(&self) -> RwLockWriteGuard<'_, ThresholdSigDataStoreImpl> {
         self.threshold_sig_data_store.write()
     }
 
+    /// Returns a read lock to the store.
     pub fn read(&self) -> RwLockReadGuard<'_, ThresholdSigDataStoreImpl> {
         self.threshold_sig_data_store.read()
     }
 }
 
 impl<R: Rng + CryptoRng + Send + Sync> CryptoComponentFatClient<Csp<R, ProtoSecretKeyStore>> {
+    /// Creates a crypto component using the given `csprng` and fake `node_id`.
     pub fn new_with_rng_and_fake_node_id(
         csprng: R,
         config: &CryptoConfig,
@@ -128,6 +150,7 @@ impl<R: Rng + CryptoRng + Send + Sync> CryptoComponentFatClient<Csp<R, ProtoSecr
 }
 
 impl<C: CryptoServiceProvider> CryptoComponentFatClient<C> {
+    /// Creates a crypto component using the given `csp` and fake `node_id`.
     pub fn new_with_csp_and_fake_node_id(
         csp: C,
         logger: ReplicaLogger,
@@ -155,6 +178,9 @@ impl<C: CryptoServiceProvider> fmt::Debug for CryptoComponentFatClient<C> {
 
 impl CryptoComponentFatClient<Csp<OsRng, ProtoSecretKeyStore>> {
     /// Creates a new crypto component.
+    ///
+    /// This is the constructor to use to create the replica's / node's crypto
+    /// component.
     ///
     /// Multiple crypto components must share the same state to avoid problems
     /// due to concurrent state access. To achieve this, we recommend to
@@ -213,6 +239,7 @@ impl CryptoComponentFatClient<Csp<OsRng, ProtoSecretKeyStore>> {
         }
     }
 
+    /// Creates a crypto component using a fake `node_id`.
     pub fn new_with_fake_node_id(
         config: &CryptoConfig,
         registry_client: Arc<dyn RegistryClient>,
@@ -242,6 +269,7 @@ impl CryptoComponentFatClient<Csp<OsRng, ProtoSecretKeyStore>> {
         CryptoComponentFatClient::new(config, registry_client, logger, None)
     }
 
+    /// Returns the `NodeId` of this crypto component.
     pub fn get_node_id(&self) -> NodeId {
         self.node_id
     }

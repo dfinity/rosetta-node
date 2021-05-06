@@ -69,6 +69,14 @@ message TransactionNotificationResponse {
   bytes response = 1;
 }
 
+message CyclesNotificationResponse {
+  oneof response {
+    ic_base_types.pb.v1.PrincipalId created_canister_id = 1;
+    Refund refund = 2;
+    ToppedUp topped_up = 3;
+  }
+}
+
 // Get the balance of an account
 message AccountBalanceRequest  {
   AccountIdentifier account = 1;
@@ -122,6 +130,14 @@ message BlockResponse {
 message GetBlocksRequest {
   uint64 start = 1;
   uint64 length = 2;
+}
+
+message Refund {
+  BlockHeight refund = 2;
+  string error = 3;
+}
+
+message ToppedUp {
 }
 
 message EncodedBlocks {

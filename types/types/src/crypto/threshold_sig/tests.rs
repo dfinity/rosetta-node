@@ -23,7 +23,7 @@ fn should_fail_constructing_threshold_sig_pubkey_from_protobuf_with_wrong_algori
 
     assert_eq!(
         ThresholdSigPublicKey::try_from(proto_with_wrong_algorithm).unwrap_err(),
-        ThresholdSigPublicKeyError::Malformed {
+        ThresholdSigPublicKeyBytesConversionError::Malformed {
             key_bytes: Some(key_value.to_vec()),
             internal_error: format!(
                 "Invalid algorithm: expected {:?} but got {:?}",
@@ -47,7 +47,7 @@ fn should_fail_constructing_threshold_sig_pubkey_from_protobuf_with_wrong_length
 
     assert_eq!(
         ThresholdSigPublicKey::try_from(proto_with_wrong_length).unwrap_err(),
-        ThresholdSigPublicKeyError::Malformed {
+        ThresholdSigPublicKeyBytesConversionError::Malformed {
             internal_error: format!(
                 "Invalid length: expected {} but got {}",
                 bls12_381::PublicKeyBytes::SIZE,

@@ -23,7 +23,7 @@ use ic_types::{
     user_error::{ErrorCode, RejectCode, UserError},
     RegistryVersion, UserId,
 };
-use ic_validator::{validate_request_auth, CanisterIdSet};
+use ic_validator::{get_authorized_canisters, CanisterIdSet};
 use std::convert::TryFrom;
 
 const MAX_READ_STATE_REQUEST_IDS: u8 = 100;
@@ -97,19 +97,19 @@ pub(crate) fn handle(
         }
     };
 
-    let targets = match validate_request_auth(&request, validator, current_time(), registry_version)
-    {
-        Ok(targets) => targets,
-        err => {
-            metrics.observe_forbidden_request(&RequestType::Read, "ReadReqAuthFailed");
-            // This unwrap is safe because `make_response_to_unauthentic_requests` always
-            // generates a response when given an error.
-            return (
-                common::make_response_to_unauthentic_requests(request.id(), err, log).unwrap(),
-                Unknown,
-            );
-        }
-    };
+    let targets =
+        match get_authorized_canisters(&request, validator, current_time(), registry_version) {
+            Ok(targets) => targets,
+            err => {
+                metrics.observe_forbidden_request(&RequestType::Read, "ReadReqAuthFailed");
+                // This unwrap is safe because `make_response_to_unauthentic_requests` always
+                // generates a response when given an error.
+                return (
+                    common::make_response_to_unauthentic_requests(request.id(), err, log).unwrap(),
+                    Unknown,
+                );
+            }
+        };
 
     match request.content() {
         ReadContent::Query(query) => (

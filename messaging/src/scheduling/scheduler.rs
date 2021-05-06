@@ -10,7 +10,7 @@ use ic_interfaces::{
     },
     messages::CanisterInputMessage,
 };
-use ic_logger::{debug, new_logger, warn, ReplicaLogger};
+use ic_logger::{debug, info, new_logger, warn, ReplicaLogger};
 use ic_metrics::{
     buckets::{decimal_buckets, linear_buckets},
     MetricsRegistry,
@@ -57,6 +57,7 @@ struct SchedulerMetrics {
     execute_round_called: IntCounter,
     inner_loop_consumed_non_zero_instructions_count: IntCounter,
     inner_round_loop_consumed_max_instructions: IntCounter,
+    num_canisters_uninstalled_out_of_cycles: IntCounter,
 }
 
 impl SchedulerMetrics {
@@ -160,6 +161,10 @@ impl SchedulerMetrics {
             inner_round_loop_consumed_max_instructions: metrics_registry.int_counter(
                 "inner_round_loop_consumed_max_instructions",
                 "The number of times inner_rounds()'s loop exitted because max allowed instructions were consumed.",
+            ),
+            num_canisters_uninstalled_out_of_cycles:metrics_registry.int_counter(
+                "scheduler_num_canisters_uninstalled_out_of_cycles",
+                "The number of canisters that were uninstalled because they ran out of cycles."
             ),
         }
     }
@@ -706,6 +711,12 @@ impl SchedulerImpl {
                     canisters_to_keep.insert(canister.canister_id(), canister);
                 }
                 Err(mut canister) => {
+                    info!(
+                        self.log,
+                        "Uninstalling canister {} because it ran out of cycles",
+                        canister.canister_id()
+                    );
+                    self.metrics.num_canisters_uninstalled_out_of_cycles.inc();
                     let rejects =
                         uninstall_canister(&self.log, &mut canister, state.path(), state.time());
                     process_responses(rejects, state, Arc::clone(&self.ingress_history_writer));

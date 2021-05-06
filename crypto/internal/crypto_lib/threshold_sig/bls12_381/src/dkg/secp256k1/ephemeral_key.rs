@@ -19,8 +19,6 @@ const DOMAIN_POP_EPHEMERAL_NON_REWIND: &str = "pop ephemeral key non-rewind";
 
 /// Generates an ephemeral key pair, with pop.
 ///
-/// This is the crypto_lib contribution to Csp.create_ephemeral in the spec: https://docs.dfinity.systems/dfinity/spec/replica/ancillary/crypto/index.html#:~:text=fn%20Csp.create_ephemeral
-///
 /// # Arguments
 /// * `rng` - a cryptographically secure random number generator.
 /// * `dkg_id` - the DKG this ephemeral key is to be used for.
@@ -112,8 +110,6 @@ fn create_pop_data<'a, R: Rng + CryptoRng>(
 
 /// Verifies an ephemeral key (e.g. for cases where subgroup checks are
 /// necessary)
-///
-/// This is the crypto_lib contribution to Csp.verify_ephemeral in the spec: https://docs.dfinity.systems/dfinity/spec/replica/ancillary/crypto/index.html#:~:text=fn%20Csp.verify_ephemeral
 ///
 /// # Arguments
 /// * `dkg_id` - the DKG this ephemeral key is to be used for.
@@ -207,7 +203,7 @@ impl HDigest<'_> {
     fn digest(&self) -> [u8; 32] {
         let mut hash = Sha256::new();
         hash.write(DomainSeparationContext::new(DOMAIN_POP_EPHEMERAL_NON_REWIND).as_bytes());
-        hash.write(&serde_cbor::to_vec(&self.dkg_id).unwrap());
+        hash.write(&serde_cbor::to_vec(&self.dkg_id).expect("Failed to serialize to CBOR"));
         hash.write(&self.public_key_bytes.0);
         hash.write(self.sender);
         hash.finish()
@@ -232,7 +228,7 @@ impl ChallengeDigest<'_> {
     fn digest(&self) -> [u8; 32] {
         let mut digest = Sha256::new();
         digest.write(DomainSeparationContext::new(DOMAIN_POP_EPHEMERAL).as_bytes());
-        digest.write(&serde_cbor::to_vec(&self.dkg_id).unwrap());
+        digest.write(&serde_cbor::to_vec(&self.dkg_id).expect("Failed to serialize to CBOR"));
         digest.write(&SECP256K1_PUBLIC_KEY_ONE.0);
         digest.write(&self.h_bytes.0);
         digest.write(&self.public_key_bytes.0);

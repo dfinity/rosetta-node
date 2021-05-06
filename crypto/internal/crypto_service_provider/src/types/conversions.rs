@@ -166,7 +166,7 @@ impl From<PopBytesFromProtoError> for CspPopFromPublicKeyProtoError {
 // we have consolidated the key/signatures types which will likely involve
 // removing the CspPublicKey type. Because this impl is temporary, there are
 // no associated tests.
-// TODO (DFN-1186): Remove as part of DFN-1186
+// TODO (CRP-218): Remove as part of CRP-218
 impl AsRef<[u8]> for CspPublicKey {
     fn as_ref(&self) -> &[u8] {
         match self {
@@ -182,7 +182,7 @@ impl AsRef<[u8]> for CspPublicKey {
 // we have consolidated the key/signatures types which will likely involve
 // removing the CspPop type. Because this impl is temporary, there are
 // no associated tests.
-// TODO (DFN-1186): Remove as part of DFN-1186
+// TODO (CRP-218): Remove as part of CRP-218
 impl AsRef<[u8]> for CspPop {
     fn as_ref(&self) -> &[u8] {
         match self {
@@ -196,7 +196,7 @@ impl AsRef<[u8]> for CspPop {
 // we have consolidated the key/signatures types which will likely involve
 // removing the CspSignature type. Because this impl is temporary, there are
 // no associated tests.
-// TODO (DFN-1186): Remove as part of DFN-1186
+// TODO (CRP-218): Remove as part of CRP-218
 impl AsRef<[u8]> for CspSignature {
     fn as_ref(&self) -> &[u8] {
         match self {

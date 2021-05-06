@@ -250,7 +250,6 @@ pub struct RoutingTable(pub BTreeMap<CanisterIdRange, SubnetId>);
 impl RoutingTable {
     pub fn new(map: BTreeMap<CanisterIdRange, SubnetId>) -> Self {
         let ret = Self(map);
-        // TODO(akhi): return error instead of panicking.
         assert_eq!(ret.well_formed(), Ok(()));
         ret
     }
@@ -327,8 +326,7 @@ impl RoutingTable {
     /// Returns the `SubnetId` that the given `principal_id` is assigned to or
     /// `None` if an assignment cannot be found.
     pub fn route(&self, principal_id: PrincipalId) -> Option<SubnetId> {
-        // TODO(dsarlis): The below search can be optimized if we keep a set of subnet
-        // ids.
+        // TODO(EXC-274): Optimize the below search by keeping a set of subnet ids.
         // Check if the given `principal_id` is a subnet.
         // Note that the following assumes that all known subnets are in the routing
         // table, even if they're empty (i.e. no canister exists on them). In the

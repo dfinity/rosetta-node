@@ -514,7 +514,7 @@ impl Chunkable for IncompleteState {
         }
     }
 
-    fn get_artifact_indentifier(&self) -> CryptoHash {
+    fn get_artifact_identifier(&self) -> CryptoHash {
         self.get_artifact_hash()
     }
 

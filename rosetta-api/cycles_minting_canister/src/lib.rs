@@ -5,8 +5,10 @@ use ledger_canister::{
 };
 use serde::{Deserialize, Serialize};
 
-pub const CREATE_CANISTER_REFUND_FEE: ICPTs = ICPTs::from_e8s(10_000);
-pub const TOP_UP_CANISTER_REFUND_FEE: ICPTs = ICPTs::from_e8s(1_000);
+pub const DEFAULT_CYCLES_PER_XDR: u128 = 1_000_000_000_000u128; // 1T cycles = 1 XDR
+
+pub const CREATE_CANISTER_REFUND_FEE: ICPTs = ICPTs::from_e8s(TRANSACTION_FEE.get_e8s() * 4);
+pub const TOP_UP_CANISTER_REFUND_FEE: ICPTs = ICPTs::from_e8s(TRANSACTION_FEE.get_e8s() * 2);
 
 #[derive(Serialize, Deserialize, CandidType, Clone, Debug, PartialEq, Eq)]
 pub struct CyclesCanisterInitPayload {
@@ -90,7 +92,6 @@ pub struct SetAuthorizedSubnetworkListArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ledger_canister::TransactionNotificationResult;
 
     #[test]
     fn icpts_to_cycles() {
@@ -111,14 +112,5 @@ mod tests {
             .to_cycles(ICPTs::new(123, 0).unwrap()),
             31952666407731u128.into()
         );
-    }
-
-    #[test]
-    fn notify() {
-        let res: CreateCanisterResult =
-            Ok(CanisterId::new(PrincipalId::new_user_test_id(1)).unwrap());
-        let x = TransactionNotificationResult::encode(res.clone()).unwrap();
-        let y: CreateCanisterResult = x.decode().unwrap();
-        assert_eq!(y, res);
     }
 }

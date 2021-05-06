@@ -1,4 +1,3 @@
-use ic_canister_client::{HttpClient, HttpContentType, HttpStatusCode};
 use ic_rosetta_api::models::Error as RosettaError;
 use ic_rosetta_api::models::*;
 use ic_types::CanisterId;
@@ -7,6 +6,8 @@ use ic_types::CanisterId;
 use ledger_canister::{AccountIdentifier, BlockHeight};
 
 use rand::{seq::SliceRandom, thread_rng};
+use reqwest::Client as HttpClient;
+use reqwest::StatusCode as HttpStatusCode;
 use std::convert::TryFrom;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -141,21 +142,40 @@ impl RosettaApiHandle {
         panic!("Rosetta_api failed to start in {} secs", timeout.as_secs());
     }
 
+    async fn post_json_request(
+        &self,
+        url: &str,
+        body: Vec<u8>,
+    ) -> Result<(Vec<u8>, HttpStatusCode), String> {
+        let resp = self
+            .http_client
+            .post(url)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body)
+            .send()
+            .await
+            .map_err(|err| format!("sending post request failed with {}: ", err))?;
+        let resp_status = resp.status();
+        let resp_body = resp
+            .bytes()
+            .await
+            .map_err(|err| format!("receive post response failed with {}: ", err))?
+            .to_vec();
+        Ok((resp_body, resp_status))
+    }
+
     pub async fn construction_derive(
         &self,
         pk: PublicKey,
     ) -> Result<Result<ConstructionDeriveResponse, RosettaError>, String> {
         let req = ConstructionDeriveRequest::new(self.network_id(), pk);
-        let resp = self
-            .http_client
-            .send_post_request(
+        to_rosetta_response(
+            self.post_json_request(
                 &format!("http://{}/construction/derive", self.api_url),
-                Some(HttpContentType::JSON),
-                Some(serde_json::to_vec(&req).unwrap()),
-                None,
+                serde_json::to_vec(&req).unwrap(),
             )
-            .await;
-        to_rosetta_response(resp)
+            .await,
+        )
     }
 
     pub async fn construction_preprocess(
@@ -163,16 +183,13 @@ impl RosettaApiHandle {
         ops: Vec<Operation>,
     ) -> Result<Result<ConstructionPreprocessResponse, RosettaError>, String> {
         let req = ConstructionPreprocessRequest::new(self.network_id(), ops);
-        let resp = self
-            .http_client
-            .send_post_request(
+        to_rosetta_response(
+            self.post_json_request(
                 &format!("http://{}/construction/preprocess", self.api_url),
-                Some(HttpContentType::JSON),
-                Some(serde_json::to_vec(&req).unwrap()),
-                None,
+                serde_json::to_vec(&req).unwrap(),
             )
-            .await;
-        to_rosetta_response(resp)
+            .await,
+        )
     }
 
     pub async fn construction_combine(
@@ -185,16 +202,13 @@ impl RosettaApiHandle {
             unsigned_transaction,
             signatures,
         };
-        let resp = self
-            .http_client
-            .send_post_request(
+        to_rosetta_response(
+            self.post_json_request(
                 &format!("http://{}/construction/combine", self.api_url),
-                Some(HttpContentType::JSON),
-                Some(serde_json::to_vec(&req).unwrap()),
-                None,
+                serde_json::to_vec(&req).unwrap(),
             )
-            .await;
-        to_rosetta_response(resp)
+            .await,
+        )
     }
 
     pub async fn construction_hash(
@@ -205,16 +219,13 @@ impl RosettaApiHandle {
             network_identifier: self.network_id(),
             signed_transaction,
         };
-        let resp = self
-            .http_client
-            .send_post_request(
+        to_rosetta_response(
+            self.post_json_request(
                 &format!("http://{}/construction/hash", self.api_url),
-                Some(HttpContentType::JSON),
-                Some(serde_json::to_vec(&req).unwrap()),
-                None,
+                serde_json::to_vec(&req).unwrap(),
             )
-            .await;
-        to_rosetta_response(resp)
+            .await,
+        )
     }
 
     pub async fn construction_metadata(
@@ -227,16 +238,13 @@ impl RosettaApiHandle {
             options,
             public_keys,
         };
-        let resp = self
-            .http_client
-            .send_post_request(
+        to_rosetta_response(
+            self.post_json_request(
                 &format!("http://{}/construction/metadata", self.api_url),
-                Some(HttpContentType::JSON),
-                Some(serde_json::to_vec(&req).unwrap()),
-                None,
+                serde_json::to_vec(&req).unwrap(),
             )
-            .await;
-        to_rosetta_response(resp)
+            .await,
+        )
     }
 
     pub async fn construction_parse(
@@ -249,16 +257,13 @@ impl RosettaApiHandle {
             signed,
             transaction,
         };
-        let resp = self
-            .http_client
-            .send_post_request(
+        to_rosetta_response(
+            self.post_json_request(
                 &format!("http://{}/construction/parse", self.api_url),
-                Some(HttpContentType::JSON),
-                Some(serde_json::to_vec(&req).unwrap()),
-                None,
+                serde_json::to_vec(&req).unwrap(),
             )
-            .await;
-        to_rosetta_response(resp)
+            .await,
+        )
     }
 
     pub async fn construction_payloads(
@@ -283,16 +288,13 @@ impl RosettaApiHandle {
             operations,
             public_keys,
         };
-        let resp = self
-            .http_client
-            .send_post_request(
+        to_rosetta_response(
+            self.post_json_request(
                 &format!("http://{}/construction/payloads", self.api_url),
-                Some(HttpContentType::JSON),
-                Some(serde_json::to_vec(&req).unwrap()),
-                None,
+                serde_json::to_vec(&req).unwrap(),
             )
-            .await;
-        to_rosetta_response(resp)
+            .await,
+        )
     }
 
     pub async fn construction_submit(
@@ -311,46 +313,37 @@ impl RosettaApiHandle {
             signed_transaction: hex::encode(serde_cbor::to_vec(&signed_transaction).unwrap()),
         };
 
-        let resp = self
-            .http_client
-            .send_post_request(
+        to_rosetta_response(
+            self.post_json_request(
                 &format!("http://{}/construction/submit", self.api_url),
-                Some(HttpContentType::JSON),
-                Some(serde_json::to_vec(&req).unwrap()),
-                None,
+                serde_json::to_vec(&req).unwrap(),
             )
-            .await;
-        to_rosetta_response(resp)
+            .await,
+        )
     }
 
     pub async fn network_list(&self) -> Result<Result<NetworkListResponse, RosettaError>, String> {
         let req = MetadataRequest::new();
-        let resp = self
-            .http_client
-            .send_post_request(
+        to_rosetta_response(
+            self.post_json_request(
                 &format!("http://{}/network/list", self.api_url),
-                Some(HttpContentType::JSON),
-                Some(serde_json::to_vec(&req).unwrap()),
-                None,
+                serde_json::to_vec(&req).unwrap(),
             )
-            .await;
-        to_rosetta_response(resp)
+            .await,
+        )
     }
 
     pub async fn network_status(
         &self,
     ) -> Result<Result<NetworkStatusResponse, RosettaError>, String> {
         let req = NetworkRequest::new(self.network_id());
-        let resp = self
-            .http_client
-            .send_post_request(
+        to_rosetta_response(
+            self.post_json_request(
                 &format!("http://{}/network/status", self.api_url),
-                Some(HttpContentType::JSON),
-                Some(serde_json::to_vec(&req).unwrap()),
-                None,
+                serde_json::to_vec(&req).unwrap(),
             )
-            .await;
-        to_rosetta_response(resp)
+            .await,
+        )
     }
 
     pub async fn balance(
@@ -362,17 +355,13 @@ impl RosettaApiHandle {
             ic_rosetta_api::convert::to_model_account_identifier(&acc),
         );
 
-        let resp = self
-            .http_client
-            .send_post_request(
+        to_rosetta_response(
+            self.post_json_request(
                 &format!("http://{}/account/balance", self.api_url),
-                Some(HttpContentType::JSON),
-                Some(serde_json::to_vec(&req).unwrap()),
-                None,
+                serde_json::to_vec(&req).unwrap(),
             )
-            .await;
-
-        to_rosetta_response(resp)
+            .await,
+        )
     }
 
     pub async fn block_at(&self, idx: u64) -> Result<Result<BlockResponse, RosettaError>, String> {
@@ -382,16 +371,13 @@ impl RosettaApiHandle {
         };
         let req = BlockRequest::new(self.network_id(), block_id);
 
-        let resp = self
-            .http_client
-            .send_post_request(
+        to_rosetta_response(
+            self.post_json_request(
                 &format!("http://{}/block", self.api_url),
-                Some(HttpContentType::JSON),
-                Some(serde_json::to_vec(&req).unwrap()),
-                None,
+                serde_json::to_vec(&req).unwrap(),
             )
-            .await;
-        to_rosetta_response(resp)
+            .await,
+        )
     }
 
     pub async fn wait_for_block_at(&self, idx: u64) -> Result<Block, String> {

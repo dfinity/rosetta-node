@@ -4,7 +4,7 @@ use crate::{
     consensus::{
         membership::{Membership, MembershipError},
         metrics::ValidatorMetrics,
-        payload_builder::{PayloadBuilder, PayloadBuilderArc},
+        payload_builder::PayloadBuilder,
         pool_reader::PoolReader,
         prelude::*,
         utils::{
@@ -437,7 +437,7 @@ pub struct Validator {
     membership: Arc<Membership>,
     crypto: Arc<dyn ConsensusCrypto>,
     registry_client: Arc<dyn RegistryClient>,
-    payload_builder: PayloadBuilderArc,
+    payload_builder: Arc<dyn PayloadBuilder>,
     state_manager: Arc<dyn StateManager<State = ReplicatedState>>,
     message_routing: Arc<dyn MessageRouting>,
     dkg_pool: Arc<RwLock<dyn DkgPool>>,
@@ -454,7 +454,7 @@ impl Validator {
         membership: Arc<Membership>,
         registry_client: Arc<dyn RegistryClient>,
         crypto: Arc<dyn ConsensusCrypto>,
-        payload_builder: PayloadBuilderArc,
+        payload_builder: Arc<dyn PayloadBuilder>,
         state_manager: Arc<dyn StateManager<State = ReplicatedState>>,
         message_routing: Arc<dyn MessageRouting>,
         dkg_pool: Arc<RwLock<dyn DkgPool>>,

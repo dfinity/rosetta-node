@@ -1,12 +1,16 @@
+//! Errors that may occur in the context of validating non-interactive DKG
+//! configurations.
 use super::*;
 use std::fmt;
 
 #[cfg(test)]
 mod tests;
 
+/// Occurs if the threshold is zero.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NiDkgThresholdZeroError {}
 
+/// Occurs if a non-interactive DKG configuration is invalid.
 #[derive(Clone, PartialEq, Eq)]
 pub enum NiDkgConfigValidationError {
     ThresholdZero,

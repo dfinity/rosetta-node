@@ -15,15 +15,15 @@ use std::convert::TryFrom;
 use std::fmt;
 use tree_deserializer::{types::Leb128EncodedU64, LabeledTreeDeserializer};
 
-/// Describes an error occurred during parsing and validation of the result of a
-/// "get_certified_changes_since" method call.
+/// Describes an error that occurred during parsing and validation of the result
+/// of a `RegistryCanister::get_certified_changes_since()` method call.
 #[derive(Debug)]
 pub enum CertificateValidationError {
     /// Failed to deserialize some part of the certificate.
     DeserError(String),
-    /// The signature verification failed.
+    /// Signature verification failed.
     InvalidSignature(String),
-    /// The value at path "/canister/<cid>/certified_data" doesn't match the
+    /// The value at path `/canister/<cid>/certified_data` does not match the
     /// hash computed from the mixed hash tree with registry deltas.
     CertifiedDataMismatch {
         certified: Vec<u8>,
@@ -48,17 +48,15 @@ impl fmt::Display for CertificateValidationError {
                 computed,
             } => write!(
                 f,
-                "certified data values doesn't match: certificate value is {}\
-                          tree hash is {}",
+                "certified data values do not match: certificate value is {}, tree hash is {}",
                 hex::encode(&certified[..]),
                 hex::encode(&computed[..])
             ),
 
-            Self::MalformedHashTree(err) => write!(f, "the tree hash in not well-formed: {}", err),
+            Self::MalformedHashTree(err) => write!(f, "hash tree in not well-formed: {}", err),
             Self::SubnetDelegationNotAllowed => write!(
                 f,
-                "expected certificate from the root subnet\
-                                             but found delegations in the certificate"
+                "expected certificate from the root subnet but found delegations in the certificate"
             ),
         }
     }
@@ -102,7 +100,7 @@ pub fn verify_certificate(
     let sig = CombinedThresholdSigOf::new(CombinedThresholdSig(certificate.signature.to_vec()));
     verify_combined(&content, &sig, root_pk).map_err(|err| {
         CertificateValidationError::InvalidSignature(format!(
-            "failed to verify threshold signature: root_hash={:?}, sig={:?}, pk={:?}, error={:?}",
+            "root_hash={:?}, sig={:?}, pk={:?}, error={:?}",
             digest, certificate.signature, root_pk, err
         ))
     })?;

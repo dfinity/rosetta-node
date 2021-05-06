@@ -16,7 +16,7 @@ pub enum StableMemoryError {
     HeapOutOfBounds,
 }
 
-/// An implementation of [stable memory](https://docs.dfinity.systems/spec/public/#system-api-stable-memory)
+/// An implementation of [stable memory](https://sdk.dfinity.org/docs/interface-spec/index.html#system-api-stable-memory)
 ///
 /// Canisters have the ability to store and retrieve data from a secondary
 /// memory. The purpose of this stable memory is to provide space to store data

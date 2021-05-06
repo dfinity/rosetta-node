@@ -7,6 +7,7 @@ use std::convert::TryFrom;
 
 mod conversions;
 
+/// An ICCSA signature encoded as a bytestring
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SignatureBytes(#[serde(with = "serde_bytes")] pub Vec<u8>);
 
@@ -15,6 +16,7 @@ pub struct SignatureBytes(#[serde(with = "serde_bytes")] pub Vec<u8>);
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PublicKeyBytes(#[serde(with = "serde_bytes")] pub Vec<u8>);
 
+/// A decoded ICCSA signature
 #[derive(Deserialize)]
 pub struct Signature {
     pub certificate: Blob,
@@ -30,6 +32,7 @@ pub struct PublicKey {
 }
 
 impl PublicKey {
+    /// Create a new ICCSA PublicKey instance
     pub fn new(signing_canister_id: CanisterId, seed: Vec<u8>) -> Self {
         PublicKey {
             signing_canister_id,
@@ -41,10 +44,12 @@ impl PublicKey {
         self.signing_canister_id
     }
 
+    /// Return a reference to the seed
     pub fn seed(&self) -> &[u8] {
         &self.seed[..]
     }
 
+    /// Return the seed, consuming self
     pub fn into_seed(self) -> Vec<u8> {
         self.seed
     }

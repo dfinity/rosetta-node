@@ -4,8 +4,30 @@ use ic_protobuf::registry::crypto::v1::X509PublicKeyCert;
 use ic_types::crypto::{AlgorithmId, CryptoError, KeyId};
 use ic_types::NodeId;
 
+/// A trait that can be used to generate cryptographic key pairs
 pub trait CspKeyGenerator {
+    /// Generate a public/private key pair.
+    ///
+    /// # Arguments
+    /// * `alg_id` specifies the algorithm to be used
+    /// # Returns
+    /// The key ID and the public key of the keypair
+    /// # Errors
+    /// * `CryptoError::InvalidArgument` if the algorithm is not supported by
+    ///   the trait implementation. (Note: Currently only BLS12-381 and Ed25519
+    ///   are supported by implementations of this trait)
     fn gen_key_pair(&self, alg_id: AlgorithmId) -> Result<(KeyId, CspPublicKey), CryptoError>;
+
+    /// Generate a public/private key pair with proof of possession.
+    ///
+    /// # Arguments
+    /// * `alg_id` specifies the algorithm to be used
+    /// # Returns
+    /// The key ID referring to the secret key, the public key, and the PoP
+    /// # Errors
+    /// * `CryptoError::InvalidArgument` if the algorithm is not supported by
+    ///   the trait implementation. (Note: Currently only BLS12-381 is supported
+    ///   by implementations of this trait)
     fn gen_key_pair_with_pop(
         &self,
         algorithm_id: AlgorithmId,

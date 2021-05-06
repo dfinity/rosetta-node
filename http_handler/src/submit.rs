@@ -93,14 +93,6 @@ pub(crate) fn handle(
 ) -> (Response<Body>, ApiReqType) {
     use ApiReqType::*;
     // Actual parsing.
-
-    if !ingress_sender.can_accept_user_request() {
-        return (
-            common::make_response(StatusCode::SERVICE_UNAVAILABLE, "Service Unavailable!"),
-            Call,
-        );
-    }
-
     let msg: SignedIngress = match SignedRequestBytes::from(body).try_into() {
         Ok(msg) => msg,
         Err(e) => {

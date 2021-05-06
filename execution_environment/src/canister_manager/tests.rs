@@ -237,6 +237,42 @@ fn upgrade_non_existing_canister_fails() {
 }
 
 #[test]
+fn upgrade_canister_with_no_wasm_fails() {
+    with_setup(|canister_manager, mut state, _| {
+        let sender = canister_test_id(1).get();
+        let sender_subnet_id = subnet_test_id(1);
+        let canister_id = canister_manager
+            .create_canister(
+                sender,
+                sender_subnet_id,
+                Funds::new(*INITIAL_CYCLES, ICP::zero()),
+                CanisterSettings::default(),
+                &mut state,
+            )
+            .0
+            .unwrap();
+
+        assert_eq!(
+            canister_manager
+                .install_code(
+                    InstallCodeContextBuilder::default()
+                        .sender(sender)
+                        .mode(CanisterInstallMode::Upgrade)
+                        .build(),
+                    &mut state,
+                    MAX_NUM_INSTRUCTIONS,
+                    MAX_SUBNET_AVAILABLE_MEMORY.clone(),
+                )
+                .1,
+            Err(CanisterManagerError::Hypervisor(
+                canister_id,
+                HypervisorError::WasmModuleNotFound
+            ))
+        );
+    });
+}
+
+#[test]
 fn can_update_compute_allocation_during_upgrade() {
     with_setup(|canister_manager, mut state, _| {
         // Create a new canister.

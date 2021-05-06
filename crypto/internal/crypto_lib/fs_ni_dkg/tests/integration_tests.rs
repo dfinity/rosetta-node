@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Tests for combined forward secure encryption and ZK proofs
 #![allow(clippy::many_single_char_names)]
 
@@ -349,4 +350,4 @@ fn encrypted_chunks_should_validate_01() {
     encrypted_chunks_should_validate(Epoch::from(1))
 }
 
-// TODO (CRP-831): Evil encryptions should not validate.
+// TODO (CRP-831): Add a test that incorrect encryptions do not validate.

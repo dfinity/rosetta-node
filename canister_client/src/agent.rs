@@ -2,12 +2,11 @@
 use crate::{
     cbor::{parse_canister_query_response, parse_read_state_response, RequestStatus},
     http_client::HttpClient,
-    time_source::SystemTimeTimeSource,
 };
 use ed25519_dalek::{Keypair, Signer, KEYPAIR_LENGTH};
 use ic_crypto_sha256::Sha256;
 use ic_crypto_tree_hash::Path;
-use ic_interfaces::{crypto::DOMAIN_IC_REQUEST, time_source::TimeSource};
+use ic_interfaces::crypto::DOMAIN_IC_REQUEST;
 use ic_protobuf::types::v1 as pb;
 use ic_types::{
     consensus::catchup::CatchUpPackageParam,
@@ -19,7 +18,7 @@ use ic_types::{
 };
 use prost::Message;
 use serde_cbor::value::Value as CBOR;
-use std::{error::Error, fmt, sync::Arc, time::Duration};
+use std::{error::Error, fmt, sync::Arc, time::Duration, time::Instant};
 use tokio::time::delay_for;
 use url::Url;
 
@@ -210,9 +209,6 @@ pub struct Agent {
     /// The values that any 'sender' field should have when issuing
     /// calls with the user corresponding to this Agent.
     pub sender_field: Blob,
-
-    /// The source of time. Generally not changed, unless under test
-    pub time_source: Arc<dyn TimeSource>,
 }
 
 impl fmt::Debug for Agent {
@@ -265,7 +261,6 @@ impl Agent {
             http_client,
             sender,
             sender_field,
-            time_source: Arc::new(SystemTimeTimeSource::new()),
         }
     }
 
@@ -287,12 +282,6 @@ impl Agent {
         self
     }
 
-    /// Sets the timesource.
-    pub fn with_timesource(mut self, time_source: Arc<dyn TimeSource>) -> Self {
-        self.time_source = time_source;
-        self
-    }
-
     /// Queries the cup endpoint given the provided CatchUpPackageParams.
     pub async fn query_cup_endpoint(
         &self,
@@ -307,7 +296,7 @@ impl Agent {
                 &self.url,
                 CATCH_UP_PACKAGE_PATH,
                 body,
-                Duration::from_secs(10),
+                tokio::time::Instant::now() + Duration::from_secs(10),
             )
             .await?;
 
@@ -339,7 +328,12 @@ impl Agent {
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
         let bytes = self
             .http_client
-            .post_with_response(&self.url, QUERY_PATH, envelope, self.query_timeout)
+            .post_with_response(
+                &self.url,
+                QUERY_PATH,
+                envelope,
+                tokio::time::Instant::now() + self.query_timeout,
+            )
             .await?;
         let cbor = bytes_to_cbor(bytes)?;
 
@@ -363,25 +357,36 @@ impl Agent {
         arguments: Vec<u8>,
         nonce: Vec<u8>,
     ) -> Result<Option<Vec<u8>>, String> {
-        self.execute_update_impl(canister_id, method, arguments, nonce, self.ingress_timeout)
-            .await
+        self.execute_update_with_deadline(
+            canister_id,
+            method,
+            arguments,
+            nonce,
+            Instant::now() + self.ingress_timeout,
+        )
+        .await
     }
 
     /// Calls the query method 'method' on the canister located at 'url',
     /// optionally with 'arguments'.
-    pub(crate) async fn execute_update_impl<S: ToString>(
+    pub(crate) async fn execute_update_with_deadline<S: ToString>(
         &self,
         canister_id: &CanisterId,
         method: S,
         arguments: Vec<u8>,
         nonce: Vec<u8>,
-        timeout: Duration,
+        deadline: Instant,
     ) -> Result<Option<Vec<u8>>, String> {
         let (http_body, request_id) = self
             .prepare_update(canister_id, method, arguments, nonce)
             .map_err(|err| format!("{}", err))?;
         self.http_client
-            .post(&self.url, UPDATE_PATH, http_body, timeout)
+            .post_with_response(
+                &self.url,
+                UPDATE_PATH,
+                http_body,
+                tokio::time::Instant::from_std(deadline),
+            )
             .await?;
 
         // Exponential backoff from 100ms to 10s with a multiplier of 1.3.
@@ -390,14 +395,12 @@ impl Agent {
         const POLL_INTERVAL_MULTIPLIER: f32 = 1.3;
 
         let mut poll_interval = MIN_POLL_INTERVAL;
-        let mut next_poll_time = self.time_source.get_relative_time() + poll_interval;
-        let deadline = self.time_source.get_relative_time() + timeout;
+        let mut next_poll_time = Instant::now() + poll_interval;
 
         while next_poll_time < deadline {
             delay_for(poll_interval).await;
 
-            let wait_timeout = deadline - next_poll_time;
-            match self.wait_ingress(request_id.clone(), wait_timeout).await {
+            match self.wait_ingress(request_id.clone(), deadline).await {
                 Ok(request_status) => match request_status.status.as_ref() {
                     "replied" => {
                         return Ok(request_status.reply);
@@ -418,11 +421,11 @@ impl Agent {
             poll_interval = poll_interval
                 .mul_f32(POLL_INTERVAL_MULTIPLIER)
                 .min(MAX_POLL_INTERVAL);
-            next_poll_time = self.time_source.get_relative_time() + poll_interval;
+            next_poll_time += poll_interval;
         }
         Err(format!(
-            "Request took longer than {:?} to complete.",
-            timeout
+            "Request took longer than the deadline {:?} to complete.",
+            deadline
         ))
     }
 
@@ -435,7 +438,7 @@ impl Agent {
     async fn request_status_once(
         &self,
         request_id: MessageId,
-        timeout: Duration,
+        deadline: Instant,
     ) -> Result<CBOR, String> {
         let path = Path::new(vec!["request_status".into(), request_id.into()]);
         let status_request_body = self
@@ -444,7 +447,12 @@ impl Agent {
 
         let bytes = self
             .http_client
-            .post_with_response(&self.url, QUERY_PATH, status_request_body, timeout)
+            .post_with_response(
+                &self.url,
+                QUERY_PATH,
+                status_request_body,
+                tokio::time::Instant::from_std(deadline),
+            )
             .await?;
         bytes_to_cbor(bytes)
     }
@@ -456,10 +464,10 @@ impl Agent {
     pub async fn wait_ingress(
         &self,
         request_id: MessageId,
-        timeout: Duration,
+        deadline: Instant,
     ) -> Result<RequestStatus, String> {
         let cbor = self
-            .request_status_once(request_id.clone(), timeout)
+            .request_status_once(request_id.clone(), deadline)
             .await?;
         parse_read_state_response(&request_id, cbor)
     }
@@ -469,7 +477,11 @@ impl Agent {
     pub async fn ic_api_version(&self) -> Result<String, String> {
         let bytes = self
             .http_client
-            .get(&self.url, NODE_STATUS_PATH, self.query_timeout)
+            .get_with_response(
+                &self.url,
+                NODE_STATUS_PATH,
+                tokio::time::Instant::now() + self.query_timeout,
+            )
             .await?;
         let resp = bytes_to_cbor(bytes)?;
         let response = serde_cbor::value::from_value::<HttpStatusResponse>(resp)
@@ -483,7 +495,11 @@ impl Agent {
     pub async fn impl_version(&self) -> Result<Option<String>, String> {
         let bytes = self
             .http_client
-            .get(&self.url, NODE_STATUS_PATH, self.query_timeout)
+            .get_with_response(
+                &self.url,
+                NODE_STATUS_PATH,
+                tokio::time::Instant::now() + self.query_timeout,
+            )
             .await?;
         let resp = bytes_to_cbor(bytes)?;
         let response = serde_cbor::value::from_value::<HttpStatusResponse>(resp)
@@ -496,7 +512,11 @@ impl Agent {
     pub async fn root_key(&self) -> Result<Option<Blob>, String> {
         let bytes = self
             .http_client
-            .get(&self.url, NODE_STATUS_PATH, self.query_timeout)
+            .get_with_response(
+                &self.url,
+                NODE_STATUS_PATH,
+                tokio::time::Instant::now() + self.query_timeout,
+            )
             .await?;
         let resp = bytes_to_cbor(bytes)?;
         let response = serde_cbor::value::from_value::<HttpStatusResponse>(resp)
@@ -601,13 +621,12 @@ fn bytes_to_cbor(bytes: Vec<u8>) -> Result<CBOR, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ic_test_utilities::crypto::temp_crypto_component_with_fake_registry;
     use ic_test_utilities::types::ids::node_test_id;
-    use ic_test_utilities::{
-        crypto::temp_crypto_component_with_fake_registry, FastForwardTimeSource,
-    };
     use ic_types::messages::{HttpCanisterUpdate, HttpRequest, HttpUserQuery, ReadContent};
+    use ic_types::time::current_time;
     use ic_types::{PrincipalId, RegistryVersion, UserId};
-    use ic_validator::validate_request_auth;
+    use ic_validator::get_authorized_canisters;
     use rand_chacha::ChaChaRng;
     use rand_core::SeedableRng;
     use std::convert::TryFrom;
@@ -623,8 +642,8 @@ mod tests {
     /// that `validate_message` manages to authenticate it.
     #[test]
     fn sign_and_verify_submit_content_with_ed25519() {
-        let current_time = FastForwardTimeSource::new().get_relative_time();
-        let expiry_time = current_time + Duration::from_secs(4 * 60);
+        let test_start_time = current_time();
+        let expiry_time = test_start_time + Duration::from_secs(4 * 60);
         // Set up an arbitrary legal input
         let keypair = {
             let mut rng = ChaChaRng::seed_from_u64(789 as u64);
@@ -659,19 +678,22 @@ mod tests {
 
         // The envelope can be successfully authenticated
         let validator = temp_crypto_component_with_fake_registry(node_test_id(VALIDATOR_NODE_ID));
-        assert!(
-            validate_request_auth(&request, &validator, current_time, mock_registry_version())
-                .unwrap()
-                .contains(&request.content().canister_id())
-        );
+        assert!(get_authorized_canisters(
+            &request,
+            &validator,
+            test_start_time,
+            mock_registry_version()
+        )
+        .unwrap()
+        .contains(&request.content().canister_id()));
     }
 
     /// Create an HttpRequest with a non-anonymous user and then verify
     /// that `validate_message` manages to authenticate it.
     #[test]
     fn sign_and_verify_submit_content_with_ecdsa_secp256k1() {
-        let current_time = FastForwardTimeSource::new().get_relative_time();
-        let expiry_time = current_time + Duration::from_secs(4 * 60);
+        let test_start_time = current_time();
+        let expiry_time = test_start_time + Duration::from_secs(4 * 60);
         // Set up an arbitrary legal input
         // Set up an arbitrary legal input
         let (sk, pk) = {
@@ -708,19 +730,22 @@ mod tests {
 
         // The envelope can be successfully authenticated
         let validator = temp_crypto_component_with_fake_registry(node_test_id(VALIDATOR_NODE_ID));
-        assert!(
-            validate_request_auth(&request, &validator, current_time, mock_registry_version())
-                .unwrap()
-                .contains(&request.content().canister_id())
-        );
+        assert!(get_authorized_canisters(
+            &request,
+            &validator,
+            test_start_time,
+            mock_registry_version()
+        )
+        .unwrap()
+        .contains(&request.content().canister_id()));
     }
 
     /// Create an HttpRequest with an explicit anonymous user and then
     /// verify that `validate_message` manages to authenticate it.
     #[test]
     fn sign_and_verify_submit_content_explicit_anonymous() {
-        let current_time = FastForwardTimeSource::new().get_relative_time();
-        let expiry_time = current_time + Duration::from_secs(4 * 60);
+        let test_start_time = current_time();
+        let expiry_time = test_start_time + Duration::from_secs(4 * 60);
 
         // Set up an arbitrary legal input
         let content = HttpSubmitContent::Call {
@@ -745,17 +770,20 @@ mod tests {
 
         // The envelope can be successfully authenticated
         let validator = temp_crypto_component_with_fake_registry(node_test_id(VALIDATOR_NODE_ID));
-        assert!(
-            validate_request_auth(&request, &validator, current_time, mock_registry_version())
-                .unwrap()
-                .contains(&request.content().canister_id())
-        );
+        assert!(get_authorized_canisters(
+            &request,
+            &validator,
+            test_start_time,
+            mock_registry_version()
+        )
+        .unwrap()
+        .contains(&request.content().canister_id()));
     }
 
     #[test]
     fn sign_and_verify_request_status_content_valid_query_with_ed25519() {
-        let current_time = FastForwardTimeSource::new().get_relative_time();
-        let expiry_time = current_time + Duration::from_secs(4 * 60);
+        let test_start_time = current_time();
+        let expiry_time = test_start_time + Duration::from_secs(4 * 60);
 
         // Set up an arbitrary legal input
         let keypair = {
@@ -789,18 +817,18 @@ mod tests {
         // The signature matches
         let read_request = HttpRequest::<ReadContent>::try_from(read).unwrap();
         let validator = temp_crypto_component_with_fake_registry(node_test_id(VALIDATOR_NODE_ID));
-        assert_ok!(validate_request_auth(
+        assert_ok!(get_authorized_canisters(
             &read_request,
             &validator,
-            current_time,
+            test_start_time,
             mock_registry_version()
         ));
     }
 
     #[test]
     fn sign_and_verify_request_status_content_valid_query_with_ecdsa_secp256k1() {
-        let current_time = FastForwardTimeSource::new().get_relative_time();
-        let expiry_time = current_time + Duration::from_secs(4 * 60);
+        let test_start_time = current_time();
+        let expiry_time = test_start_time + Duration::from_secs(4 * 60);
 
         // Set up an arbitrary legal input
         let (sk, pk) = {
@@ -841,10 +869,10 @@ mod tests {
         // The signature matches
         let read_request = HttpRequest::<ReadContent>::try_from(read).unwrap();
         let validator = temp_crypto_component_with_fake_registry(node_test_id(VALIDATOR_NODE_ID));
-        assert_ok!(validate_request_auth(
+        assert_ok!(get_authorized_canisters(
             &read_request,
             &validator,
-            current_time,
+            test_start_time,
             mock_registry_version()
         ));
     }

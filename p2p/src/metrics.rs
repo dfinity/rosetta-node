@@ -1,17 +1,25 @@
 use ic_metrics::{buckets::decimal_buckets, MetricsRegistry};
 use prometheus::{Histogram, HistogramVec, IntCounter, IntGauge};
 
+/// The P2P metrics.
 #[derive(Debug, Clone)]
 pub struct P2PMetrics {
+    /// The run duration.
     pub run_duration: Histogram,
+    /// The advert queue size.
     pub advert_queue_size: IntGauge,
+    /// The chunk queue size.
     pub chunk_queue_size: IntGauge,
+    /// The chunk request queue size.
     pub request_queue_size: IntGauge,
+    /// The ingress message queue size.
     pub user_ingress_queue_size: IntGauge,
+    /// The number of reported sender errors.
     pub sender_errors_reported: IntGauge,
 }
 
 impl P2PMetrics {
+    /// The constructor returns a `P2PMetrics` instance.
     pub fn new(metrics_registry: &MetricsRegistry) -> Self {
         Self {
             run_duration: metrics_registry.histogram(
@@ -22,40 +30,46 @@ impl P2PMetrics {
             ),
             advert_queue_size: metrics_registry.int_gauge(
                 "gossip_advert_queue_size_deprecated",
-                "adverts received by transport and not yet delivered to gossip",
+                "Adverts received by transport and not yet delivered to Gossip",
             ),
             chunk_queue_size: metrics_registry.int_gauge(
                 "gossip_chunk_queue_size_deprecated",
-                "chunks received by transport and not yet delivered to gossip",
+                "Chunks received by transport and not yet delivered to Gossip",
             ),
             request_queue_size: metrics_registry.int_gauge(
                 "gossip_request_queue_size_deprecated",
-                "requests received by transport but not yet delivered to gossip",
+                "Requests received by transport but not yet delivered to Gossip",
             ),
             user_ingress_queue_size: metrics_registry.int_gauge(
                 "gossip_user_ingress_queue_size_deprecated",
-                "user ingress messages received by P2P but not yet delivered to gossip",
+                "User ingress messages received by P2P but not yet delivered to Gossip",
             ),
             sender_errors_reported: metrics_registry.int_gauge(
                 "gossip_sender_errors_reported",
-                "Errors reported by sender and possibly caused a retransmission request",
+                "Errors reported by the sender which possibly caused a retransmission request",
             ),
         }
     }
 }
+
+/// The *Gossip* metrics.
 #[derive(Debug, Clone)]
 pub struct GossipMetrics {
+    /// The time required to execute the given operation in milliseconds.
     pub op_duration: HistogramVec,
+    /// The number of chunk requests not found.
     pub chunk_req_not_found: IntCounter,
+    /// The number of dropped artifacts.
     pub artifacts_dropped: IntCounter,
 }
 
 impl GossipMetrics {
+    /// The constructor returns a `GossipMetrics` instance.
     pub fn new(metrics_registry: &MetricsRegistry) -> Self {
         Self {
             op_duration: metrics_registry.histogram_vec(
                 "p2p_gossip_op_duration",
-                "The time it took to execute the given op, in millseconds",
+                "The time it took to execute the given op, in milliseconds",
                 vec![
                     1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 300.0, 400.0, 500.0, 600.0,
                     700.0, 800.0, 900.0, 1000.0, 1200.0, 1400.0, 1600.0, 1800.0, 2000.0, 2500.0,
@@ -64,7 +78,7 @@ impl GossipMetrics {
                 &["op"],
             ),
             chunk_req_not_found: metrics_registry
-                .int_counter("chunk_req_not_found", "number of chunk request not found"),
+                .int_counter("chunk_req_not_found", "Number of chunk requests not found"),
             artifacts_dropped: metrics_registry.int_counter(
                 "p2p_gossip_artifacts_dropped",
                 "Number of artifacts dropped by Gossip",
@@ -72,66 +86,104 @@ impl GossipMetrics {
         }
     }
 }
+
+/// The download management metrics.
 #[derive(Debug)]
 pub struct DownloadManagementMetrics {
+    /// The times required to execute the given operation in milliseconds.
     pub op_duration: HistogramVec,
-    // artifact
+    // Artifact fields.
+    /// The number of received artifacts.
     pub artifacts_received: IntCounter,
+    /// The number of artifact timeouts.
     pub artifact_timeouts: IntCounter,
+    /// The size of received artifacts.
     pub received_artifact_size: IntGauge,
+    /// The number of failed integrity hash checks.
     pub integrity_hash_check_failed: IntCounter,
 
-    // chunking
+    // Chunking fields.
+    /// The number of requested chunks.
     pub chunks_requested: IntCounter,
+    /// The number of failures to send chunk requests.
     pub chunk_request_send_failed: IntCounter,
+    /// The number of sent chunks.
     pub chunks_sent: IntCounter,
+    /// The number of failures to send chunks.
     pub chunk_send_failed: IntCounter,
+    /// The number of received chunks.
     pub chunks_received: IntCounter,
-    pub chunks_timedout: IntCounter,
+    /// The number of timed-out chunks.
+    pub chunks_timed_out: IntCounter,
+    /// The chunk delivery times.
     pub chunk_delivery_time: HistogramVec,
+    /// The number of failures to download chunks.
     pub chunks_download_failed: IntCounter,
+    /// The number of chunks not served from this peer.
     pub chunks_not_served_from_peer: IntCounter,
+    /// The number of download retry attempts.
     pub chunks_download_retry_attempts: IntCounter,
-    pub chunks_unsolicited_or_timedout: IntCounter,
+    /// The number of unsolicited or timed-out chunks.
+    pub chunks_unsolicited_or_timed_out: IntCounter,
+    /// The number of chunks that were downloaded after the artifact was marked
+    /// as complete.
     pub chunks_redundant_residue: IntCounter,
+    /// The number of failures to verify a chunk.
     pub chunks_verification_failed: IntCounter,
 
-    // advert
+    // Advert fields.
+    /// The number of sent adverts.
     pub adverts_sent: IntCounter,
+    /// The number of failures to send adverts.
     pub adverts_send_failed: IntCounter,
+    /// The number of received adverts.
     pub adverts_received: IntCounter,
+    /// The number of dropped adverts.
     pub adverts_dropped: IntCounter,
 
-    // retransmission
+    // Retransmission fields.
+    /// The number of sent retransmission requests.
     pub retransmission_requests_sent: IntCounter,
+    /// The number of failures to send retransmission requests.
     pub retransmission_request_send_failed: IntCounter,
+    /// The retransmission request times.
     pub retransmission_request_time: Histogram,
 
-    // connection
+    // Connection fields.
+    /// The number of a connection events.
     pub connection_up_events: IntCounter,
+    /// The number of a disconnections events.
     pub connection_down_events: IntCounter,
 
-    // download next stats
+    // Download next stats.
+    /// The time spent in the `download_next()` function.
     pub download_next_time: IntGauge,
+    /// The total number of entries returned by `get_peer_priority_queues()`.
     pub download_next_total_entries: IntGauge,
+    /// The number of entries checked in the `download_next()` function.
     pub download_next_visited: IntGauge,
+    /// The number of entries selected for download by the `download_next()`
+    /// function.
     pub download_next_selected: IntGauge,
+    /// The number of calls to the `download_next()` function.
     pub download_next_calls: IntCounter,
+    /// The number of sent retransmission requests.
     pub download_next_retrans_requests_sent: IntCounter,
 }
 
 impl DownloadManagementMetrics {
+    /// The constructor returns a `DownloadManagementMetrics` instance.
     pub fn new(metrics_registry: &MetricsRegistry) -> Self {
         Self {
             op_duration: metrics_registry.histogram_vec(
                 "p2p_peermgmt_op_duration",
-                "The time it took to execute the given op, in seconds",
+                "The time it took to execute the given op, in milliseconds",
                 // 0.1ms, 0.2ms, 0.5ms, 1ms, 2ms, 5ms, 10ms, 20ms, 50ms, 100ms, 200ms, 500ms
                 decimal_buckets(-4, -1),
                 &["op"],
             ),
 
-            // artifact
+            // Artifact fields.
             artifacts_received: metrics_registry
                 .int_counter("gossip_artifacts_received", "number of artifact received"),
             artifact_timeouts: metrics_registry
@@ -143,20 +195,20 @@ impl DownloadManagementMetrics {
                 "Number of times the integrity check failed for artifacts",
             ),
 
-            // Chunks
+            // Chunking fields.
             chunks_requested: metrics_registry.int_counter(
                 "gossip_chunks_requested",
-                "number of chunks that were requested",
+                "Number of chunks that were requested",
             ),
             chunk_request_send_failed: metrics_registry.int_counter(
                 "chunk_request_send_failed",
                 "Number of chunk request send failures",
             ),
             chunks_received: metrics_registry
-                .int_counter("gossip_chunks_received", "number of chunks received"),
+                .int_counter("gossip_chunks_received", "Number of chunks received"),
             chunk_delivery_time: metrics_registry.histogram_vec(
                 "gossip_chunk_delivery_time",
-                "time it took to deliver a chunk after it has been requested (in milliseconds)",
+                "Time it took to deliver a chunk after it has been requested (in milliseconds)",
                 vec![
                     1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 300.0, 400.0, 500.0, 600.0,
                     700.0, 800.0, 900.0, 1000.0, 1200.0, 1400.0, 1600.0, 1800.0, 2000.0, 2500.0,
@@ -165,18 +217,18 @@ impl DownloadManagementMetrics {
                 &["artifact_type"],
             ),
             chunks_sent: metrics_registry
-                .int_counter("gossip_chunks_sent", "number of chunks sent"),
+                .int_counter("gossip_chunks_sent", "Number of chunks sent"),
             chunk_send_failed: metrics_registry
-                .int_counter("chunkd_send_failed", "Number of chunk send faiures"),
-            chunks_timedout: metrics_registry
-                .int_counter("gossip_chunks_timedout", "timedout chunks"),
+                .int_counter("chunkd_send_failed", "Number of chunk send failures"),
+            chunks_timed_out: metrics_registry
+                .int_counter("gossip_chunks_timedout", "Timed-out chunks"),
             connection_up_events: metrics_registry.int_counter(
                 "gossip_connection_up_event",
-                "number of connection up events received",
+                "Number of connection up events received",
             ),
             connection_down_events: metrics_registry.int_counter(
                 "gossip_connection_down_event",
-                "number of connection down events received",
+                "Number of connection down events received",
             ),
             chunks_download_failed: metrics_registry.int_counter(
                 "gossip_chunks_download_failed",
@@ -190,36 +242,36 @@ impl DownloadManagementMetrics {
                 "gossip_chunks_download_retried",
                 "Number for times chunk downloads were retried",
             ),
-            chunks_unsolicited_or_timedout: metrics_registry.int_counter(
+            chunks_unsolicited_or_timed_out: metrics_registry.int_counter(
                 "gossip_chunks_num_unsolicited",
-                "Number for unsolicited chunks recieved",
+                "Number for unsolicited chunks received",
             ),
             chunks_redundant_residue: metrics_registry.int_counter(
                 "gossip_chunks_redundant_residue",
-                "number of chunks that were downloaded after the artifact was marked complete",
+                "Number of chunks that were downloaded after the artifact was marked complete",
             ),
             chunks_verification_failed: metrics_registry.int_counter(
                 "gossip_chunk_verification_failed",
-                "number of chunks that failed verification",
+                "Number of chunks that failed verification",
             ),
 
-            // adverts
+            // Adverts fields.
             adverts_sent: metrics_registry.int_counter(
                 "gossip_adverts_sent",
-                "number of artifact advertisements sent",
+                "Number of artifact advertisements sent",
             ),
             adverts_send_failed: metrics_registry
-                .int_counter("adverts_send_failed", "number of advert send failures"),
+                .int_counter("adverts_send_failed", "Number of advert send failures"),
             adverts_received: metrics_registry.int_counter(
                 "gossip_adverts_received",
-                "number of adverts received from all peers",
+                "Number of adverts received from all peers",
             ),
             adverts_dropped: metrics_registry.int_counter(
                 "gossip_adverts_ignored",
                 "Number of adverts that were dropped",
             ),
 
-            // retransmission
+            // Retransmission fields.
             retransmission_requests_sent: metrics_registry.int_counter(
                 "retransmission_requests_sent",
                 "Number of retransmission requests successfully sent",
@@ -238,7 +290,7 @@ impl DownloadManagementMetrics {
                 ],
             ),
 
-            // download next stats
+            // Download next stats.
             download_next_time: metrics_registry
                 .int_gauge("download_next_time", "Time spent in download_next()"),
             download_next_total_entries: metrics_registry.int_gauge(
@@ -257,35 +309,42 @@ impl DownloadManagementMetrics {
                 .int_counter("download_next_calls", "Num calls to download_next()"),
             download_next_retrans_requests_sent: metrics_registry.int_counter(
                 "download_next_retrans_requests_sent",
-                "Num of retrans requests sent",
+                "Number of retransmission requests sent",
             ),
         }
     }
 }
 
+/// The download prioritizer metrics.
 pub struct DownloadPrioritizerMetrics {
+    /// The number of adverts deleted from this peer.
     pub adverts_deleted_from_peer: IntCounter,
+    /// THe number of dropped adverts.
     pub priority_adverts_dropped: IntCounter,
+    /// The number of updates to the priority function.
     pub priority_fn_updates: IntCounter,
+    /// The times required to update the priorities using the priority
+    /// functions.
     pub priority_fn_timer: Histogram,
 }
 
 impl DownloadPrioritizerMetrics {
+    /// The constructor returns a `DownloadPrioritizerMetrics` instance.
     pub fn new(metrics_registry: &MetricsRegistry) -> Self {
         Self {
             adverts_deleted_from_peer: metrics_registry.int_counter(
                 "priority_adverts_deleted",
-                "number of adverts deleted from peer",
+                "Number of adverts deleted from peer",
             ),
             priority_adverts_dropped: metrics_registry
-                .int_counter("priority_adverts_dropped", "number of adverts dropped"),
+                .int_counter("priority_adverts_dropped", "Number of adverts dropped"),
             priority_fn_updates: metrics_registry.int_counter(
                 "priority_fn_updates",
-                "number of times priority function was updated",
+                "Number of times priority function was updated",
             ),
             priority_fn_timer: metrics_registry.histogram(
                 "priority_fn_time",
-                "The time it took to update priorities with priority fns, in seconds",
+                "The time it took to update priorities with priority functions, in seconds",
                 // 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0
                 decimal_buckets(-1, 1),
             ),
@@ -293,33 +352,40 @@ impl DownloadPrioritizerMetrics {
     }
 }
 
+/// The event handler metrics.
 pub struct EventHandlerMetrics {
-    pub send_message_duration_msec: HistogramVec,
+    /// The times required for send message calls.
+    pub send_message_duration_ms: HistogramVec,
+    /// The number of times advert delivery was blocked.
     pub adverts_blocked: IntCounter,
+    /// The number of times the delivery of chunk requests was blocked.
     pub requests_blocked: IntCounter,
+    /// The number of times chunk delivery was blocked.
     pub chunks_blocked: IntCounter,
+    /// The number of times retransmission delivery was blocked.
     pub retransmissions_blocked: IntCounter,
 }
 
 impl EventHandlerMetrics {
+    /// The constructor returns an `EventHandlerMetrics` instance.
     pub fn new(metrics_registry: &MetricsRegistry) -> Self {
         Self {
-            send_message_duration_msec: metrics_registry.histogram_vec(
+            send_message_duration_ms: metrics_registry.histogram_vec(
                 "send_message_duration_msec",
-                "Time taken by event handler send message call, in milliseconds",
+                "Time taken by event handler for send message call, in milliseconds",
                 // 1ms, 2ms, 5ms - 100 sec, 200 sec, 500 sec
                 decimal_buckets(0, 5),
                 &["msg_type"],
             ),
             adverts_blocked: metrics_registry
-                .int_counter("adverts_blocked", "number of times advert delivery blocked"),
+                .int_counter("adverts_blocked", "Number of times advert delivery blocked"),
             chunks_blocked: metrics_registry
-                .int_counter("chunks_blocked", "number of times chunks delivery blocked"),
+                .int_counter("chunks_blocked", "Number of times chunks delivery blocked"),
             requests_blocked: metrics_registry
-                .int_counter("requests_blocked", "number of requests delivery blocked"),
+                .int_counter("requests_blocked", "Number of requests delivery blocked"),
             retransmissions_blocked: metrics_registry.int_counter(
                 "retransmissions_blocked",
-                "number of times retransmissions delivery blocked",
+                "Number of times retransmissions delivery blocked",
             ),
         }
     }

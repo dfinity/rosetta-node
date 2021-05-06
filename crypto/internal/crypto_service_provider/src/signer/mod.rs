@@ -14,9 +14,6 @@ use rand::{CryptoRng, Rng};
 #[cfg(test)]
 mod tests;
 
-#[cfg(test)]
-mod ecdsa_wycheproof_tests;
-
 impl<R: Rng + CryptoRng, S: SecretKeyStore> CspSigner for Csp<R, S> {
     fn sign(
         &self,

@@ -1,7 +1,8 @@
 //! Tests for multisignatures
 
 use crate::{
-    crypto as multi_crypto, test_utils as multi_test_utils, types as multi_types, types::arbitrary,
+    api, crypto as multi_crypto, test_utils as multi_test_utils, types as multi_types,
+    types::arbitrary,
 };
 use group::CurveProjective;
 use ic_crypto_internal_bls12381_common as bls;
@@ -108,6 +109,8 @@ mod basic_functionality {
 
 mod advanced_functionality {
     use super::*;
+    use crate::types::{PopBytes, PublicKeyBytes};
+    use ic_crypto_internal_types::curves::bls12_381::G2;
     use proptest::prelude::*;
 
     #[test]
@@ -137,6 +140,61 @@ mod advanced_functionality {
         let (secret_key, public_key) = multi_crypto::keypair_from_seed([1, 2, 3, 4]);
         let pop = multi_crypto::create_pop(public_key, secret_key);
         assert!(multi_crypto::verify_pop(pop, public_key));
+    }
+
+    #[test]
+    fn verify_pop_throws_error_on_public_key_bytes_with_unset_compressed_flag() {
+        let (secret_key, public_key) = multi_crypto::keypair_from_seed([1, 2, 3, 4]);
+        let pop = multi_crypto::create_pop(public_key, secret_key);
+        let pop_bytes = PopBytes::from(pop);
+        let mut public_key_bytes = PublicKeyBytes::from(public_key);
+        public_key_bytes.0[G2::FLAG_BYTE_OFFSET] &= !G2::COMPRESSED_FLAG;
+        match api::verify_pop(pop_bytes, public_key_bytes) {
+            Err(e) => assert!(e
+                .to_string()
+                .contains("encoding has unexpected compression mode")),
+            Ok(_) => panic!("error should have been thrown"),
+        }
+    }
+
+    #[test]
+    fn verify_pop_throws_error_on_public_key_bytes_not_on_curve() {
+        let (secret_key, public_key) = multi_crypto::keypair_from_seed([1, 2, 3, 4]);
+        let pop = multi_crypto::create_pop(public_key, secret_key);
+        let pop_bytes = PopBytes::from(pop);
+        let mut public_key_bytes = PublicKeyBytes::from(public_key);
+        // Zero out the bytes, set the compression flag.
+        // This represents x = 0, which happens to have no solution
+        // on the G2 curve.
+        for i in 0..G2::SIZE {
+            public_key_bytes.0[i] = 0;
+        }
+        public_key_bytes.0[G2::FLAG_BYTE_OFFSET] |= G2::COMPRESSED_FLAG;
+        match api::verify_pop(pop_bytes, public_key_bytes) {
+            Err(e) => assert!(e
+                .to_string()
+                .contains("coordinate(s) do not lie on the curve")),
+            Ok(_) => panic!("error should have been thrown"),
+        }
+    }
+
+    #[test]
+    fn verify_pop_throws_error_on_public_key_bytes_not_in_subgroup() {
+        let (secret_key, public_key) = multi_crypto::keypair_from_seed([1, 2, 3, 4]);
+        let pop = multi_crypto::create_pop(public_key, secret_key);
+        let pop_bytes = PopBytes::from(pop);
+        let mut public_key_bytes = PublicKeyBytes::from(public_key);
+        // By manual rejection sampling, we found an x-coordinate with a
+        // solution, which is unlikely to have order r.
+        for i in 0..G2::SIZE {
+            public_key_bytes.0[i] = 0;
+        }
+        public_key_bytes.0[G2::FLAG_BYTE_OFFSET] |= G2::COMPRESSED_FLAG;
+        public_key_bytes.0[5] = 3;
+        match api::verify_pop(pop_bytes, public_key_bytes) {
+            Err(e) => assert!(e.to_string().contains("not part of an r-order subgroup")),
+            Ok(_) => panic!("error should have been thrown"),
+        }
     }
 
     #[test]

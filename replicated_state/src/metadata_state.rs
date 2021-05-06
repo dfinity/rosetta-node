@@ -167,7 +167,7 @@ impl TryFrom<pb_metadata::NetworkTopology> for NetworkTopology {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubnetTopology {
     /// The public key of the subnet (a DER-encoded BLS key, see
-    /// https://docs.dfinity.systems/public/v/master/#certification)
+    /// https://sdk.dfinity.org/docs/interface-spec/index.html#certification)
     pub public_key: Vec<u8>,
     pub nodes: BTreeMap<NodeId, NodeTopology>,
     pub subnet_type: SubnetType,
@@ -345,6 +345,9 @@ impl SystemMetadata {
         self.batch_time
     }
 
+    /// Returns the difference in time between blocks. If the time of the
+    /// previous block is `UNIX_EPOCH`, then this must be the first block being
+    /// handled and hence `Duration::from_secs(0)` is returned.
     pub fn duration_between_batches(&self, time_of_previous_batch: Time) -> Duration {
         assert!(
             self.batch_time >= time_of_previous_batch,

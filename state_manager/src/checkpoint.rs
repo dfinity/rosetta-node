@@ -95,7 +95,7 @@ pub fn make_checkpoint(
                     .canister_metrics
                     .interruped_during_execution,
                 certified_data: canister_state.system_state.certified_data.clone(),
-                // TODO Refactoring the cycles account. See exc-173.
+                // TODO(EXC-173): Refactoring the cycles account.
                 // Use metric from canister_state.
                 consumed_cycles_since_replica_started: canister_state
                     .system_state
@@ -230,7 +230,7 @@ pub fn load_checkpoint<P: ReadPolicy>(
             },
         };
 
-        // TODO: Refactoring the cycles account. See exc-173.
+        // TODO(EXC-173): Refactoring the cycles account.
         // Assign used here because we do not want to checkpoint this field
         // with CyclesAccount since it belongs to CanisterState after the refactor.
         // Should be removed one business logic is moved out of CyclesAccount.
@@ -351,7 +351,7 @@ mod tests {
     };
     use ic_sys::PAGE_SIZE;
     use ic_test_utilities::{
-        state::canister_ids,
+        state::{canister_ids, new_canister_state},
         types::{
             ids::{canister_test_id, message_test_id, subnet_test_id, user_test_id},
             messages::IngressBuilder,
@@ -411,7 +411,7 @@ mod tests {
                 SubnetType::Application,
                 "NOT_USED".into(),
             );
-            state.put_canister_state(CanisterState::new(
+            state.put_canister_state(new_canister_state(
                 canister_id,
                 user_test_id(24).get(),
                 INITIAL_CYCLES,
@@ -469,7 +469,7 @@ mod tests {
                 SubnetType::Application,
                 "NOT_USED".into(),
             );
-            state.put_canister_state(CanisterState::new(
+            state.put_canister_state(new_canister_state(
                 canister_id,
                 user_test_id(24).get(),
                 INITIAL_CYCLES,
@@ -508,7 +508,7 @@ mod tests {
             let wasm = empty_wasm();
             let page_map = one_page_of(1);
 
-            let mut canister_state = CanisterState::new(
+            let mut canister_state = new_canister_state(
                 canister_id,
                 user_test_id(24).get(),
                 INITIAL_CYCLES,
@@ -639,7 +639,7 @@ mod tests {
                 own_subnet_type,
                 "NOT_USED".into(),
             );
-            state.put_canister_state(CanisterState::new(
+            state.put_canister_state(new_canister_state(
                 canister_id,
                 user_test_id(24).get(),
                 INITIAL_CYCLES,

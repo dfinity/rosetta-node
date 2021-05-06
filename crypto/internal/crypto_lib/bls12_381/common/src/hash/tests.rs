@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Tests for bls operations
 use super::super::{fr_to_bytes, g1_to_bytes};
 use super::*;

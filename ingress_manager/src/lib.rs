@@ -1,3 +1,7 @@
+#![deny(missing_docs)]
+//! The ingress manager crate implements the selection and validation of
+//! ingresses on the internet computer block chain.
+
 mod ingress_handler;
 mod ingress_selector;
 
@@ -19,6 +23,7 @@ use ic_types::{
 use prometheus::Histogram;
 use std::sync::{Arc, RwLock};
 
+/// Keeps the metrics to be exported by the IngressManager
 struct IngressManagerMetrics {
     ingress_handler_time: Histogram,
     ingress_selector_get_payload_time: Histogram,
@@ -47,6 +52,9 @@ impl IngressManagerMetrics {
     }
 }
 
+/// This struct is responsible for ingresses. It validates, invalidates,
+/// advertizes, purges ingresses, and selects the ingresses to be included in
+/// the blocks.
 pub struct IngressManager {
     consensus_pool_cache: Arc<dyn ConsensusPoolCache>,
     ingress_hist_reader: Box<dyn IngressHistoryReader>,
@@ -65,6 +73,7 @@ pub struct IngressManager {
 
 impl IngressManager {
     #[allow(clippy::too_many_arguments)]
+    /// Constructs an IngressManager
     pub fn new(
         consensus_pool_cache: Arc<dyn ConsensusPoolCache>,
         ingress_hist_reader: Box<dyn IngressHistoryReader>,

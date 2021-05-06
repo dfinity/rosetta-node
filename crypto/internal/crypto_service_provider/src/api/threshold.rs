@@ -146,8 +146,6 @@ pub trait ThresholdSignatureCspClient {
 
 /// Crypto service provider (CSP) client for distributed key generation
 ///
-/// [Specification](https://docs.dfinity.systems/dfinity/spec/replica/ancillary/crypto/index.html#_csp_interface_for_distributed_key_generation)
-///
 /// # Distributed Key Generation
 /// ## Motivation
 /// With a standard threshold signature scheme, one entity generates all the
@@ -695,8 +693,6 @@ pub trait NiDkgCspClient {
 
     /// Generates keys for each eligible receiver.
     ///
-    /// # Preconditions
-    /// None in this insecure version of the API.
     /// # Arguments
     /// * `algorithm_id` selects the algorithm suite to use for the scheme.
     /// * `dkg_id` is the identifier for the distributed key being generated.

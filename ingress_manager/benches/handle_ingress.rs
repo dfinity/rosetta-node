@@ -10,7 +10,7 @@
 //!   IngressHistoryReader.
 //! - The changeset is also realistically applied.
 //!
-//! We vary the rate of unvalidated ingress coming into the unvalidated
+//! We vary the rate of unvalidated ingress coming into the unvalidated pool
 //! between 100/s and 1000/s, and each message has a 100 bytes payload.
 
 use criterion::{criterion_group, criterion_main, Criterion};

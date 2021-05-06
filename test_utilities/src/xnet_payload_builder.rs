@@ -22,7 +22,6 @@ impl FakeXNetPayloadBuilder {
     }
 }
 
-// TODO:  Remove this struct and use mockall in its place.
 impl XNetPayloadBuilder for FakeXNetPayloadBuilder {
     fn get_xnet_payload(
         &self,
@@ -36,7 +35,6 @@ impl XNetPayloadBuilder for FakeXNetPayloadBuilder {
         })
     }
 
-    // TODO: Implement validation for _payload.
     fn validate_xnet_payload(
         &self,
         _payload: &XNetPayload,

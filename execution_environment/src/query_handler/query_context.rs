@@ -399,7 +399,6 @@ impl<'a> QueryContext<'a> {
             .unwrap();
         let call_context_id = callback.call_context_id;
 
-        // XXX.
         // We do not support inter canister queries between subnets so
         // we can use nominal values for these fields to satisfy the
         // constraints.
@@ -412,7 +411,7 @@ impl<'a> QueryContext<'a> {
             .write()
             .unwrap()
             .allocation_before_execution(&canister);
-        let (canister, cycles_left, execution_result) = self
+        let (canister, cycles_left, _heap_delta, execution_result) = self
             .hypervisor
             .execute_callback(
                 canister,
@@ -435,7 +434,6 @@ impl<'a> QueryContext<'a> {
                 &canister,
                 allocation_before - QueryAllocation::from(cycles_left),
             );
-        let execution_result = execution_result.map(|(result, _heap_delta)| result);
         (canister, call_context_id, call_origin, execution_result)
     }
 

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use crate::keygen::tls_cert_hash_as_key_id;
 use crate::secret_key_store::test_utils::TempSecretKeyStore;
 use crate::secret_key_store::SecretKeyStore;

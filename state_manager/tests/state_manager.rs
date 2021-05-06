@@ -1405,11 +1405,6 @@ proptest! {
         );
     }
 
-    // TODO CRP-461: This should actually always panic with InvalidSignature, but given that
-    // crypto currently verifies whether the labels in the witness match instead of simply
-    // trying to recompute the witness if the shape matches it panics with inconsistent
-    // partial tree in case the message queue is not empty. Once this is fixed, add the
-    // precise expected panic here.
     #[test]
     #[should_panic]
     fn stream_store_decode_slice_modify_message_begin(stream in arb_stream(0, 10)) {

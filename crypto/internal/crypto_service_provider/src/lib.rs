@@ -1,3 +1,6 @@
+#![forbid(unsafe_code)]
+#![deny(clippy::unwrap_used)]
+
 pub mod api;
 pub mod crypto_lib;
 pub mod imported_test_utils;

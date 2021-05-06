@@ -1,16 +1,23 @@
 use dfn_candid::{candid_one, CandidOne};
 use dfn_core::{
-    api::{self, arg_data, call_with_callbacks},
-    api::{caller, data_certificate, set_certified_data},
-    over, over_init, printer, setup, stable, BytesS,
+    api::{
+        call_bytes_with_cleanup, call_with_cleanup, caller, data_certificate, set_certified_data,
+        Funds,
+    },
+    endpoint::over_async_may_reject_explicit,
+    over, over_async, over_init, printer, setup, stable, BytesS,
 };
 use dfn_protobuf::{protobuf, ProtoBuf};
 use ic_types::CanisterId;
 use ledger_canister::*;
-use on_wire::{FromWire, IntoWire, NewType};
+use on_wire::IntoWire;
 use std::time::Duration;
 
-use std::collections::{HashMap, VecDeque};
+use archive::FailedToArchiveBlocks;
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    sync::{Arc, RwLock},
+};
 
 // Helper to print messages in magenta
 fn print<S: std::convert::AsRef<str>>(s: S)
@@ -38,7 +45,8 @@ fn init(
     initial_values: HashMap<AccountIdentifier, ICPTs>,
     max_message_size_bytes: Option<usize>,
     transaction_window: Option<Duration>,
-    archive_options: Option<ArchiveOptions>,
+    archive_options: Option<archive::ArchiveOptions>,
+    send_whitelist: HashSet<CanisterId>,
 ) {
     print(format!(
         "[ledger] init(): minting account is {}",
@@ -49,6 +57,7 @@ fn init(
         minting_account,
         dfn_core::api::now().into(),
         transaction_window,
+        send_whitelist,
     );
     match max_message_size_bytes {
         None => {
@@ -76,7 +85,8 @@ fn init(
     );
 
     if let Some(archive_options) = archive_options {
-        LEDGER.write().unwrap().blockchain.archive = Some(archive::Archive::new(archive_options))
+        LEDGER.write().unwrap().blockchain.archive =
+            Arc::new(RwLock::new(Some(archive::Archive::new(archive_options))))
     }
 }
 
@@ -102,8 +112,8 @@ fn add_payment(
 ///   withdrawn is equal to the amount + the fee
 /// * `fee` - The maximum fee that the sender is willing to pay. If the required
 ///   fee is greater than this the transaction will be rejected otherwise the
-///   required fee will be paid. TODO automatically pay a lower fee if possible
-///   [ROSETTA1-45]
+///   required fee will be paid. TODO(ROSETTA1-45): automatically pay a lower
+///   fee if possible
 /// * `from_subaccount` - The subaccount you want to draw funds from
 /// * `to` - The account you want to send the funds to
 /// * `to_subaccount` - The subaccount you want to send funds to
@@ -115,8 +125,16 @@ async fn send(
     to: AccountIdentifier,
     created_at_time: Option<TimeStamp>,
 ) -> BlockHeight {
-    let from = AccountIdentifier::new(caller(), from_subaccount);
+    let caller_principal_id = caller();
 
+    if !LEDGER.read().unwrap().can_send(&caller_principal_id) {
+        panic!(
+            "Sending from non-self-authenticating principal or non-whitelisted canister is not allowed: {}",
+            caller_principal_id
+        );
+    }
+
+    let from = AccountIdentifier::new(caller_principal_id, from_subaccount);
     let minting_acc = LEDGER
         .read()
         .unwrap()
@@ -151,7 +169,7 @@ async fn send(
     // Don't put anything that could ever trap after this call or people using this
     // endpoint. If something did panic the payment would appear to fail, but would
     // actually succeed on chain.
-    archive_blocks(2000, 1000).await;
+    archive_blocks().await;
     height
 }
 
@@ -167,27 +185,55 @@ async fn send(
 ///   notification about
 /// * `to_canister` - The canister that received the payment
 /// * `to_subaccount` - The subaccount that received the payment
-pub fn notify(
+pub async fn notify(
     block_height: BlockHeight,
     max_fee: ICPTs,
     from_subaccount: Option<Subaccount>,
     to_canister: CanisterId,
     to_subaccount: Option<Subaccount>,
     notify_using_protobuf: bool,
-) {
-    let caller_principal = caller();
+) -> Result<BytesS, String> {
+    let caller_principal_id = caller();
 
-    let expected_from = AccountIdentifier::new(caller_principal, from_subaccount);
+    if !LEDGER.read().unwrap().can_send(&caller_principal_id) {
+        panic!(
+            "Notifying from non-self-authenticating principal or non-whitelisted canister is not allowed: {}",
+            caller_principal_id
+        );
+    }
+
+    let expected_from = AccountIdentifier::new(caller_principal_id, from_subaccount);
 
     let expected_to = AccountIdentifier::new(to_canister.get(), to_subaccount);
 
-    let raw_block = LEDGER
-        .read()
-        .unwrap()
-        .blockchain
-        .get(block_height)
-        .unwrap_or_else(|| panic!("Failed to find a block at height {}", block_height))
-        .clone();
+    let transfer = Transfer::Send {
+        from: expected_from,
+        to: expected_to,
+        amount: ICPTs::ZERO,
+        fee: max_fee,
+    };
+
+    // While this payment has been made here, it isn't actually committed until you
+    // make an inter canister call. As such we don't reject without rollback until
+    // an inter-canister call has definitely been made
+    add_payment(Memo(block_height), transfer, None);
+
+    let raw_block: EncodedBlock =
+        match block(block_height).unwrap_or_else(|| panic!("Block {} not found", block_height)) {
+            Ok(raw_block) => raw_block,
+            Err(cid) => {
+                print(format!(
+                    "Searching canister {} for block {}",
+                    cid, block_height
+                ));
+                // Lookup the block on the archive
+                let BlockRes(res) = call_with_cleanup(cid, "get_block_pb", protobuf, block_height)
+                    .await
+                    .map_err(|e| format!("Failed to fetch block {}", e.1))?;
+                res.ok_or("Block not found")?
+                    .map_err(|c| format!("Tried to redirect lookup a second time to {}", c))?
+            }
+        };
 
     let block = raw_block.decode().unwrap();
 
@@ -205,7 +251,7 @@ pub fn notify(
     );
 
     let transaction_notification_args = TransactionNotification {
-        from: caller_principal,
+        from: caller_principal_id,
         from_subaccount,
         to: to_canister,
         to_subaccount,
@@ -214,61 +260,64 @@ pub fn notify(
         memo: block.transaction().memo,
     };
 
-    let bytes = if notify_using_protobuf {
-        ProtoBuf(transaction_notification_args)
-            .into_bytes()
-            .expect("transaction notification serialization failed")
-    } else {
-        candid::encode_one(transaction_notification_args)
-            .expect("transaction notification serialization failed")
-    };
-
-    // propagate the response from 'to_canister' on success
-    let on_reply = if notify_using_protobuf {
-        || {
-            let reply: TransactionNotificationResult =
-                ProtoBuf::from_bytes(arg_data()).unwrap().into_inner();
-            reply.check_size().unwrap();
-            api::reply(&ProtoBuf(reply).into_bytes().unwrap());
-        }
-    } else {
-        || {
-            let reply: TransactionNotificationResult =
-                CandidOne::from_bytes(arg_data()).unwrap().into_inner();
-            reply.check_size().unwrap();
-            api::reply(&CandidOne(reply).into_bytes().unwrap());
-        }
-    };
-    let on_reject = move || {
-        // discards error which is better than a panic in a callback
-        let _ = change_notification_state(block_height, false);
-        api::reject(&format!(
-            "Notification failed with message '{}'",
-            api::reject_message()
-        ));
-    };
-
     change_notification_state(block_height, true)
         .expect("There is already an outstanding notification");
 
-    let transfer = Transfer::Send {
-        from,
-        to,
-        amount: ICPTs::ZERO,
-        fee: max_fee,
+    let response = if notify_using_protobuf {
+        let bytes = ProtoBuf(transaction_notification_args)
+            .into_bytes()
+            .expect("transaction notification serialization failed");
+        call_bytes_with_cleanup(
+            to_canister,
+            "transaction_notification_pb",
+            &bytes[..],
+            Funds::zero(),
+        )
+        .await
+    } else {
+        let bytes = candid::encode_one(transaction_notification_args)
+            .expect("transaction notification serialization failed");
+        call_bytes_with_cleanup(
+            to_canister,
+            "transaction_notification",
+            &bytes[..],
+            Funds::zero(),
+        )
+        .await
     };
-    add_payment(Memo(block_height), transfer, None);
+    // Don't panic after here or the notification may be locked like it succeeded
+    // when actually it failed
 
-    // We use this less easy method of
-    let err_code = call_with_callbacks(
-        to_canister,
-        "transaction_notification",
-        bytes.as_slice(),
-        on_reply,
-        on_reject,
-    );
-    if err_code != 0 {
-        panic!("Unable to send transaction notification");
+    // propagate the response/rejection from 'to_canister' if it's shorter than this
+    // length.
+    // This could be done better because we still read in the whole
+    // String/Vec as is
+    pub const MAX_LENGTH: usize = 8192;
+
+    match response {
+        Ok(bs) => {
+            if bs.len() > MAX_LENGTH {
+                let caller = caller();
+                Err(format!(
+                    "Notification succeeded, but the canister '{}' returned too large of a response",
+                    caller,
+                ))
+            } else {
+                Ok(BytesS(bs))
+            }
+        }
+        Err((_code, err)) => {
+            let _ = change_notification_state(block_height, false);
+            if err.len() > MAX_LENGTH {
+                let caller = caller();
+                Err(format!(
+                    "Notification failed, but the canister '{}' returned too large of a response",
+                    caller,
+                ))
+            } else {
+                Err(format!("Notification failed with message '{}'", err))
+            }
+        }
     }
 }
 
@@ -335,6 +384,7 @@ fn main() {
              max_message_size_bytes,
              transaction_window,
              archive_options,
+             send_whitelist,
          })| {
             init(
                 minting_account,
@@ -342,6 +392,7 @@ fn main() {
                 max_message_size_bytes,
                 transaction_window,
                 archive_options,
+                send_whitelist,
             )
         },
     )
@@ -351,7 +402,8 @@ fn main() {
 fn post_upgrade() {
     over_init(|_: BytesS| {
         let bytes = stable::get();
-        *LEDGER.write().unwrap() = Ledger::decode(&bytes).expect("Decoding stable memory failed");
+        *LEDGER.write().unwrap() =
+            serde_cbor::from_slice(&bytes).expect("Decoding stable memory failed");
         set_certified_data(
             &LEDGER
                 .read()
@@ -370,43 +422,31 @@ fn pre_upgrade() {
         printer::hook();
     });
 
-    let bytes = &LEDGER
+    let ledger = LEDGER
         .read()
         // This should never happen, but it's better to be safe than sorry
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .encode();
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let bytes = serde_cbor::to_vec(&*ledger).unwrap();
     stable::set(&bytes);
 }
 
-/// Upon reaching a `trigger_threshold` we will archive `num_blocks`. For
-/// instance, archive_blocks(2000, 1000) will trigger when there are 2000 blocks
-/// in the ledger and it will archive 1000 oldest bocks, leaving 1000 blocks in
-/// the ledger itself.
-async fn archive_blocks(trigger_threshold: usize, num_blocks: usize) {
-    let mut state = LEDGER.write().unwrap();
-    if state.blockchain.archive.is_none() {
-        print("[ledger] archive not enabled. skipping archive_blocks()");
-        return;
-    }
+/// Upon reaching a `trigger_threshold` we will archive `num_blocks`.
+/// This really should be an action on the ledger canister, but since we don't
+/// want to hold a mutable lock on the whole ledger while we're archiving, we
+/// split this method up into the parts that require async (this function) and
+/// the parts that require a lock (Ledger::archive_blocks).
+async fn archive_blocks() {
+    let (mut blocks_to_archive, archive) = {
+        let mut state = LEDGER
+            .try_write()
+            .expect("Failed to get a lock on the ledger");
 
-    let num_blocks_before = state.blockchain.num_unarchived_blocks();
-
-    if (num_blocks_before as usize) < trigger_threshold {
-        return;
-    }
-
-    let mut blocks_to_archive: VecDeque<EncodedBlock> =
-        state.split_off_blocks_to_archive(num_blocks);
-
-    let num_blocks_after = state.blockchain.num_unarchived_blocks();
-    print(format!(
-        "[ledger] archive_blocks(): trigger_threshold: {}, num_blocks: {}, blocks before split: {}, blocks to archive: {}, blocks after split: {}",
-        trigger_threshold,
-        num_blocks,
-        num_blocks_before,
-        blocks_to_archive.len(),
-        num_blocks_after,
-    ));
+        match state.archive_blocks() {
+            Some((bta, lock)) => (bta, lock),
+            None => return,
+        }
+    };
+    // ^ Drop the write lock on the ledger
 
     while !blocks_to_archive.is_empty() {
         let chunk = get_chain_prefix(
@@ -420,20 +460,38 @@ async fn archive_blocks(trigger_threshold: usize, num_blocks: usize) {
             chunk.len(),
         ));
 
-        state
-            .blockchain
-            .archive
+        let chunk = VecDeque::from(chunk);
+
+        if let Err(FailedToArchiveBlocks(err)) = archive
+            .try_write()
+            .expect("Failed to get write lock on archive")
             .as_mut()
-            .unwrap()
-            .archive_blocks(VecDeque::from(chunk))
+            .expect("Archiving is not enabled")
+            .archive_blocks(chunk.clone())
             .await
+        {
+            print(format!(
+                "[ledger] Failed to archive {} blocks with error {}",
+                chunk.len(),
+                err
+            ));
+            // We're in real trouble if we can't acquire this lock
+            let blocks = &mut LEDGER
+                .try_write()
+                .expect("Failed to get a lock on the ledger")
+                .blockchain
+                .blocks;
+
+            recover_from_failed_archive(blocks, blocks_to_archive, chunk);
+            return;
+        }
     }
 }
 
 /// Canister endpoints
 #[export_name = "canister_update send_pb"]
 fn send_() {
-    dfn_core::over_async(
+    over_async(
         protobuf,
         |SendArgs {
              memo,
@@ -453,7 +511,7 @@ fn send_() {
 /// I STRONGLY recommend that you use "send_pb" instead.
 #[export_name = "canister_update send_dfx"]
 fn send_dfx_() {
-    dfn_core::over_async(
+    over_async(
         candid_one,
         |SendArgs {
              memo,
@@ -470,7 +528,7 @@ fn send_dfx_() {
 fn notify_() {
     // we use over_init because it doesn't reply automatically so we can do explicit
     // replys in the callback
-    over_init(
+    over_async_may_reject_explicit(
         |ProtoBuf(NotifyCanisterArgs {
              block_height,
              max_fee,
@@ -495,7 +553,7 @@ fn notify_() {
 fn notify_dfx_() {
     // we use over_init because it doesn't reply automatically so we can do explicit
     // replys in the callback
-    over_init(
+    over_async_may_reject_explicit(
         |CandidOne(NotifyCanisterArgs {
              block_height,
              max_fee,
@@ -517,7 +575,7 @@ fn notify_dfx_() {
 
 #[export_name = "canister_query block_pb"]
 fn block_() {
-    dfn_core::over(protobuf, |BlockArg(height)| BlockRes(block(height)));
+    over(protobuf, |BlockArg(height)| BlockRes(block(height)));
 }
 
 #[export_name = "canister_query tip_of_chain_pb"]
@@ -529,7 +587,13 @@ fn tip_of_chain_() {
 fn get_archive_index_() {
     over(protobuf, |()| {
         let state = LEDGER.read().unwrap();
-        let entries = match &state.blockchain.archive {
+        let entries = match &state
+            .blockchain
+            .archive
+            .try_read()
+            .expect("Failed to get lock on archive")
+            .as_ref()
+        {
             None => vec![],
             Some(archive) => archive
                 .index()
@@ -567,13 +631,6 @@ fn total_supply_() {
     over(protobuf, |_: TotalSupplyArgs| total_supply())
 }
 
-#[export_name = "canister_update archive_blocks"]
-fn archive_blocks_() {
-    dfn_core::over_async(dfn_candid::candid, |(threshold, num_blocks)| {
-        archive_blocks(threshold, num_blocks)
-    });
-}
-
 /// Get multiple blocks by *offset into the container* (not BlockHeight) and
 /// length. Note that this simply iterates the blocks available in the Ledger
 /// without taking into account the archive. For example, if the ledger contains
@@ -600,12 +657,14 @@ fn get_blocks_() {
 
 #[export_name = "canister_query get_nodes"]
 fn get_nodes_() {
-    dfn_core::over(dfn_candid::candid, |()| -> Vec<CanisterId> {
+    over(dfn_candid::candid, |()| -> Vec<CanisterId> {
         LEDGER
             .read()
             .unwrap()
             .blockchain
             .archive
+            .try_read()
+            .expect("Failed to get lock on archive")
             .as_ref()
             .map(|archive| archive.nodes().to_vec())
             .unwrap_or_default()

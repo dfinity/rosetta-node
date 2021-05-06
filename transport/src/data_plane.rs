@@ -13,6 +13,9 @@
 //! connection: one each for send and receive. The connections established by
 //! the control plane are split into read and write halves and given to these
 //! two tasks.
+//!
+//! The data plane module implements data plane functionality for
+//! [`TransportImpl`](../types/struct.TransportImpl.html).
 
 use crate::metrics::DataPlaneMetrics;
 use crate::types::{
@@ -43,22 +46,29 @@ use tokio::time::{Duration, Instant};
 // CPU usage. Larger sizes effectively add to the queue size but make the system
 // less responsive to queue clearing. A good compromise size might be 32K with a
 // larger queue size.
+/// The number of bytes which will be attempted to dequeue and aggregate before
+/// sending to the network
 const DEQUEUE_BYTES: usize = 100 * 4 * 1490;
 
 // Payloads are received/collected in units of SOCKET_READ_CHUNK_SIZE
+/// Size of read chunks
 const SOCKET_READ_CHUNK_SIZE: usize = 32 * 1024;
 
+/// Heartbeat send interval (timeout on sender side)
 const TRANSPORT_HEARTBEAT_SEND_INTERVAL_MS: u64 = 200;
+/// Heartbeat wait interval (timeout on receiver side)
 const TRANSPORT_HEARTBEAT_WAIT_INTERVAL_MS: u64 = 5000;
 
+/// Error type for read errors
 #[derive(Debug)]
 enum ReadError {
     SocketReadFailed(std::io::Error),
     SocketReadTimeOut,
 }
 
+/// Implementation for the transport data plane
 impl TransportImpl {
-    // Create header bytes to send with payload.
+    /// Create header bytes to send with payload.
     fn pack_header(
         payload: Option<&TransportPayload>,
         sender_err: bool,
@@ -90,7 +100,7 @@ impl TransportImpl {
         result
     }
 
-    // Read header bytes received in payload.
+    /// Read header bytes received in payload.
     fn unpack_header(data: Vec<u8>) -> TransportHeader {
         let mut header = TransportHeader {
             version: 0,
@@ -110,8 +120,8 @@ impl TransportImpl {
         header
     }
 
-    // Per-flow send task. Reads the requests from the send queue and writes to the
-    // socket.
+    /// Per-flow send task. Reads the requests from the send queue and writes to
+    /// the socket.
     async fn flow_write_task(
         flow_id: FlowId,
         flow_label: String,
@@ -192,8 +202,8 @@ impl TransportImpl {
         }
     }
 
-    // Per-flow receive task. Reads the messages from the socket and passes to the
-    // client.
+    /// Per-flow receive task. Reads the messages from the socket and passes to
+    /// the client.
     async fn flow_read_task(
         flow_id: FlowId,
         flow_label: String,
@@ -224,7 +234,6 @@ impl TransportImpl {
 
                 if let Err(ReadError::SocketReadTimeOut) = ret {
                     let _ = event_handler.error(flow_id, TransportErrorCode::TimeoutExpired);
-                    // TODO: DFN-1660 Enable disconnect on heart beat timeouts.
                     metrics
                         .socket_heart_beat_timeouts
                         .with_label_values(&[&flow_label, &flow_tag])
@@ -273,9 +282,9 @@ impl TransportImpl {
         }
     }
 
-    // Reads and returns the next <message hdr, message payload> from the socket.
-    // The timeout is for each socket read (header, payload chunks) and not the
-    // full message.
+    /// Reads and returns the next <message hdr, message payload> from the
+    /// socket. The timeout is for each socket read (header, payload chunks)
+    /// and not the full message.
     async fn read_one_message(
         reader: &mut Box<TlsReadHalf>,
         timeout: Duration,
@@ -311,7 +320,7 @@ impl TransportImpl {
         Ok((header, Some(payload)))
     }
 
-    // Reads the requested bytes from the socket with a timeout
+    /// Reads the requested bytes from the socket with a timeout
     async fn read_from_socket(
         reader: &mut Box<TlsReadHalf>,
         buf: &mut [u8],
@@ -329,7 +338,7 @@ impl TransportImpl {
         }
     }
 
-    // Handle peer disconnect.
+    /// Handle peer disconnect.
     pub async fn on_disconnect(&self, flow_id: FlowId) {
         if let Err(e) = self.retry_connection(&flow_id) {
             warn!(
@@ -353,6 +362,7 @@ impl TransportImpl {
             .await;
     }
 
+    /// Handle connection setup. Starts flow read and write tasks.
     fn on_connect_setup(
         &self,
         flow_id: FlowId,
@@ -439,7 +449,7 @@ impl TransportImpl {
         Ok(event_handler)
     }
 
-    // Handle peer connect.
+    /// Handle peer connection
     pub(crate) async fn on_connect(
         &self,
         flow_id: FlowId,
@@ -457,8 +467,8 @@ impl TransportImpl {
     }
 }
 
-// Wrapper to update the metrics on destruction. This is needed as the async
-// tasks can get cancelled, and the metrics may not be updated on exit
+/// Wrapper to update the metrics on destruction. This is needed as the async
+/// tasks can get cancelled, and the metrics may not be updated on exit
 struct MetricsUpdater {
     metrics: DataPlaneMetrics,
     write_task: bool,

@@ -1,4 +1,4 @@
-//! Run 'ArtifactProcessor' as actors.
+//! The module runs `ArtifactProcessor` as actors.
 
 use crate::{artifact::*, clients};
 use actix::prelude::*;
@@ -28,14 +28,17 @@ use ic_types::{
 use prometheus::{histogram_opts, labels, Histogram, IntCounter};
 use std::sync::{Arc, RwLock};
 
-/// A client may be either wrapped in a Box or Arc, we differentiate
-/// these two cases in order to handle both uniformly.
+/// A client may be either wrapped in `Box` or `Arc`.
 pub enum BoxOrArcClient<Artifact: ArtifactKind> {
+    /// The client wrapped in `Box`.
     BoxClient(Box<dyn ArtifactProcessor<Artifact>>),
+    /// The client wrapped in `Arc`.
     ArcClient(Arc<dyn ArtifactProcessor<Artifact> + Sync + 'static>),
 }
 
 impl<Artifact: ArtifactKind> BoxOrArcClient<Artifact> {
+    /// The method calls the corresponding client's `process_changes` with the
+    /// given time source and artifacts.
     fn process_changes(
         &self,
         time_source: &dyn TimeSource,
@@ -48,13 +51,18 @@ impl<Artifact: ArtifactKind> BoxOrArcClient<Artifact> {
     }
 }
 
+/// Metrics for a client actor.
 struct ClientActorMetrics {
+    /// The processing time histogram.
     processing_time: Histogram,
+    /// The processing interval histogram.
     processing_interval: Histogram,
+    /// The last update time.
     last_update: std::time::Instant,
 }
 
 impl ClientActorMetrics {
+    /// The constructor creates a `ClientActorMetrics` instance.
     fn new(metrics_registry: MetricsRegistry, client: String) -> Self {
         let processing_time = metrics_registry.register(
             Histogram::with_opts(histogram_opts!(
@@ -98,24 +106,33 @@ impl ClientActorMetrics {
     }
 }
 
-/// Each 'ArtifactProcessor' runs as an actor. It receives 'PollEvent'
-/// from external interface, and will run 'on_state_change' in response to
-/// 'PollEvent'. The result of 'on_state_change' is a list of 'GossipAdvert' to
-/// send to P2P. At the moment we use a `send_advert` callback to deliver
-/// adverts. The future plan is to use actor messages for this purpose.
+/// Each `ArtifactProcessor` runs as an actor.
+///
+/// It receives `PollEvent`s from external interface, and will run
+/// `on_state_change` in response to `PollEvent`s. The result of
+/// `on_state_change` is a list of `GossipAdvert`s to send to P2P. At the
+/// moment, a `send_advert` callback is used to deliver adverts. The future plan
+/// is to use actor messages for this purpose.
 pub struct ClientActor<Artifact: ArtifactKind> {
+    /// The time source, using automatic reference counting.
     time_source: Arc<SysTimeSource>,
+    /// The client, wrapped in either `Box` or `Arc`.
     client: BoxOrArcClient<Artifact>,
+    /// The send advert function.
     send_advert: Box<dyn Fn(Advert<Artifact>) + Send>,
+    /// Flag indicating if 'OnStateChange' is scheduled.
     pending_on_state_change: bool,
+    /// The list of unvalidated artifacts.
     pending_artifacts: Vec<UnvalidatedArtifact<Artifact::Message>>,
+    /// The client actor metrics.
     metrics: Option<ClientActorMetrics>,
 }
 
 impl<Artifact: ArtifactKind + 'static> ClientActor<Artifact> {
-    /// Create an actor and start it in the given 'arbiter'. It also
-    /// sets up a regular timer to send 'PollEvent' to this actor
-    /// every 'AM_TIMER_DURATION_MSEC' milliseconds.
+    /// The function creates an actor and starts it in the given `arbiter`.
+    ///
+    /// It also sets up a regular timer to send `PollEvent`s to this actor
+    /// every `AM_TIMER_DURATION_MSEC` milliseconds.
     pub fn new<S: Fn(Advert<Artifact>) + Send + 'static>(
         arbiter: &Arbiter,
         time_source: Arc<SysTimeSource>,
@@ -138,7 +155,7 @@ impl<Artifact: ArtifactKind + 'static> ClientActor<Artifact> {
         let timer = Box::pin(async move {
             let mut interval = actix::clock::interval_at(
                 actix::clock::Instant::now(),
-                std::time::Duration::from_millis(AM_TIMER_DURATION_MSEC),
+                std::time::Duration::from_millis(ARTIFACT_MANAGER_TIMER_DURATION_MSEC),
             );
             loop {
                 interval.tick().await;
@@ -154,24 +171,25 @@ impl<Artifact: ArtifactKind + 'static> Actor for ClientActor<Artifact> {
     type Context = Context<Self>;
 }
 
-/// 'ClientActor' responses to 'PollEvent' by running 'on_state_change'.
-/// Because external 'PollEvent' may come at any time, and 'on_state_change'
-/// must be run sequentially, we use an internal 'pending_on_state_change' flag
-/// and an internal event type 'OnStateChange' to make sure we don't run
-/// 'on_state_change' more frequently than necessary.
+/// The `ClientActor` responds to `PollEvent`s by running `on_state_change`.
+///
+/// Since external `PollEvent`s may come at any time, and `on_state_change`
+/// must be run sequentially, an internal `pending_on_state_change` flag
+/// and an internal event type `OnStateChange` is used to make sure that
+/// `on_state_change` is not run more frequently than necessary.
 //
-// Each 'OnStateChange' event corresponds to an 'on_state_change' invocation. The code behaves this
-// way:
-// - If a 'PollEvent' comes in while there is no 'OnStateChange' being scheduled (i.e.
+// Each `OnStateChange` event corresponds to an `on_state_change` invocation. The code behaves
+// as follows:
+// - If a `PollEvent` comes in while there is no `OnStateChange` being scheduled (i.e.
 //   'pending_on_state_change' is false), we'll schedule one.
-// - If we have already scheduled an 'OnStateChange' event (i.e. 'pending_on_state_change' is true),
-//   we will ignore the 'PollEvent'.
+// - If we have already scheduled an `OnStateChange` event (i.e. 'pending_on_state_change' is true),
+//   we will ignore the `PollEvent`.
 //
 // Effectively this rule makes sure there is at most one 'OneStateChange' event in the mailbox.
 //
-// It may also happen that each 'on_state_change' takes longer than the poll interval. In this case,
-// we will still schedule the next 'OnStageChange' so that we run next 'on_state_change' as soon as
-// possible. This is different than enforcing a fixed interval between two 'on_state_change' calls.
+// It may also happen that each `on_state_change` takes longer than the poll interval. In this case,
+// we will still schedule the next 'OnStageChange' so that we run next `on_state_change` as soon as
+// possible. This is different than enforcing a fixed interval between two `on_state_change` calls.
 #[derive(Message)]
 #[rtype(result = "Result<(), ()>")]
 struct PollEvent;
@@ -179,9 +197,10 @@ struct PollEvent;
 impl<Artifact: ArtifactKind + 'static> Handler<PollEvent> for ClientActor<Artifact> {
     type Result = Result<(), ()>;
 
-    /// The handling of 'PollEvent' is to set the 'changed' flag and trigger an
-    /// 'OnStateChange' event when the 'changed' flag is not set. Otherwise
-    /// we just skip, because 'on_state_change' is already scheduled.
+    /// The method handles the given `PollEvent`.
+    ///
+    /// If the the `changed` flag is not set, the method triggers an
+    /// `OnStateChange` event and sets the `changed` flag in the process.
     fn handle(&mut self, _poll_event: PollEvent, ctx: &mut Self::Context) -> Self::Result {
         if !self.pending_on_state_change {
             self.pending_on_state_change = true;
@@ -191,6 +210,7 @@ impl<Artifact: ArtifactKind + 'static> Handler<PollEvent> for ClientActor<Artifa
     }
 }
 
+/// The struct holds an unvalidated artifact message.
 #[derive(Message)]
 #[rtype(result = "Result<(), ()>")]
 pub(crate) struct NewArtifact<Artifact: ArtifactKind>(
@@ -200,9 +220,14 @@ pub(crate) struct NewArtifact<Artifact: ArtifactKind>(
 impl<Artifact: ArtifactKind + 'static> Handler<NewArtifact<Artifact>> for ClientActor<Artifact> {
     type Result = Result<(), ()>;
 
-    /// The handling of 'NewArtifact' is to cache the artifact as a batch,
-    /// which will be processed once 'on_state_change' is called. Otherwise
-    /// it behaves just like the handling of 'PollEvent'.
+    /// The method handles the given `NewArtifact`.
+    ///
+    /// The `NewArtifact` is cached in a batch, which will be processed once
+    /// `on_state_change` is called.
+    /// Other than that, it behaves just like the
+    /// handling of `PollEvent`, i.e., If the the `changed` flag is not set, the
+    /// method  triggers an `OnStateChange` event and sets the `changed` flag in
+    /// the process.
     fn handle(&mut self, event: NewArtifact<Artifact>, ctx: &mut Self::Context) -> Self::Result {
         self.pending_artifacts.push(event.0);
         if !self.pending_on_state_change {
@@ -213,7 +238,7 @@ impl<Artifact: ArtifactKind + 'static> Handler<NewArtifact<Artifact>> for Client
     }
 }
 
-/// An internal event that triggers 'on_state_change' to start running.
+/// An internal event that triggers `on_state_change` to start running.
 #[derive(Message)]
 #[rtype(result = "Result<(), ()>")]
 struct OnStateChangeEvent;
@@ -221,12 +246,14 @@ struct OnStateChangeEvent;
 impl<Artifact: ArtifactKind + 'static> Handler<OnStateChangeEvent> for ClientActor<Artifact> {
     type Result = Result<(), ()>;
 
-    /// We always run 'on_state_change' in a loop until there is no more
-    /// changes. Instead of doing a while loop, we send OnStateChange to the
-    /// same actor at the end if there are more changes. This gives other
-    /// async jobs a chance to run.
+    /// The method disregards the given `OnStateChangeEvent`.
+    ///
+    /// Instead of running `on_state_change` in a while loop until there are no
+    /// more changes, another `OnStateChangeEvent` is sent to the same actor
+    /// at the end if there are more changes, giving other asynchronous jobs
+    /// a chance to run.
     fn handle(&mut self, _poll_event: OnStateChangeEvent, ctx: &mut Self::Context) -> Self::Result {
-        // First, reset the pending_on_state_change flag
+        // First, reset the `pending_on_state_change` flag.
         self.pending_on_state_change = false;
         self.time_source.update_time().ok();
         let mut artifacts = Vec::new();
@@ -245,15 +272,20 @@ impl<Artifact: ArtifactKind + 'static> Handler<OnStateChangeEvent> for ClientAct
     }
 }
 
-// Periodic duration of PollEvent.
-const AM_TIMER_DURATION_MSEC: u64 = 200;
+/// Periodic duration of `PollEvent` in milliseconds.
+const ARTIFACT_MANAGER_TIMER_DURATION_MSEC: u64 = 200;
 
-/// Consensus OnStateChange client.
+/// *Consensus* `OnStateChange` client.
 pub struct ConsensusClient<PoolConsensus, PoolIngress> {
+    /// The *Consensus* pool.
     consensus_pool: Arc<RwLock<PoolConsensus>>,
+    /// The ingress pool.
     ingress_pool: Arc<RwLock<PoolIngress>>,
+    /// The *Consensus* client.
     client: Box<dyn Consensus>,
+    /// The invalidated artifacts counter.
     invalidated_artifacts: IntCounter,
+    /// The logger.
     log: ReplicaLogger,
 }
 
@@ -262,9 +294,11 @@ impl<
         PoolIngress: IngressPoolSelect + Send + Sync + 'static,
     > ConsensusClient<PoolConsensus, PoolIngress>
 {
-    /// Run consensus 'on_state_change' as an actor in the given arbiter.
-    /// It returns both a 'client::ConsensusClient' and an actor address, which
-    /// are to be managed by the 'ArtifactManager'.
+    /// The functions runs *Consensus* `on_state_change` as an actor in the
+    /// given arbiter.
+    ///
+    /// It returns both a `client::ConsensusClient` and an actor address, which
+    /// are to be managed by the `ArtifactManager`.
     #[allow(clippy::too_many_arguments)]
     pub fn run<
         C: Consensus + 'static,
@@ -293,7 +327,7 @@ impl<
                 "consensus_invalidated_artifacts",
                 "The number of invalidated consensus artifacts",
             ),
-            log: log.clone(),
+            log,
         };
         let addr = ClientActor::new(
             arbiter,
@@ -303,7 +337,7 @@ impl<
             send_advert,
         );
         (
-            clients::ConsensusClient::new(consensus_pool, consensus_gossip, log),
+            clients::ConsensusClient::new(consensus_pool, consensus_gossip),
             addr,
         )
     }
@@ -314,6 +348,7 @@ impl<
         PoolIngress: IngressPoolSelect + Send + Sync + 'static,
     > ArtifactProcessor<ConsensusArtifact> for ConsensusClient<PoolConsensus, PoolIngress>
 {
+    /// The method processes changes in the *Consensus* pool and ingress pool.
     fn process_changes(
         &self,
         time_source: &dyn TimeSource,
@@ -384,18 +419,20 @@ impl<
     }
 }
 
-/// A wrapper for ingress pool that delays lock until the member function of
-/// IngressPoolSelect is actually called.
+/// A wrapper for the ingress pool that delays locking until the member function
+/// of `IngressPoolSelect` is actually called.
 struct IngressPoolSelectWrapper {
     pool: std::sync::Arc<std::sync::RwLock<dyn IngressPoolSelect>>,
 }
 
 impl IngressPoolSelectWrapper {
+    /// The constructor creates a `IngressPoolSelectWrapper` instance.
     pub fn new(pool: &std::sync::Arc<std::sync::RwLock<dyn IngressPoolSelect>>) -> Self {
         IngressPoolSelectWrapper { pool: pool.clone() }
     }
 }
 
+/// `IngressPoolSelectWrapper` implements the `IngressPoolSelect` trait.
 impl IngressPoolSelect for IngressPoolSelectWrapper {
     fn select_validated<'a>(
         &self,
@@ -407,17 +444,19 @@ impl IngressPoolSelect for IngressPoolSelectWrapper {
     }
 }
 
-/// Ingress OnStateChange client.
+/// The ingress `OnStateChange` client.
 pub struct IngressClient<Pool> {
+    /// The ingress pool, protected by a read-write lock and automatic reference
+    /// counting.
     ingress_pool: Arc<RwLock<Pool>>,
+    /// The ingress handler.
     client: Arc<dyn IngressHandler + Send + Sync>,
-    _log: ReplicaLogger,
 }
 
 impl<Pool: MutableIngressPool + Send + Sync + 'static> IngressClient<Pool> {
-    /// Run ingress 'on_state_change' as an actor in the given arbiter.
-    /// It returns both a 'client::IngressClient' and an actor address, which
-    /// are to be managed by the 'ArtifactManager'.
+    /// The function runs ingress `on_state_change` as an actor in the given
+    /// arbiter. It returns both a `client::IngressClient` and an actor
+    /// address, both of which are to be managed by the 'ArtifactManager'.
     #[allow(clippy::too_many_arguments)]
     pub fn run<S: Fn(Advert<IngressArtifact>) + Send + 'static>(
         arbiter: &Arbiter,
@@ -434,7 +473,6 @@ impl<Pool: MutableIngressPool + Send + Sync + 'static> IngressClient<Pool> {
         let client = Self {
             ingress_pool: ingress_pool.clone(),
             client: ingress_handler,
-            _log: log.clone(),
         };
         let addr = ClientActor::new(
             arbiter,
@@ -453,6 +491,7 @@ impl<Pool: MutableIngressPool + Send + Sync + 'static> IngressClient<Pool> {
 impl<Pool: MutableIngressPool + Send + Sync> ArtifactProcessor<IngressArtifact>
     for IngressClient<Pool>
 {
+    /// The method processes changes in the ingress pool.
     fn process_changes(
         &self,
         _time_source: &dyn TimeSource,
@@ -493,21 +532,27 @@ impl<Pool: MutableIngressPool + Send + Sync> ArtifactProcessor<IngressArtifact>
     }
 }
 
-/// Certification OnStateChange client.
+/// Certification `OnStateChange` client.
 pub struct CertificationClient<PoolCertification> {
+    /// The *Consensus* pool cache.
     consensus_pool_cache: Arc<dyn ConsensusPoolCache>,
+    /// The certification pool.
     certification_pool: Arc<RwLock<PoolCertification>>,
+    /// The certifier.
     client: Box<dyn Certifier>,
+    /// The invalidated artifacts counter.
     invalidated_artifacts: IntCounter,
+    /// The logger.
     log: ReplicaLogger,
 }
 
 impl<PoolCertification: MutableCertificationPool + Send + Sync + 'static>
     CertificationClient<PoolCertification>
 {
-    /// Run certification 'on_state_change' as an actor in the given arbiter.
-    /// It returns both a 'client::CertificationClient' and an actor address,
-    /// which are to be managed by the 'ArtifactManager'.
+    /// The function runs certification `on_state_change` as an actor in the
+    /// given arbiter. It returns both a `client::CertificationClient` and
+    /// an actor address, both of which are to be managed by the
+    /// `ArtifactManager`.
     #[allow(clippy::too_many_arguments)]
     pub fn run<
         C: Certifier + 'static,
@@ -536,7 +581,7 @@ impl<PoolCertification: MutableCertificationPool + Send + Sync + 'static>
                 "certification_invalidated_artifacts",
                 "The number of invalidated certification artifacts",
             ),
-            log: log.clone(),
+            log,
         };
         let addr = ClientActor::new(
             arbiter,
@@ -550,7 +595,6 @@ impl<PoolCertification: MutableCertificationPool + Send + Sync + 'static>
                 consensus_pool_cache,
                 certification_pool,
                 certifier_gossip,
-                log,
             ),
             addr,
         )
@@ -560,6 +604,7 @@ impl<PoolCertification: MutableCertificationPool + Send + Sync + 'static>
 impl<PoolCertification: MutableCertificationPool + Send + Sync + 'static>
     ArtifactProcessor<CertificationArtifact> for CertificationClient<PoolCertification>
 {
+    /// The method processes changes in the certification pool.
     fn process_changes(
         &self,
         _time_source: &dyn TimeSource,
@@ -608,18 +653,23 @@ impl<PoolCertification: MutableCertificationPool + Send + Sync + 'static>
     }
 }
 
-/// Dkg OnStateChange client.
+/// Distributed key generation (DKG) `OnStateChange` client.
 pub struct DkgClient<PoolDkg> {
+    /// The DKG pool, protected by a read-write lock and automatic reference
+    /// counting.
     dkg_pool: Arc<RwLock<PoolDkg>>,
+    /// The DKG client.
     client: Box<dyn Dkg>,
+    /// The invalidated artifacts counter.
     invalidated_artifacts: IntCounter,
+    /// The logger.
     log: ReplicaLogger,
 }
 
 impl<PoolDkg: MutableDkgPool + Send + Sync + 'static> DkgClient<PoolDkg> {
-    /// Run Dkg 'on_state_change' as an actor in the given arbiter.
-    /// It returns both a 'client::DkgClient' and an actor address, which are to
-    /// be managed by the 'ArtifactManager'.
+    /// The functino runs DKG `on_state_change` as an actor in the given
+    /// arbiter. It returns both `client::DkgClient` and an actor address,
+    /// both of which are to be managed by the `ArtifactManager`.
     #[allow(clippy::too_many_arguments)]
     pub fn run<
         C: Dkg + 'static,
@@ -643,7 +693,7 @@ impl<PoolDkg: MutableDkgPool + Send + Sync + 'static> DkgClient<PoolDkg> {
                 "dkg_invalidated_artifacts",
                 "The number of invalidated DKG artifacts",
             ),
-            log: log.clone(),
+            log,
         };
         let addr = ClientActor::new(
             arbiter,
@@ -652,13 +702,14 @@ impl<PoolDkg: MutableDkgPool + Send + Sync + 'static> DkgClient<PoolDkg> {
             BoxOrArcClient::BoxClient(Box::new(client)),
             send_advert,
         );
-        (clients::DkgClient::new(dkg_pool, dkg_gossip, log), addr)
+        (clients::DkgClient::new(dkg_pool, dkg_gossip), addr)
     }
 }
 
 impl<PoolDkg: MutableDkgPool + Send + Sync + 'static> ArtifactProcessor<DkgArtifact>
     for DkgClient<PoolDkg>
 {
+    /// The method processes changes in the DKG pool.
     fn process_changes(
         &self,
         _time_source: &dyn TimeSource,

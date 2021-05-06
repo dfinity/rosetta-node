@@ -1,3 +1,6 @@
+#![forbid(unsafe_code)]
+#![deny(clippy::unwrap_used)]
+
 //! Serialisation and deserialisation of the MIRACL BLS12-381 types.
 
 #[cfg(test)]
@@ -72,6 +75,9 @@ pub fn miracl_g1_to_bytes(ecp: &ECP) -> G1Bytes {
 
 /// Parses a miracl G1 == ECP from a standard, library-independent form.
 pub fn miracl_g1_from_bytes_unchecked(bytes: &[u8; G1Bytes::SIZE]) -> Result<ECP, ()> {
+    if (bytes[G1Bytes::FLAG_BYTE_OFFSET] & G1Bytes::COMPRESSED_FLAG) == 0 {
+        return Err(());
+    }
     let infinity_bit = bytes[G1Bytes::FLAG_BYTE_OFFSET] & G1Bytes::INFINITY_FLAG;
     let sign_bit = bytes[G1Bytes::FLAG_BYTE_OFFSET] & G1Bytes::SIGN_FLAG;
     let mut other_bits = [0u8; 48];
@@ -161,6 +167,9 @@ pub fn miracl_g2_to_bytes(ecp2: &ECP2) -> G2Bytes {
 ///
 /// Note: This does NOT verify that the parsed value is actually in G2.
 pub fn miracl_g2_from_bytes_unchecked(bytes: &[u8; G2Bytes::SIZE]) -> Result<ECP2, ()> {
+    if (bytes[G2Bytes::FLAG_BYTE_OFFSET] & G2Bytes::COMPRESSED_FLAG) == 0 {
+        return Err(());
+    }
     let infinity_bit = bytes[G2Bytes::FLAG_BYTE_OFFSET] & G2Bytes::INFINITY_FLAG;
     let sign_bit = bytes[G2Bytes::FLAG_BYTE_OFFSET] & G2Bytes::SIGN_FLAG;
     let mut other_bits = [0u8; 96];

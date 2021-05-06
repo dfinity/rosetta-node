@@ -181,7 +181,6 @@ fn build_registry_proto() {
     config.type_attribute(".", "#[derive(serde::Serialize, serde::Deserialize)]");
 
     let registry_files = [
-        "def/registry/canister/v1/canister.proto",
         "def/registry/conversion_rate/v1/conversion_rate.proto",
         "def/registry/crypto/v1/crypto.proto",
         "def/registry/node_operator/v1/node_operator.proto",

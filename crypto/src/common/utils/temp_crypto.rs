@@ -32,6 +32,8 @@ use tokio::net::TcpStream;
 #[cfg(test)]
 mod tests;
 
+/// A crypto component set up in a temporary directory. The directory is
+/// automatically deleted when this component goes out of scope.
 pub type TempCryptoComponent = TempCryptoComponentGeneric<Csp<OsRng, ProtoSecretKeyStore>>;
 
 /// This struct combines the following two items:
@@ -199,6 +201,7 @@ impl TempCryptoComponent {
     }
 }
 
+/// Selects which keys should be generated for a `TempCryptoComponent`.
 #[derive(Clone)]
 pub struct NodeKeysToGenerate {
     pub generate_node_signing_keys: bool,

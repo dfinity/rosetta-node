@@ -1,3 +1,10 @@
+//! Canonical State traversal using lazy trees, i.e. a tree with nodes that are
+//! lazily initialized if and when traversed.
+//!
+//! Lazy trees allow e.g. comparing 2 Canonical States without materializing
+//! them; certified ingress history access in O(log N); and they make the
+//! algorithms on Canonical State easier to write and understand.
+
 pub mod conversion;
 pub mod materialize;
 

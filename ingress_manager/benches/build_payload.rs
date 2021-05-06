@@ -3,7 +3,7 @@
 //! - The ingress pool is populated with a given number of ingress messages.
 //! - Each message is about 1KB in size.
 //! - About only 10% of the messages are suitable for payload selection
-//!   (non-expired and not to far in the future).
+//!   (non-expired and not too far in the future).
 //!
 //! We vary the pool size count between 15,000 and 105,000, with 10,000
 //! increments.
@@ -170,8 +170,6 @@ fn build_payload(criterion: &mut Criterion) {
                 group.bench_function(&name, |bench| {
                     bench.iter(|| {
                         let n = get_ingress_payload(then, pool, manager);
-                        // TODO(eftchis): Provide actual valid state to validate
-                        // messages through.
                         assert!(n > 800, "Insufficient number of ingress in payload: {}", n);
                         assert!(n < 1020, "Too many ingress in payload: {}", n);
                     })

@@ -1190,7 +1190,7 @@ impl<A: SystemStateAccessor> SystemApi for SystemApiImpl<A> {
                     on_reply,
                     on_reject,
                     None,
-                ))?;
+                ));
 
                 let msg = Request {
                     sender: self.system_state_accessor.canister_id(),
@@ -1206,8 +1206,12 @@ impl<A: SystemStateAccessor> SystemApi for SystemApiImpl<A> {
                     msg,
                 ) {
                     Ok(()) => Ok(0),
-                    Err((StateError::QueueFull { .. }, _)) => Ok(RejectCode::SysTransient as i32),
-                    Err((StateError::CanisterOutOfCycles { .. }, _)) => {
+                    Err((StateError::QueueFull { .. }, request))
+                    | Err((StateError::CanisterOutOfCycles { .. }, request)) => {
+                        self.system_state_accessor
+                            .canister_cycles_refund(request.payment.cycles());
+                        self.system_state_accessor
+                            .unregister_callback(request.sender_reply_callback);
                         Ok(RejectCode::SysTransient as i32)
                     }
                     Err((err, _)) => {
@@ -1375,6 +1379,15 @@ impl<A: SystemStateAccessor> SystemApi for SystemApiImpl<A> {
         }
     }
 
+    // Note that if this function returns an error, then the canister will be
+    // trapped and the state will be rolled back. Hence, we do not have to worry
+    // about rolling back any modifications that previous calls like
+    // ic0_call_cycles_add() made.
+    //
+    // However, this call can still "fail" without returning an error. Examples
+    // are if the canister does not have sufficient cycles to send the request
+    // or the output queues are full. In this case, we need to perform the
+    // necessary cleanups.
     fn ic0_call_perform(&mut self) -> HypervisorResult<i32> {
         match &mut self.api_type {
             ApiType::Start { .. }
@@ -1440,8 +1453,12 @@ impl<A: SystemStateAccessor> SystemApi for SystemApiImpl<A> {
                     req,
                 ) {
                     Ok(()) => Ok(0),
-                    Err((StateError::QueueFull { .. }, _)) => Ok(RejectCode::SysTransient as i32),
-                    Err((StateError::CanisterOutOfCycles { .. }, _)) => {
+                    Err((StateError::QueueFull { .. }, request))
+                    | Err((StateError::CanisterOutOfCycles { .. }, request)) => {
+                        self.system_state_accessor
+                            .canister_cycles_refund(request.payment.cycles());
+                        self.system_state_accessor
+                            .unregister_callback(request.sender_reply_callback);
                         Ok(RejectCode::SysTransient as i32)
                     }
                     Err((err, _)) => {
@@ -1484,8 +1501,10 @@ impl<A: SystemStateAccessor> SystemApi for SystemApiImpl<A> {
                     req,
                 ) {
                     Ok(()) => Ok(0),
-                    Err((StateError::QueueFull { .. }, _)) => Ok(RejectCode::SysTransient as i32),
-                    Err((StateError::CanisterOutOfCycles { .. }, _)) => {
+                    Err((StateError::QueueFull { .. }, request))
+                    | Err((StateError::CanisterOutOfCycles { .. }, request)) => {
+                        self.system_state_accessor
+                            .unregister_callback(request.sender_reply_callback);
                         Ok(RejectCode::SysTransient as i32)
                     }
                     Err((err, _)) => {
@@ -1972,7 +1991,7 @@ mod test {
     use ic_test_utilities::{
         cycles_account_manager::CyclesAccountManagerBuilder,
         mock_time,
-        state::{get_stopped_canister, SystemStateBuilder},
+        state::SystemStateBuilder,
         types::ids::{call_context_test_id, canister_test_id, subnet_test_id, user_test_id},
     };
     use ic_types::{messages::CallbackId, NumInstructions};
@@ -2834,18 +2853,6 @@ mod test {
     }
 
     #[test]
-    fn test_call_simple_fails_on_stopped_system_state() {
-        let cycles_account_manager = CyclesAccountManagerBuilder::new().build();
-        let system_state = get_stopped_canister(canister_test_id(0)).system_state;
-        let mut api = get_system_api(get_update_api_type(), system_state, cycles_account_manager);
-
-        assert_eq!(
-            api.ic0_call_simple(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, &[]),
-            Err(HypervisorError::CanisterStopped)
-        );
-    }
-
-    #[test]
     fn test_discard_cycles_charge_by_new_call() {
         let cycles_amount = 1_000_000_000_000;
         let max_num_instructions = NumInstructions::from(1 << 30);
@@ -2907,7 +2914,7 @@ mod test {
         assert_eq!(
             api.ic0_call_cycles_add(amount.try_into().unwrap())
                 .unwrap_err(),
-            HypervisorError::InsufficientCycles {
+            HypervisorError::InsufficientCyclesBalance {
                 available: Cycles::from(cycles_amount),
                 requested: Cycles::from(amount),
             }
@@ -2951,7 +2958,7 @@ mod test {
         assert_eq!(
             api.ic0_call_cycles_add(amount.try_into().unwrap())
                 .unwrap_err(),
-            HypervisorError::InsufficientCycles {
+            HypervisorError::InsufficientCyclesBalance {
                 available: Cycles::from(cycles_amount - amount),
                 requested: Cycles::from(amount),
             }
@@ -3234,6 +3241,38 @@ mod test {
         assert_eq!(api.ic0_msg_cycles_accept(50), Ok(40));
         let balance = api.ic0_canister_cycle_balance().unwrap();
         assert!(Cycles::from(balance) > CYCLES_LIMIT_PER_CANISTER);
+    }
+
+    /// If call call_perform() fails because canister does not have enough
+    /// cycles to send the message, then the state is reset.
+    #[test]
+    fn call_perform_not_enough_cycles_resets_state() {
+        let cycles_account_manager = CyclesAccountManagerBuilder::new()
+            .with_subnet_type(SubnetType::Application)
+            .build();
+        // Set initial cycles small enough so that it does not have enough
+        // cycles to send xnet messages.
+        let initial_cycles = cycles_account_manager.xnet_call_performed_fee() - Cycles::from(10);
+        let mut system_state = SystemStateBuilder::new()
+            .initial_cycles(initial_cycles)
+            .build();
+        system_state
+            .call_context_manager_mut()
+            .unwrap()
+            .new_call_context(
+                CallOrigin::CanisterUpdate(canister_test_id(33), CallbackId::from(5)),
+                Cycles::from(40),
+            );
+        let mut api = get_system_api(get_update_api_type(), system_state, cycles_account_manager);
+        api.ic0_call_new(0, 10, 0, 10, 0, 0, 0, 0, &[0; 1024])
+            .unwrap();
+        api.ic0_call_cycles_add(100).unwrap();
+        assert_eq!(api.ic0_call_perform().unwrap(), 2);
+        let system_state = api.release_system_state_accessor().release_system_state();
+        let call_context_manager = system_state.call_context_manager().unwrap();
+        assert_eq!(call_context_manager.call_contexts().len(), 1);
+        assert_eq!(call_context_manager.callbacks().len(), 0);
+        assert_eq!(system_state.cycles_account.cycles_balance(), initial_cycles);
     }
 
     #[test]

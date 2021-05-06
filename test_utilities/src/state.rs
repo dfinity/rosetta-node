@@ -493,6 +493,18 @@ pub fn canister_ids(state: &ReplicatedState) -> Vec<CanisterId> {
         .collect()
 }
 
+pub fn new_canister_state(
+    canister_id: CanisterId,
+    controller: PrincipalId,
+    initial_cycles: Cycles,
+    freeze_threshold: NumSeconds,
+) -> CanisterState {
+    let scheduler_state = SchedulerState::default();
+    let system_state =
+        SystemState::new_running(canister_id, controller, initial_cycles, freeze_threshold);
+    CanisterState::new(system_state, None, scheduler_state)
+}
+
 prop_compose! {
     /// Creates a `ReplicatedState` with a variable amount of canisters and input messages
     /// per canister based on a uniform distribution of the input parameters.
@@ -550,15 +562,20 @@ prop_compose! {
     (
         (allocation, round) in arb_compute_allocation_and_last_round(last_round_max)
     ) -> CanisterState {
-        let mut canister_state = CanisterState::new(
+        let mut execution_state = initial_execution_state(None);
+        execution_state.wasm_binary = BinaryEncodedWasm::new(wabt::wat2wasm(r#"(module)"#).unwrap());
+        let scheduler_state = SchedulerState::default();
+        let system_state = SystemState::new_running(
             canister_test_id(0),
             user_test_id(24).get(),
             INITIAL_CYCLES,
             DEFAULT_FREEZE_THRESHOLD,
         );
-        let mut execution_state = initial_execution_state(None);
-        execution_state.wasm_binary = BinaryEncodedWasm::new(wabt::wat2wasm(r#"(module)"#).unwrap());
-        canister_state.execution_state = Some(execution_state);
+        let mut canister_state = CanisterState::new(
+            system_state,
+            Some(execution_state),
+            scheduler_state
+        );
         canister_state.scheduler_state.compute_allocation = allocation;
         canister_state.scheduler_state.last_full_execution_round = round;
         canister_state

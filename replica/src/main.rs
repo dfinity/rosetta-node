@@ -1,11 +1,4 @@
 //! Replica -- Internet Computer
-//!
-//! We avoid generics above for a single reason: we want to keep it
-//! simple and concrete, avoid falling into early and incorrect
-//! categorization of components.
-
-//! We mix Synchronous and Asynchronous Contexts below. We start with
-//! a really simple execution.
 
 use ic_base_server::shutdown_signal;
 use ic_config::registry_client::DataProviderConfig;
@@ -109,14 +102,14 @@ async fn main() -> io::Result<()> {
 
     // Before setup of execution, we disable SIGPIPEs. In particular,
     // we install the corresponding signal handler. We are setting up
-    // a series of socket based IPC connections for comminication with
+    // a series of socket based IPC connections for communication with
     // the sandboxed processes (crypto and runtime), and we require
     // extensive and particular stateful error handling. We MAY NOT
     // depend on the default Rust startup setup.
     //
     // Even if until now SIGPIPE signals are not handled by the
     // current Rust version, there is an ongoing discussion for
-    // providing a default behaviour to ensure POSIX/UNIX
+    // providing a default behavior to ensure POSIX/UNIX
     // compatibility,
     // cf. https://github.com/rust-lang/rust/issues/62569.
     //
@@ -230,7 +223,7 @@ async fn main() -> io::Result<()> {
     context.subnet_id = format!("{}", subnet_id.get());
     let logger = logger.with_new_context(context);
 
-    info!(logger, "DFINITY Replica Started");
+    info!(logger, "Replica Started");
     info!(logger, "Running in subnetwork {:?}", subnet_id);
     if let Ok((path, hash)) = get_replica_binary_hash() {
         info!(logger, "Running replica binary: {:?} {}", path, hash);

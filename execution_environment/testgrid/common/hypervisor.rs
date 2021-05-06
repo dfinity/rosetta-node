@@ -3259,7 +3259,7 @@ fn cannot_execute_callback_on_stopped_canister() {
                     MAX_SUBNET_AVAILABLE_MEMORY.clone(),
                 )
                 .get_no_pause()
-                .2,
+                .3,
             Err(HypervisorError::CanisterStopped)
         );
     });

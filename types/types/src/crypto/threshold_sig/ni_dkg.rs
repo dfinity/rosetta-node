@@ -1,3 +1,4 @@
+//! Types for non-interactive distributed key generation (NI-DKG).
 pub use crate::crypto::threshold_sig::ni_dkg::config::receivers::NiDkgReceivers;
 use crate::crypto::threshold_sig::ni_dkg::config::NiDkgThreshold;
 use crate::crypto::threshold_sig::ThresholdSigPublicKey;
@@ -25,7 +26,8 @@ pub use id::NiDkgId;
 #[cfg(test)]
 mod tests;
 
-/// Allows to distinguish between parallel protocol executions.
+/// Allows to distinguish protocol executions in high and low threshold
+/// settings.
 #[derive(
     Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, EnumIter,
 )]
@@ -43,17 +45,26 @@ impl From<&NiDkgTag> for pb::NiDkgTag {
     }
 }
 
+/// The subnet for which the DKG generates keys.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum NiDkgTargetSubnet {
+    /// `Local` means the subnet creates keys for itself.
     Local,
-    // We cannot use `SubnetId` as type contained in the _remote_ variant because
-    // the exact subnet ID is derived from the subnet's public key, which is only known
-    // _after_ the DKG protocol was successfully run. Said differently, at the time the
-    // containing `NiDkgId` is created, the exact `SubnetId` of the target subnet is
-    // not (and cannot be) known yet.
+    /// `Remote` means the subnet creates keys for another subnet. This is used,
+    /// e.g., when the NNS generates initial key material for a new subnet.
+    ///
+    /// We cannot use `SubnetId` as type contained in the `Remote` variant
+    /// because the exact subnet ID is derived from the subnet's public key,
+    /// which is only known _after_ the DKG protocol was successfully run. Said
+    /// differently, at the time the containing `NiDkgId` is created, the exact
+    /// `SubnetId` of the target subnet is not (and cannot be) known yet.
     Remote(NiDkgTargetId),
 }
 
+/// An ID for a remote `NiDkgTargetSubnet`.
+///
+/// Please refer to the rustdoc of `NiDkgTargetSubnet::Remote` for an
+/// explanation of why this is needed.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub struct NiDkgTargetId([u8; NiDkgTargetId::SIZE]);
 ic_crypto_internal_types::derive_serde!(NiDkgTargetId, NiDkgTargetId::SIZE);
@@ -97,6 +108,10 @@ impl TryFrom<i32> for NiDkgTag {
     }
 }
 
+/// An ID identifying a DKG epoch.
+///
+/// This is either for interactive DKG (`IDkgId`) or for non-interactive DKG
+/// (`NiDkgId`).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum DkgId {
     IDkgId(IDkgId),
@@ -109,7 +124,7 @@ impl fmt::Display for DkgId {
     }
 }
 
-/// Contribution to distributed key generation.
+/// A dealer's contribution (called dealing) to distributed key generation.
 #[derive(Clone, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NiDkgDealing {
     pub internal_dealing: CspNiDkgDealing,

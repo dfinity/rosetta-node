@@ -22,7 +22,7 @@ pub async fn install_code<Arg: IntoWire>(
         memory_allocation: memory_allocation.map(candid::Nat::from),
         query_allocation: None,
     };
-    dfn_core::api::call(
+    dfn_core::api::call_with_cleanup(
         IC_00,
         &Method::InstallCode.to_string(),
         dfn_candid::candid::<(), (InstallCodeArgs,)>,
@@ -33,13 +33,11 @@ pub async fn install_code<Arg: IntoWire>(
 
 pub async fn create_canister() -> CanisterId {
     dfn_core::api::print("[spawn] create_canister()");
-    const NUMBER_OF_CYCLES: u64 = 10_000_000_000;
-    let result: Result<CanisterIdRecord, _> = dfn_core::api::call_with_funds(
+    let result: Result<CanisterIdRecord, _> = dfn_core::api::call_with_cleanup(
         IC_00,
-        &Method::ProvisionalCreateCanisterWithCycles.to_string(),
+        &Method::CreateCanister.to_string(),
         dfn_candid::candid_one,
-        ic_types::ic00::ProvisionalCreateCanisterWithCyclesArgs::new(Some(NUMBER_OF_CYCLES)),
-        dfn_core::api::Funds::new(NUMBER_OF_CYCLES, 0),
+        ic_types::ic00::CreateCanisterArgs::default(),
     )
     .await;
     dfn_core::api::print(format!("[spawn] create_canister() = {:?}", result));

@@ -9,6 +9,7 @@ use anyhow::{bail, Context, Result};
 use crate::internet_computer::{IC_REGISTRY_LOCAL_STORE_PATH, IC_ROOT_PUB_KEY_PATH};
 
 /// Provides a strongly typed view for a state directory as prepared by ic-prep.
+#[derive(Clone, Debug)]
 pub struct IcPrepStateDir {
     pub prep_dir: PathBuf,
 }

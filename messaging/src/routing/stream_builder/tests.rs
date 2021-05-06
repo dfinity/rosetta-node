@@ -11,6 +11,7 @@ use ic_test_utilities::{
         fetch_histogram_stats, fetch_int_counter_vec, fetch_int_gauge_vec, metric_vec,
         nonzero_values, MetricVec,
     },
+    state::new_canister_state,
     types::{
         ids::{canister_test_id, user_test_id, SUBNET_27, SUBNET_42},
         messages::RequestBuilder,
@@ -48,7 +49,7 @@ fn reject_local_request() {
 
         // A CanisterState to test on.
         let canister_id = canister_test_id(3);
-        let mut canister_state = CanisterState::new(
+        let mut canister_state = new_canister_state(
             canister_id,
             user_test_id(1).get(),
             *INITIAL_CYCLES,
@@ -231,7 +232,7 @@ fn build_streams_local_canisters() {
             provided_canister_states
                 .entry(msg.receiver)
                 .or_insert_with(|| {
-                    CanisterState::new(
+                    new_canister_state(
                         msg.receiver,
                         msg.sender.get(),
                         *INITIAL_CYCLES,
@@ -266,7 +267,7 @@ fn build_streams_local_canisters() {
             expected_canister_states
                 .entry(msg.receiver)
                 .or_insert_with(|| {
-                    CanisterState::new(
+                    new_canister_state(
                         msg.receiver,
                         msg.sender.get(),
                         *INITIAL_CYCLES,
@@ -501,7 +502,7 @@ fn generate_provided_canister_states(msgs: Vec<Request>) -> BTreeMap<CanisterId,
             provided_canister_states
                 .entry(msg.sender)
                 .or_insert_with(|| {
-                    CanisterState::new(
+                    new_canister_state(
                         msg.sender,
                         msg.sender.get(),
                         *INITIAL_CYCLES,
@@ -524,7 +525,7 @@ fn generate_expected_canister_states(msgs: Vec<Request>) -> BTreeMap<CanisterId,
             expected_canister_states
                 .entry(msg.sender)
                 .or_insert_with(|| {
-                    CanisterState::new(
+                    new_canister_state(
                         msg.sender,
                         msg.sender.get(),
                         *INITIAL_CYCLES,

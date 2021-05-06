@@ -1,5 +1,5 @@
-// Tests for known vulnerabilities of crypto implementations,
-// based on Project Wycheproof (https://github.com/google/wycheproof)
+//! Adapted from [OpenSK](https://github.com/google/OpenSK/)
+#![allow(clippy::unwrap_used)]
 use openssl::sha::sha256;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -125,9 +125,7 @@ struct Key {
 
 #[test]
 fn wycheproof_ecdsa_secp256k1_sha256_p1363() {
-    let wycheproof =
-        load_tests("test_resources/ecdsa/wycheproof/ecdsa_secp256k1_sha256_p1363_test.json")
-            .unwrap();
+    let wycheproof = load_tests("test_resources/ecdsa_secp256k1_sha256_p1363_test.json").unwrap();
     wycheproof.type_check(type_check_k1);
     assert!(wycheproof.run_tests(run_tests_k1));
 }
@@ -220,9 +218,7 @@ fn run_test_k1(
 
 #[test]
 fn wycheproof_ecdsa_secp256r1_sha256_p1363() {
-    let wycheproof =
-        load_tests("test_resources/ecdsa/wycheproof/ecdsa_secp256r1_sha256_p1363_test.json")
-            .unwrap();
+    let wycheproof = load_tests("test_resources/ecdsa_secp256r1_sha256_p1363_test.json").unwrap();
     wycheproof.type_check(type_check_r1);
     assert!(wycheproof.run_tests(run_tests_r1));
 }

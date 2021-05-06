@@ -1,3 +1,6 @@
+//! A custom, configurable TLS client that does not rely on the crypto
+//! implementation. It is purely for testing the server.
+#![allow(clippy::unwrap_used)]
 use crate::tls::set_peer_verification_cert_store;
 use crate::tls::x509_certificates::CertWithPrivateKey;
 use ic_protobuf::registry::crypto::v1::X509PublicKeyCert;
@@ -13,6 +16,8 @@ const DEFAULT_MAX_PROTO_VERSION: SslVersion = SslVersion::TLS1_3;
 const DEFAULT_ALLOWED_CIPHER_SUITES: &str = "TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384";
 const DEFAULT_ALLOWED_SIGNATURE_ALGORITHMS: &str = "ed25519";
 
+/// A builder that allows to configure and build a `CustomClient` using a fluent
+/// API.
 pub struct CustomClientBuilder {
     max_proto_version: Option<SslVersion>,
     allowed_cipher_suites: Option<String>,
@@ -23,7 +28,6 @@ pub struct CustomClientBuilder {
     msg_expected_from_server: Option<String>,
 }
 
-#[allow(unused)]
 impl CustomClientBuilder {
     pub fn with_max_protocol_version(mut self, version: SslVersion) -> Self {
         self.max_proto_version = Some(version);
@@ -46,7 +50,7 @@ impl CustomClientBuilder {
         self
     }
 
-    pub fn with_default_client_auth(mut self, client_node: NodeId) -> Self {
+    pub fn with_default_client_auth(self, client_node: NodeId) -> Self {
         self.with_client_auth(
             CertWithPrivateKey::builder()
                 .cn(client_node.to_string())
@@ -124,6 +128,8 @@ impl CustomClient {
         }
     }
 
+    /// Run this client asynchronously. This tries to connect to the configured
+    /// server.
     pub async fn run(self, server_port: u16) {
         let tcp_stream = TcpStream::connect(("127.0.0.1", server_port))
             .await
@@ -201,6 +207,7 @@ impl CustomClient {
             .expect("Failed to set the sigalgs list.");
     }
 
+    /// Returns the certificate used for client authentication.
     pub fn client_auth_cert(&self) -> X509PublicKeyCert {
         if let Some((_, cert)) = &self.client_auth_data {
             return X509PublicKeyCert {

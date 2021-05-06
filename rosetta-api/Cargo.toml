@@ -1,7 +1,7 @@
 
 [package]
 name = "ic-rosetta-api"
-version = "0.0.1"
+version = "1.0.2"
 authors = ["The Internet Computer Project Developers"]
 description = "Build Once. Integrate Your Blockchain Everywhere. "
 edition = "2018"
@@ -41,6 +41,7 @@ cycles-minting-canister = {path = "cycles_minting_canister"}
 rand = "0.7"
 structopt = "0.3.20"
 async-trait = "0.1.41"
+reqwest = "0.10.10"
 tokio = { version = "0.2.22", features = ["full"] }
 shadow-rs = { version = "0.5", default-features = false, features = [] }
 tree-deserializer = { path = "../tree_deserializer" }

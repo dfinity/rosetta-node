@@ -227,8 +227,9 @@ pub(crate) fn update_summary_block(
                 .find(|block| block.height() == start_height)
                 .unwrap_or_else(|| {
                     panic!(
-                        "Failed to find parent block at DKG start height {}",
-                        start_height
+                        "No DKG summary block found between summary block at height {} and finalized tip at height {}",
+                        summary_height,
+                        finalized_tip.height(),
                     )
                 });
             assert!(

@@ -1,3 +1,4 @@
+//! Static crypto utility methods.
 use crate::common::utils::dkg::InitialDkgConfig;
 use crate::CryptoComponent;
 use ic_config::crypto::CryptoConfig;
@@ -75,6 +76,9 @@ pub fn generate_dkg_dealing_encryption_keys(crypto_root: &Path, node_id: NodeId)
     ic_crypto_internal_csp::keygen::utils::dkg_dealing_encryption_pk_to_proto(pubkey, pop)
 }
 
+/// Obtains the node keys or generates them for the given `node_id` if they are
+/// missing.
+///
 /// Retrieves the node's public keys from `crypto_root`, and checks their
 /// consistency with the secret keys.
 /// If there are no public keys in `crypto_root`, new keys are generated: the
@@ -82,11 +86,10 @@ pub fn generate_dkg_dealing_encryption_keys(crypto_root: &Path, node_id: NodeId)
 /// stored in the public key store.
 ///
 /// # Panics
+///  * if public keys exist but are inconsistent with the secret keys.
+///  * if an error occurs when accessing or generating the key.
 ///
-///  - panics if public keys exist but are inconsistent with the secret keys.
-///  - panics if an error occurs when accessing or generating the key.
-///
-/// NOTE:
+/// # Notes
 /// There are two variants of the function:
 /// - `get_node_keys_or_generate_if_missing_for_node_id()` which takes an
 ///   additional `node_id` argument, and uses it when generating TLS keys.  This
@@ -97,9 +100,8 @@ pub fn generate_dkg_dealing_encryption_keys(crypto_root: &Path, node_id: NodeId)
 ///   when generating TLS keys, and returns `node_id` together with all the
 ///   generated public keys.  This is the variant to be used eventually by node
 ///   manager and other clients.
-///
-/// TODO(CRP-356): remove the note above and the temporary variant
-/// `get_node_keys_or_generate_if_missing_for_node_id()`.
+// TODO(CRP-356): remove the note above and the temporary variant
+// `get_node_keys_or_generate_if_missing_for_node_id()`.
 pub fn get_node_keys_or_generate_if_missing_for_node_id(
     crypto_root: &Path,
     node_id: NodeId,
@@ -119,7 +121,8 @@ pub fn get_node_keys_or_generate_if_missing_for_node_id(
                 tls_certificate: Some(tls_certificate),
                 dkg_dealing_encryption_pk: Some(dkg_dealing_encryption_pk),
             };
-            store_public_keys(crypto_root, &node_pks);
+            public_key_store::store_node_public_keys(crypto_root, &node_pks)
+                .unwrap_or_else(|_| panic!("Failed to store public key material"));
             // Re-check the generated keys.
             let stored_keys = check_keys_locally(crypto_root)
                 .expect("Could not read generated keys.")
@@ -134,6 +137,10 @@ pub fn get_node_keys_or_generate_if_missing_for_node_id(
     }
 }
 
+/// Obtains the node keys or generates them if they are missing.
+///
+/// Please refer to the documentation of
+/// `get_node_keys_or_generate_if_missing_for_node_id` for more details.
 pub fn get_node_keys_or_generate_if_missing(crypto_root: &Path) -> (NodePublicKeys, NodeId) {
     match check_keys_locally(crypto_root) {
         Ok(None) => {
@@ -151,7 +158,8 @@ pub fn get_node_keys_or_generate_if_missing(crypto_root: &Path) -> (NodePublicKe
                 tls_certificate: Some(tls_certificate),
                 dkg_dealing_encryption_pk: Some(dkg_dealing_encryption_pk),
             };
-            store_public_keys(crypto_root, &node_pks);
+            public_key_store::store_node_public_keys(crypto_root, &node_pks)
+                .unwrap_or_else(|_| panic!("Failed to store public key material"));
             // Re-check the generated keys.
             let stored_keys = check_keys_locally(crypto_root)
                 .expect("Could not read generated keys.")
@@ -194,10 +202,6 @@ fn generate_node_signing_keys(crypto_root: &Path) -> PublicKeyProto {
         },
         _ => panic!("Unexpected types"),
     }
-}
-
-fn store_public_keys(crypto_root: &Path, node_pks: &NodePublicKeys) {
-    public_key_store::store_node_public_keys(crypto_root, node_pks).unwrap();
 }
 
 fn read_public_keys(crypto_root: &Path) -> CryptoResult<NodePublicKeys> {
@@ -300,7 +304,7 @@ fn generate_tls_keys(crypto_root: &Path, node: NodeId) -> X509PublicKeyCert {
     csp.gen_tls_key_pair(node, "99991231235959Z")
 }
 
-fn csp_at_root(crypto_root: &Path) -> Csp<OsRng, ProtoSecretKeyStore> {
+pub(crate) fn csp_at_root(crypto_root: &Path) -> Csp<OsRng, ProtoSecretKeyStore> {
     let config = config_with_dir_and_permissions(crypto_root);
     // disable metrics
     Csp::new(&config, None, None)
@@ -313,11 +317,4 @@ fn config_with_dir_and_permissions(crypto_root: &Path) -> CryptoConfig {
     CryptoConfig::set_dir_with_required_permission(&config.crypto_root)
         .expect("Could not setup crypto_root directory");
     config
-}
-
-pub fn csp() -> Csp<OsRng, ProtoSecretKeyStore> {
-    let path = std::env::current_dir()
-        .expect("Cannot get current working directory")
-        .join(".secret_key_store");
-    csp_at_root(&path)
 }

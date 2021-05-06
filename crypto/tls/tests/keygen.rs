@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use ic_crypto_tls::generate_tls_keys;
 use openssl::asn1::Asn1Time;
 use openssl::bn::BigNum;

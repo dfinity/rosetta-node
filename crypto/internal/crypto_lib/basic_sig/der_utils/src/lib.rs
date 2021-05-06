@@ -1,3 +1,6 @@
+#![forbid(unsafe_code)]
+#![deny(clippy::unwrap_used)]
+
 use simple_asn1::{ASN1Block, ASN1Class, BigInt, BigUint, OID};
 
 #[cfg(test)]

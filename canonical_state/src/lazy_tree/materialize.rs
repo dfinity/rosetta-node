@@ -1,7 +1,11 @@
+//! Support for materializing (part of) a [`LazyTree`] as a [`LabeledTree`].
+
 use super::LazyTree;
 use ic_crypto_tree_hash::{FlatMap, Label, LabeledTree};
 use LazyTree::*;
 
+/// A pattern to be used for fitering the parts of a [`LazyTree`] to be
+/// materialized. A [`LabeledTree`] with no values.
 pub type TreePattern = LabeledTree<()>;
 
 fn materialize(lazy_tree: &LazyTree<'_>) -> Option<LabeledTree<Vec<u8>>> {
@@ -32,7 +36,8 @@ fn materialize(lazy_tree: &LazyTree<'_>) -> Option<LabeledTree<Vec<u8>>> {
 /// represented as a LabeledTree, without data in the leaves).
 ///
 /// This is used in the implementation of the `read_state` request, so a
-/// specification can be found in the Interface Spec, section on Lookup in certification (https://docs.dfinity.systems/public/#_lookup)
+/// specification can be found in the Interface Spec, section on Lookup in
+/// certification (https://sdk.dfinity.org/docs/interface-spec/index.html#_lookup)
 ///
 /// The spec requires that the resulting certificate also proves the absence of
 /// a prefix; this is not yet implemented. Once it is implemented, remove the

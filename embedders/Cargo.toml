@@ -7,7 +7,6 @@ edition = "2018"
 anyhow = "1.0.31"
 clap = "2.33.3"
 crossbeam-channel = "0.5.0"
-ic-canister-sandbox-common = { path = "../canister_sandbox/common" }
 ic-config = { path = "../config" }
 ic-cow-state = { path = "../cow_state" }
 ic-cycles-account-manager = { path = "../cycles_account_manager" }
@@ -50,9 +49,3 @@ slog-async = "2.5.0"
 slog-term = "2.6.0"
 # TODO(EXC-220)
 wabt = { git = "https://github.com/dfinity-lab/wabt-rs", rev = "b4d778802976f10494411388e48a784d4d015bbb" }
-
-[[bench]]
-name = "wasmtime_create_module"
-harness = false
-# don't run by default. requires explicit `cargo bench --bench NAME`
-bench = false

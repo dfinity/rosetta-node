@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use super::*;
 use openssl::pkey::{Id, Public};
 use openssl::x509::X509VerifyResult;
@@ -142,6 +143,14 @@ fn should_set_not_after_correctly() {
     let (cert, _sk) = generate_tls_key_pair("common name", SERIAL, not_after);
 
     assert!(cert.not_after() == not_after);
+}
+
+#[test]
+fn should_redact_tls_ed25519_secret_key_der_bytes_debug() {
+    let sk = TlsEd25519SecretKeyDerBytes {
+        bytes: vec![1u8, 5],
+    };
+    assert_eq!(format!("{:?}", sk), "REDACTED");
 }
 
 fn not_after() -> Asn1Time {

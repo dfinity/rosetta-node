@@ -1,9 +1,12 @@
 //! Control plane - Transport connection management.
 //!
-//! The control plane handles tokio/tls related details of connection
+//! The control plane handles tokio/TLS related details of connection
 //! management.  This component establishes/accepts connections
 //! to/from subnet peers. The component also manages re-establishment
 //! of severed connections.
+//!
+//! The control plane module implements control plane functionality for
+//! [`TransportImpl`](../types/struct.TransportImpl.html).
 
 use crate::types::{
     ClientState, ConnectionState, FlowState, PeerState, QueueSize, ServerPort, TransportImpl,
@@ -30,16 +33,16 @@ use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::delay_for;
 
-// Unsuccessful connection attempts are retried after
-// CONNECTION_RETRY_SECONDS
+/// Time to wait before retrying an unsuccessful connection attempt
 const CONNECT_RETRY_SECONDS: u64 = 3;
 
-// Timeout for accept() poll.
+/// Timeout for accept() poll
 const CANCEL_CHECK_PERIOD_MILLISECONDS: u64 = 100;
 
-// Connection accept backlog
+/// Connection accept backlog
 const ACCEPT_BACKLOG: i32 = 128;
 
+/// Connection status values
 #[derive(Debug)]
 enum ConnectStatus {
     Success(TcpStream),
@@ -47,7 +50,9 @@ enum ConnectStatus {
     Error(nix::errno::Errno),
 }
 
+/// Implementation for the transport control plane
 impl TransportImpl {
+    /// Starts connection to a peer
     pub fn start_peer_connections(
         &self,
         peer_id: &NodeId,
@@ -76,6 +81,7 @@ impl TransportImpl {
         self.start_peer(client_type, peer_id, peer_record, client_state)
     }
 
+    /// Stops connection to a peer
     pub fn stop_peer_connections(
         &self,
         client_type: TransportClientType,
@@ -105,6 +111,8 @@ impl TransportImpl {
         Ok(())
     }
 
+    /// Starts all connections to a peer and initializes the corresponding data
+    /// structures and tasks
     fn start_peer(
         &self,
         client_type: TransportClientType,
@@ -122,9 +130,7 @@ impl TransportImpl {
             connect_cancelers: Vec::new(),
         };
 
-        // TODO: unify TransportConfig and NodeRecord.  Currently we listen based on
-        // TransportConfig and connect based on NodeRecord, but the queue size is
-        // present only in the TransportConfig.
+        // TODO: P2P-514
         let mut queue_size_map = HashMap::new();
         let flow_ips = get_flow_ips(peer_record)?;
         for flow_config in &self.config.p2p_flows {
@@ -233,7 +239,7 @@ impl TransportImpl {
         Ok(())
     }
 
-    // Cleans up the peer state
+    /// Cleans up the peer state
     fn free_peer(&self, peer_state: &PeerState) {
         // Stop the connect futures
         for canceler in &peer_state.connect_cancelers {
@@ -241,7 +247,7 @@ impl TransportImpl {
         }
     }
 
-    // Starts the async task to accept the incoming TcpStreams in server mode.
+    /// Starts the async task to accept the incoming TcpStreams in server mode.
     fn spawn_accept_task(
         &self,
         client_type: TransportClientType,
@@ -264,9 +270,7 @@ impl TransportImpl {
                     _ => return,
                 };
                 let timeout = delay_for(Duration::from_millis(CANCEL_CHECK_PERIOD_MILLISECONDS));
-                // TODO: switch to select! when we can get a Delay which supports FusedFuture
-                // as the current tokio timeouts/delays do not.  select! is preferrable because
-                // it does not consume the accept future unless it is ready.
+                // TODO: P2P-515
                 match future::select(tcp_listener.accept().boxed(), timeout).await {
                     Either::Left((result, _)) => {
                         match result {
@@ -310,6 +314,8 @@ impl TransportImpl {
         });
     }
 
+    /// Spawn a task that tries to connect to a peer (forever, or until
+    /// connection is established or peer is removed)
     #[allow(clippy::too_many_arguments)]
     fn spawn_connect_task(
         &self,
@@ -386,9 +392,9 @@ impl TransportImpl {
         });
     }
 
-    // Handles the handshake completion during connection establishment (both
-    // server/client sides). Does the validation, sets up the connection state
-    // and spawns the read task for the connection.
+    /// Handles the handshake completion during connection establishment (both
+    /// server/client sides). Does the validation, sets up the connection state
+    /// and spawns the read task for the connection.
     #[allow(clippy::too_many_arguments)]
     async fn process_handshake_result(
         &self,
@@ -417,8 +423,7 @@ impl TransportImpl {
 
             // Update the connection state for the flow
             if let ConnectionState::Connected(_) = flow_state.connection_state {
-                // Drop the connection if we already have an active connection to the server
-                // port. TODO: move this check before doing the TCP/TLS handshake
+                // TODO: P2P-516
                 return Ok(());
             }
             self.set_connection_state(flow_state, &ConnectionState::Connected(peer_addr));
@@ -450,11 +455,13 @@ impl TransportImpl {
             })
     }
 
+    /// Sets the state of a given flow connection
     fn set_connection_state(&self, flow_state: &mut FlowState, connection_state: &ConnectionState) {
         flow_state.connection_state = *connection_state;
         self.report_connection_state(flow_state);
     }
 
+    /// Reports the state of a flow to metrics
     fn report_connection_state(&self, flow_state: &FlowState) {
         let value = match flow_state.connection_state {
             ConnectionState::Listening => 1,
@@ -467,6 +474,7 @@ impl TransportImpl {
             .set(value);
     }
 
+    /// Retries to establish a connection
     pub fn retry_connection(&self, flow_id: &FlowId) -> Result<(), TransportErrorCode> {
         warn!(
             self.log,
@@ -549,7 +557,7 @@ impl TransportImpl {
         Ok(())
     }
 
-    // Set up the client socket, and connect to the specified server peer
+    /// Set up the client socket, and connect to the specified server peer
     async fn connect_to_server(
         local_addr: &SockAddr,
         peer_addr: &SockAddr,
@@ -603,6 +611,7 @@ impl TransportImpl {
         }
     }
 
+    /// Set socket options on a socket
     fn set_send_sockopts(
         stream: TcpStream,
         log: &ReplicaLogger,
@@ -626,7 +635,7 @@ impl TransportImpl {
         }
     }
 
-    // Performs the server side TLS hand shake processing
+    /// Performs the server side TLS hand shake processing
     async fn tls_server_handshake(
         &self,
         client_type: TransportClientType,
@@ -715,7 +724,7 @@ impl TransportImpl {
         })
     }
 
-    // Performs the client side TLS hand shake processing
+    /// Performs the client side TLS hand shake processing
     async fn tls_client_handshake(
         &self,
         peer_id: NodeId,
@@ -778,7 +787,7 @@ impl TransportImpl {
         }
     }
 
-    // Sets up the server side socket with the node IP:port
+    /// Sets up the server side socket with the node IP:port
     fn init_std_listener(
         &self,
         local_addr: &SockAddr,
@@ -824,7 +833,7 @@ impl TransportImpl {
         Ok(socket.into_tcp_listener())
     }
 
-    // Sets up the client side socket with the node IP address
+    /// Sets up the client side socket with the node IP address
     fn init_client_socket(
         local_addr: &SockAddr,
         log: &ReplicaLogger,
@@ -854,12 +863,12 @@ impl TransportImpl {
         Ok(socket)
     }
 
-    // Returns true if the peer should act as the TCP server
+    /// Returns true if the peer should act as the TCP server
     fn is_peer_server(my_id: &NodeId, peer: &NodeId) -> bool {
         *peer > *my_id
     }
 
-    // Parses the connect() result and returns the status
+    /// Parses the `connect()` result and returns the status
     fn connect_status(connect_result: std::io::Result<TcpStream>) -> ConnectStatus {
         if let Ok(stream) = connect_result {
             return ConnectStatus::Success(stream);
@@ -874,11 +883,12 @@ impl TransportImpl {
         }
     }
 
-    // Extract the socket address from the result
+    /// Extract the socket address from the result
     fn sock_addr(result: std::io::Result<SocketAddr>) -> Result<SocketAddr, TransportErrorCode> {
         result.map_err(|_| TransportErrorCode::InvalidSockAddr)
     }
 
+    /// Returns the socket address based on the address family
     fn get_socket_addr(addr: &SockAddr) -> SocketAddr {
         match addr.as_inet() {
             Some(a) => a.into(),
@@ -886,6 +896,7 @@ impl TransportImpl {
         }
     }
 
+    /// Initilizes a client
     pub fn init_client(
         &self,
         client_type: TransportClientType,

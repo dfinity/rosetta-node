@@ -5,15 +5,21 @@ set -euo pipefail
 
 ROSETTA_NODE_PATH=~/rosetta-node2
 
+ROSETTA_TMPDIR=$(mktemp -d)
+
+mv $ROSETTA_NODE_PATH/.git $ROSETTA_TMPDIR
+
 rm -rf $ROSETTA_NODE_PATH/*
+
+mv $ROSETTA_TMPDIR/.git $ROSETTA_NODE_PATH
+
+rm -rf $ROSETTA_TMPDIR
 
 cp --parents -r \
   artifact_manager \
   artifact_pool \
-  base/server \
-  base/thread \
+  base \
   canister_client \
-  canister_sandbox \
   canonical_state \
   certified_vars \
   config \
@@ -47,13 +53,13 @@ cp --parents -r \
   registry/subnet_type \
   registry/transport \
   replica \
-  replicated_state \
   replica_tests \
+  replicated_state \
   rosetta-api \
   runtime \
   rust_canisters/canister_test \
-  rust_canisters/dfn_candid \
   rust_canisters/dfn_core \
+  rust_canisters/dfn_candid \
   rust_canisters/dfn_http \
   rust_canisters/dfn_json \
   rust_canisters/dfn_macro \
@@ -66,12 +72,7 @@ cp --parents -r \
   test_utilities \
   transport \
   tree_deserializer \
-  types/base_types \
-  types/error_types \
-  types/ic00_types \
-  types/types \
-  types/types_test_utils \
-  types/wasm_types \
+  types \
   universal_canister/lib \
   utils \
   validator \

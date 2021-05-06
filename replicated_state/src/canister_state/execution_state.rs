@@ -306,27 +306,6 @@ impl ExecutionState {
     pub fn num_wasm_globals(&self) -> usize {
         self.exported_globals.len()
     }
-
-    /// Creates a new branch for executing messages which will either
-    /// be dropped in case of failed execution or merged in case of
-    /// success. Multiple such branches can exist simultaneously. A
-    /// branch can be logically merged in the replica side by simply
-    /// dropping the returned `ExecutionState`. Note(eftychis): The
-    /// merging behaviour at the sandbox process is contingent on
-    /// future callback manager changes. Namely, the sandbox and the
-    /// runtime controller, close stated contningent on no callbacks
-    /// having registered. (This logic should be gathered when
-    /// callback manager is refactored and ii) when we have proper
-    /// MappedState support for repeated commits.)
-    ///  We clone the current `ExecutionState` and mark it as
-    /// representing a new session. This means that a new temporary
-    /// state is going to be generated and opened by runtime, starting
-    /// at the indicated tagged round.
-    pub fn create_branch(&self) -> Self {
-        let mut new_state = self.clone();
-        new_state.session_nonce = None;
-        new_state
-    }
 }
 
 fn data_to_page_delta(segments: Segments) -> PageDelta {

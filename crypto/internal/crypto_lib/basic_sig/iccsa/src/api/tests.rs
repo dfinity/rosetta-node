@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use super::*;
 use ic_crypto::threshold_sig_public_key_from_der;
 use ic_crypto_internal_test_vectors::iccsa;

@@ -1,5 +1,8 @@
 use std::{fs, io, path::Path};
 
+/// The character length of the random string used for temporary file names.
+const TMP_NAME_LEN: usize = 7;
+
 /// Represents an action that should be run when this objects runs out of scope,
 /// unless it's explicitly deactivated.
 ///
@@ -66,13 +69,14 @@ where
 /// # Panics
 ///
 ///   Doesn't panic unless `action` panics.
+#[cfg(target_family = "unix")]
 pub fn write_atomically_using_tmp_file<PDst, PTmp, F>(
     dst: PDst,
     tmp: PTmp,
     action: F,
 ) -> io::Result<()>
 where
-    F: FnOnce(&mut io::BufWriter<fs::File>) -> io::Result<()>,
+    F: FnOnce(&mut io::BufWriter<&fs::File>) -> io::Result<()>,
     PDst: AsRef<Path>,
     PTmp: AsRef<Path>,
 {
@@ -85,9 +89,12 @@ where
         .write(true)
         .create(true)
         .open(tmp.as_ref())?;
-    let mut w = io::BufWriter::new(f);
-    action(&mut w)?;
-    w.flush()?;
+    {
+        let mut w = io::BufWriter::new(&f);
+        action(&mut w)?;
+        w.flush()?;
+    }
+    f.sync_all()?;
     fs::rename(tmp.as_ref(), dst.as_ref())?;
 
     cleanup.deactivate();
@@ -301,15 +308,31 @@ pub fn copy_file_sparse(from: &Path, to: &Path) -> io::Result<u64> {
 #[cfg(target_family = "unix")]
 pub fn write_atomically<PDst, F>(dst: PDst, action: F) -> io::Result<()>
 where
-    F: FnOnce(&mut io::BufWriter<fs::File>) -> io::Result<()>,
+    F: FnOnce(&mut io::BufWriter<&fs::File>) -> io::Result<()>,
     PDst: AsRef<Path>,
 {
     // `.parent()` returns `None` for either `/` or a prefix (e.g. 'c:\\` on
     // windows). `write_atomically` is only available on UNIX, so we default to
     // `/` in case `.parent()` returns `None`.
-    let tmp_file =
-        tempfile::NamedTempFile::new_in(dst.as_ref().parent().unwrap_or_else(|| Path::new("/")))?;
-    write_atomically_using_tmp_file(dst, tmp_file.path(), action)
+    let tmp_path = dst
+        .as_ref()
+        .parent()
+        .unwrap_or_else(|| Path::new("/"))
+        .join(tmp_name());
+
+    write_atomically_using_tmp_file(dst, tmp_path.as_path(), action)
+}
+
+#[cfg(target_family = "unix")]
+fn tmp_name() -> String {
+    use rand::{distributions::Alphanumeric, Rng};
+
+    let mut rng = rand::thread_rng();
+    std::iter::repeat(())
+        .map(|_| rng.sample(Alphanumeric))
+        .map(char::from)
+        .take(TMP_NAME_LEN)
+        .collect()
 }
 
 #[cfg(test)]

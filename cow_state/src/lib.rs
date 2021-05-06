@@ -52,7 +52,7 @@ const HEAP_OFFSET: u64 = GLOBALS_OFFSET as u64 + GLOBALS_LEN as u64;
 #[cfg(not(test))]
 const HEAP_LEN: usize = 2 * 1024 * 1024; // 2Million pages ~ 8GB
 
-const STATE_MAGIC: u64 = 0x0044_4649_4e49_5459; // DFINITY in hex
+const STATE_MAGIC: u64 = 0x0044_4649_4e49_5459;
 const STATE_VERSION: u64 = 0x1;
 
 #[cfg(not(test))]
@@ -116,16 +116,6 @@ impl Default for StateMeta {
     }
 }
 
-// Comment(eftychis): Do NOT Add Sync without prior discussion. While
-// we can move `MappedState` across threads, the type is not meant to
-// be modified or accessed in parallel at this point. Furthermore,
-// after a soft commit right now the state is not supposed to be
-// modified further. We effectively have assumed so far a single
-// owner. Thus, any such modification should be reviewed at least by
-// @Kiran Joshi, even if it seemingly works.
-//
-// TODO(eftychis): Improve the MappedState type to repeated
-// soft commits.
 #[enum_dispatch]
 pub trait MappedState: Send {
     /// Returns the base of memory region where canister
@@ -405,7 +395,6 @@ impl<T: AccessPolicy> MappedStateCommon<T> {
     }
 
     fn copy_from_heap(&self, offset: u64, len: u64) -> &[u8] {
-        // FixME: add validations here
         unsafe {
             let base = self.get_heap_base().add(offset as usize);
             reset_mem_protection(base, len as usize, PROT_READ);

@@ -1,3 +1,6 @@
+//! Canonical State [`Visitor`] that filters the nodes seen by a wrapped
+//! `Visitor` to those matchng a given pattern.
+
 use crate::visitor::{Control, Visitor};
 use std::collections::BTreeMap;
 

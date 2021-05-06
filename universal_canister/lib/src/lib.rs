@@ -22,8 +22,6 @@ pub const UNIVERSAL_CANISTER_WASM_SHA256: [u8; 32] =
     hex!("4b3da0f75a3b74a4b31a61e4d83c890ea420a4a1b47232f7f489c0c5e4122f54");
 
 /// Operands used in encoding UC payloads.
-///
-/// Reference: https://github.com/dfinity-lab/ic-ref/blob/069316b7250d9e4776746a6e5e31160598b471c3/impl/src/IC/Test/Universal.hs
 enum Ops {
     Noop = 0,
     PushInt = 2,

@@ -216,9 +216,9 @@ pub async fn start_server(
     info!(log, "Starting HTTP server...");
 
     let listen_addr = http_handler.config.listen_addr;
-    // Temporarily listen on [::] so that we accept both IPv4 and IPv6 connections.
-    // This requires net.ipv6.bindv6only = 0.  TODO: revert this once we have rolled
-    // out IPv6 in prometheus and ic_p8s_service_discovery.
+    // TODO(OR4-60): temporarily listen on [::] so that we accept both IPv4 and
+    // IPv6 connections. This requires net.ipv6.bindv6only = 0. Revert this once
+    // we have rolled out IPv6 in prometheus and ic_p8s_service_discovery.
     let mut addr = "[::]:8080".parse::<SocketAddr>().unwrap();
     addr.set_port(listen_addr.port());
 
@@ -253,7 +253,7 @@ pub async fn start_server(
         match tcp_listener.accept().await {
             Ok((mut tcp_stream, _)) => {
                 tokio::task::spawn(async move {
-                    // Do a move of the permit so it get's dropped at the end of the scope.
+                    // Do a move of the permit so it gets dropped at the end of the scope.
                     let _request_permit_deleter = request_permit;
                     let mut b = [0 as u8; 1];
                     if tcp_stream.peek(&mut b).await.is_ok() && b[0] == 22 {
@@ -266,7 +266,7 @@ pub async fn start_server(
                     }
                 });
             }
-            // Don't exit the loop on a connetion error. We will want to
+            // Don't exit the loop on a connection error. We will want to
             // continue serving.
             Err(err) => {
                 metrics.observe_connection_error(ConnectionError::Accept);

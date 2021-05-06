@@ -2,9 +2,6 @@ syntax = "proto3";
 package registry.replica_version.v1;
 
 // Information about a Replica version
-//
-// Corresponding mutations are handled by the `Upgrades` proposal handler:
-// See /rs/nns/handlers/upgrades/canister/canister.rs
 message ReplicaVersionRecord {
     // The URL against which a HTTP GET request will return a replica binary
     // that corresponds to this version
@@ -32,9 +29,6 @@ message ReplicaVersionRecord {
 //
 // New versions are added here after a vote has been accepted by token
 // holders. Subnetworks can then be upgraded to any of those version.
-//
-// Corresponding mutations are handled by the `Upgrades` proposal handler:
-// See /rs/nns/handlers/upgrades/canister/canister.rs
 message BlessedReplicaVersions {
     // A list of version information ids.
     repeated string blessed_version_ids = 1;

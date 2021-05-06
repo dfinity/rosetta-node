@@ -1,3 +1,6 @@
+#![forbid(unsafe_code)]
+#![deny(clippy::unwrap_used)]
+
 // We follow the notation of the paper to the extent possible.
 //   * As Clippy warns about single-character variable names, we prefix some of
 //     them with `spec_`.

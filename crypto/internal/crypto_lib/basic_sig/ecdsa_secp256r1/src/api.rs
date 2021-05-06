@@ -155,11 +155,11 @@ mod cose {
                 });
             };
             Ok(CoseKeyParts {
-                kty: maybe_kty.unwrap(),
-                alg: maybe_alg.unwrap(),
-                crv: maybe_crv.unwrap(),
-                x: maybe_x.unwrap(),
-                y: maybe_y.unwrap(),
+                kty: maybe_kty.expect("unexpected None"),
+                alg: maybe_alg.expect("unexpected None"),
+                crv: maybe_crv.expect("unexpected None"),
+                x: maybe_x.expect("unexpected None"),
+                y: maybe_y.expect("unexpected None"),
                 maybe_key_ops,
             })
         } else {

@@ -12,7 +12,6 @@ pub use dispatcher::ReturnToken;
 pub use dispatcher::RunnerConfig;
 pub use dispatcher::RunnerInput;
 pub use dispatcher::RunnerOutput;
-use ic_canister_sandbox_common::protocol::structs::{ExecInput, ExecOutput};
 use ic_config::embedders::PersistenceType;
 use ic_cycles_account_manager::CyclesAccountManager;
 use ic_interfaces::execution_environment::{
@@ -152,7 +151,6 @@ impl<T: 'static> ExecSelect<T> {
 
 // An async result of wasm execution.
 // Cannot be cloned. Can only be consumed.
-// TODO what to do if a result gets dropped without being consumed?
 pub struct WasmExecutionResult {
     pub output_receiver: crossbeam_channel::Receiver<RunnerOutput>,
 }
@@ -209,21 +207,6 @@ pub struct WasmExecutionInput {
     pub cycles_account_manager: Arc<CyclesAccountManager>,
 }
 
-impl From<&WasmExecutionInput> for ExecInput {
-    fn from(input: &WasmExecutionInput) -> Self {
-        Self {
-            func_ref: input.func_ref.clone(),
-            api_type: input.api_type.clone(),
-            instructions_limit: input.instructions_limit,
-            globals: input.execution_state.exported_globals.clone(),
-            canister_memory_limit: input.canister_memory_limit,
-            canister_current_memory_usage: input.canister_current_memory_usage,
-            subnet_available_memory: input.subnet_available_memory.clone(),
-            compute_allocation: input.compute_allocation,
-        }
-    }
-}
-
 pub struct WasmExecutionOutput {
     pub wasm_result: Result<Option<WasmResult>, HypervisorError>,
     pub num_instructions_left: NumInstructions,
@@ -231,30 +214,6 @@ pub struct WasmExecutionOutput {
     pub execution_state: ExecutionState,
     pub instance_stats: InstanceStats,
 }
-
-impl WasmExecutionOutput {
-    pub fn from_exec_output(
-        mut execution_state: ExecutionState,
-        ExecOutput {
-            wasm_result,
-            num_instructions_left,
-            globals,
-            instance_stats,
-        }: ExecOutput,
-        system_state: SystemState,
-    ) -> Self {
-        execution_state.exported_globals = globals;
-
-        Self {
-            wasm_result,
-            num_instructions_left,
-            system_state,
-            execution_state,
-            instance_stats,
-        }
-    }
-}
-
 pub struct InstanceRunResult {
     pub dirty_pages: Vec<PageIndex>,
     pub exported_globals: Vec<Global>,

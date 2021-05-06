@@ -1,4 +1,8 @@
-//! Download Prioritizerer maintains an inventory of "all" adverts seen by this
+//! A module that maintains priority of adverts that need to be downloaded.
+//!
+//! <h1>Overview</h1>
+//!
+//! The DownloadPrioritizer maintains an inventory of all adverts seen by this
 //! replica.  This is in contrast to the peer manager that has inventory
 //! on-going downloads from a peer and chunks tracking those downloads.
 //!
@@ -9,10 +13,15 @@
 //! most important  downloads and is consulted by the peer manager to compute
 //! the download order.
 
+/// DownloadPrioritizer trait definition.
+/// Used for adding, removing, and managing adverts per peer, as well as to set
+/// the priority function.
 pub(crate) trait DownloadPrioritizer: Send + Sync {
+    /// Returns the priority of a given advert using the priority function of
+    /// the corresponding client
     fn peek_priority(&self, advert: &GossipAdvert) -> Result<Priority, DownloadPrioritizerError>;
 
-    /// Add/Register the receipt of a advert from a peer.
+    /// Add/Register the receipt of an advert from a peer.
     ///
     /// The same advert may be received from multiple peers.  Prioritization of
     /// added adverts is always in sync with the last updated priority
@@ -23,7 +32,7 @@ pub(crate) trait DownloadPrioritizer: Send + Sync {
         peer_id: NodeId,
     ) -> Result<(), DownloadPrioritizerError>;
 
-    /// Delete a advert.
+    /// Delete an advert.
     ///
     /// The advert may have been received from N peers. Retiring an advert
     /// atomically clears it from download list of all peers.  NOTE: Adverts
@@ -34,9 +43,11 @@ pub(crate) trait DownloadPrioritizer: Send + Sync {
         final_action: AdvertTrackerFinalAction,
     ) -> Result<(), DownloadPrioritizerError>;
 
-    // Similar to delete_advert but deletes an advert from a particular peer.
-    // If this peer was the last peer that with an advert tracker for this
-    // artifact return Ok() and an error otherwise.
+    /// Delete an advert from a specific peer.
+    ///
+    /// Similar to delete_advert but deletes an advert from a particular peer.
+    /// If this peer was the last peer that with an advert tracker for this
+    /// artifact return Ok() and an error otherwise.
     fn delete_advert_from_peer(
         &self,
         id: &ArtifactId,
@@ -44,6 +55,7 @@ pub(crate) trait DownloadPrioritizer: Send + Sync {
         final_action: AdvertTrackerFinalAction,
     ) -> Result<(), DownloadPrioritizerError>;
 
+    /// Clears all adverts for a specific peer.
     fn clear_peer_adverts(
         &self,
         peer_id: NodeId,
@@ -64,49 +76,33 @@ pub(crate) trait DownloadPrioritizer: Send + Sync {
     /// re-attempt downloading the timed out artifact.
     fn reinsert_advert_at_tail(&self, id: &ArtifactId) -> Result<(), DownloadPrioritizerError>;
 
-    // Get the advert received from the particular peer.
+    /// Get the advert as received from the particular peer.
     fn get_advert_from_peer(
         &self,
         id: &ArtifactId,
         peer_id: &NodeId,
     ) -> Result<Option<GossipAdvert>, DownloadPrioritizerError>;
 
-    /// Update priority funcion and advert queues.
+    /// Update priority function and advert queues.
     ///
-    /// 1. the priority functions for all clients.
+    /// This function updates the priority functions for all gossip clients. In
+    /// addition, it updates the advert queues for all peers to reflect the
+    /// updated prioritization.
     ///
-    /// and
-    ///
-    /// 2. Advert queues for all peers to reflect the updated prioritization set
-    /// in step 1.
-    ///
-    /// Atomic update is a simplification and is one of the ways to implement
-    /// priority fns.  A non-atomic version where we calculate priorities on
-    /// shadow structures and then periodically update the peer advert
-    /// priority queues is also a possibility.  In the non-atomic
-    /// implementation, there will be a lag between the clients updating the
-    /// priority_fn and its output getting reflected in the peer's advert
-    /// queues (this trades off performance vs exposure to stale priorities)
-    ///
-    /// NOTE: the function returns a list of adverts that have been dropped by
+    /// The function returns a list of adverts that have been dropped by
     /// the application of the current priority function. Dropped
     /// adverts/artifacts are no longer referenced by the prioritizer. The
     /// return list can be used to clean ancillary data structures, namely the
-    /// under construction list.
+    /// `artifacts_under_construction` list in
+    /// [`DownloadManager`](../download_management/index.html).
     #[must_use]
     fn update_priority_functions(&self, artifact_manager: &dyn ArtifactManager) -> Vec<ArtifactId>;
 
     /// Get peer priority queues.
-    ///
-    ///   a. guarded
-    ///   b. prioritized
-    ///   c. Lazy/Shallow
-    ///
-    ///   download queue for a peer.
-    ///
-    /// This queue/iterator is guarded against simultaneous
-    /// addition/delete/re-prioritization of adverts that are contained
-    /// in the queue.
+    /// Returns a guarded iterator of advert trackers, grouped by priorities,
+    /// for a given peer. This queue/iterator is guarded against
+    /// simultaneous addition/delete/re-prioritization of adverts that are
+    /// contained in the queue.
     ///  (Concurrent operations will block until this queue is destroyed)
     //
     /// These queue elements are real-time prioritized and always
@@ -114,7 +110,9 @@ pub(crate) trait DownloadPrioritizer: Send + Sync {
     /// priority function update.
     ///
     /// This queue returns a lazy iterator of shallow objects (i.e Arc's to
-    /// actual adverts)
+    /// actual adverts). This means that the runtime complexity of this function
+    /// is low and therefore it can be called many times without much
+    /// performance overhead.
     fn get_peer_priority_queues(&self, peer_id: NodeId) -> PeerAdvertQueues<'_>;
 
     /// Given an artifact ID fetches the advert tracker.
@@ -142,18 +140,23 @@ use ic_types::{
 use ic_interfaces::artifact_manager::ArtifactManager;
 
 // Priority function (defaults)
+/// Internal representation of a priority function
 type InternalPriorityFn = Arc<ArtifactPriorityFn>;
+/// Function type that returns a corresponding priority function
 type GetPriorityFn =
     Arc<dyn Fn(&dyn ArtifactManager, ArtifactTag) -> InternalPriorityFn + Send + Sync + 'static>;
 
+/// Returns a default priority value
 fn priority_fn_default(_: &ArtifactId, _: &ArtifactAttribute) -> Priority {
     Priority::Fetch
 }
 
+/// Returns the default priority using the internal representation
 fn get_priority_fn_default(_: &dyn ArtifactManager, _: ArtifactTag) -> InternalPriorityFn {
     Arc::new(Box::new(priority_fn_default))
 }
 
+/// Gets priority function from artifact manager
 fn get_priority_fn_from_manager(
     artifact_manager: &dyn ArtifactManager,
     tag: ArtifactTag,
@@ -164,78 +167,92 @@ fn get_priority_fn_from_manager(
     }
 }
 
-// Track download attempt history for a chunk
+/// Tracks download attempt history for a chunk
 #[derive(Default)]
 struct DownloadAttempt {
-    peers: BTreeSet<NodeId>, // Nodes from which the chunk has been requested
-    in_progress: bool,       /* True if chunk download request is in progress
-                              * (i.e has not timed-out or failed) with
-                              * at least 1 advertiser. */
+    /// Nodes from which the chunk has been requested
+    peers: BTreeSet<NodeId>,
+    /// True if chunk download request is in progress
+    /// (i.e has not timed-out or failed) with
+    /// at least 1 advertiser.
+    in_progress: bool,
 }
 
-//  per chunk download attempts tracker data structure
+/// Per chunk download attempts tracker data structure
 type DownloadAttemptMap = BTreeMap<ChunkId, DownloadAttempt>;
 
+/// A struct that holds information for tracking the state of an advert
 pub(crate) struct AdvertTracker {
-    pub advert: GossipAdvert,                 // Advert for this tracker
-    pub peers: Vec<NodeId>,                   // Peers that have advertised this advert
-    download_attempt_map: DownloadAttemptMap, // Per chunk download attempt history map
-    priority: Priority,                       // Priority as computed by the last priority function
+    /// Advert for this tracker
+    pub advert: GossipAdvert,
+    /// Peers that have advertised this advert
+    pub peers: Vec<NodeId>,
+    /// Per chunk download attempt history map
+    download_attempt_map: DownloadAttemptMap,
+    /// Priority as computed by the last priority function
+    priority: Priority,
 }
 
-// Chunk download attempt tracker
-//
-// This trait primarily assists in timeout and error handling.  It is a
-// book-keeping trait that helps the download manager remember a "short"
-// download history for a chunk download.
-//
-// The history is short as it only remembers 1 last round worth of
-// chunk download attempts. aka an "attempt round"
-//
-// For every downloadable chunk an "attempt round" consists of each of its
-// advertiser being requested once for the chunk. The advertiser are probed one
-// at a time in no particular order. Any peer that has BW available can initiate
-// a chunk request given no other peer is downloading the same chunk in
-// parallel.
-//
-// A round completes when
-// a. A peer successfully downloads the chunk
-// b. All peers have failed once. At this point the download attempt history is
-// reset
-//
-// Once reset the chunk download attempt is evaluated afresh as per
-// the above rules.
-//
-// This assures that the download will eventually succeed by requesting the
-// chunk from an honest peer.
-//
-// max duplicity or download duplicity is built on top of the above
-// construct and maintains the invariant provided by above logic.
+/// Chunk download attempt tracker
+///
+/// This trait primarily assists in timeout and error handling.  It is a
+/// book-keeping trait that helps the download manager remember a "short"
+/// download history for a chunk download.
+///
+/// The history is short as it only remembers 1 last round worth of
+/// chunk download attempts. aka an "attempt round"
+///
+/// For every downloadable chunk an "attempt round" consists of each of its
+/// advertiser being requested once for the chunk. The advertiser are probed one
+/// at a time in no particular order. Any peer that has BW available can
+/// initiate a chunk request given no other peer is downloading the same chunk
+/// in parallel.
+///
+/// A round completes when
+/// a. A peer successfully downloads the chunk
+/// b. All peers have failed once. At this point the download attempt history is
+/// reset
+///
+/// Once reset the chunk download attempt is evaluated afresh as per
+/// the above rules.
+///
+/// This assures that the download will eventually succeed by requesting the
+/// chunk from an honest peer.
+///
+/// max duplicity or download duplicity is built on top of the above
+/// construct and maintains the invariant provided by above logic.
 pub(crate) trait DownloadAttemptTracker {
-    // Record a chunk download attempt by a peer.  This signifies that this chunk
-    // download was attempted in this attempt round  by a peer.
+    /// Record a chunk download attempt by a peer.  This signifies that this
+    /// chunk download was attempted in this attempt round  by a peer.
     fn record_attempt(&mut self, chunk_id: ChunkId, node_id: &NodeId);
 
-    // Returns true if the download attempt "round" has concluded. Signifies that
-    // peers that advertised the chunk have been requested once for the chunk.
+    /// Returns true if the download attempt "round" has concluded. Signifies
+    /// that peers that advertised the chunk have been requested once for
+    /// the chunk.
     fn is_attempts_round_complete(&mut self, chunk_id: ChunkId) -> bool;
 
-    // Reset attempt history for a chunk after the attempt round is completed.
+    /// Reset attempt history for a chunk after the attempt round is completed.
     fn attempts_round_reset(&mut self, chunk_id: ChunkId);
 
-    // Checks if a peer has participated in the current download attempt round. This
-    // is used to ensure that a peer request a chunk once per round.
+    /// Checks if a peer has participated in the current download attempt round.
+    /// This is used to ensure that a peer request a chunk once per round.
     fn peer_attempted(&self, chunk_id: ChunkId, node_id: &NodeId) -> bool;
 
-    // The in_progress flag signifies that a chunk request is in progress/flight
-    // from a peer. This stops multiple peers from requesting the same chunk at
-    // the same time. This ensures that peer BW is primarily utilized to
-    // download unique chunks required for the IC to make progress.
+    /// The `in_progress` flag signifies that a chunk request is in
+    /// progress/flight from a peer. This stops multiple peers from
+    /// requesting the same chunk at the same time. This ensures that peer
+    /// BW is primarily utilized to download unique chunks required for the
+    /// IC to make progress.
     fn set_in_progress(&mut self, chunk_id: ChunkId, node_id: &NodeId);
+
+    /// Unsets the `in_progress` flag for a chunk
     fn unset_in_progress(&mut self, chunk_id: ChunkId);
+
+    /// Returns the value of the `in_progress` flag for a chunk
     fn is_in_progress(&mut self, chunk_id: ChunkId) -> bool;
 }
 
+/// Implementation for the DownloadAttemptTracker trait
 impl DownloadAttemptTracker for AdvertTracker {
     fn record_attempt(&mut self, chunk_id: ChunkId, node_id: &NodeId) {
         let attempt = self
@@ -284,7 +301,9 @@ impl DownloadAttemptTracker for AdvertTracker {
     }
 }
 
+/// Implementation for the AdvertTracker data structure
 impl AdvertTracker {
+    /// Adds a peer. If the peer already exists, it is ignored.
     fn add_peer(&mut self, node_id: NodeId) {
         for x in &self.peers {
             if x.clone().get() == node_id.get() {
@@ -294,28 +313,34 @@ impl AdvertTracker {
         self.peers.push(node_id);
     }
 
+    /// Removes a peer
     fn remove_peer(&mut self, node_id: NodeId) {
         self.peers.retain(|x| x.clone().get() != node_id.get());
     }
 
+    /// Returns the DownloadAttemptTracker for a chunk
     fn get_download_attempt_tracker(&mut self, chunk_id: ChunkId) -> &mut DownloadAttempt {
         self.download_attempt_map
             .entry(chunk_id)
             .or_insert_with(Default::default)
     }
 
+    /// Returns `true` if a peer exists, or `false` otherwise
     fn has_peer(&self, peer_id: &NodeId) -> bool {
         self.peers.contains(peer_id)
     }
 }
 
-// Primary data structure to create multiple indices for Adverts. A Aliased
+/// Guarded reference to an advert tracker
+pub(crate) type AdvertTrackerRef = Arc<RwLock<AdvertTracker>>;
+
+// Primary data structure to create multiple indices for Adverts. An Aliased
 // Index is a set of adverts that are simultaneously indexed on multiple
 // dimension
-pub(crate) type AdvertTrackerRef = Arc<RwLock<AdvertTracker>>;
+/// Mapping from an artifact ID to the corresponding advert tracker
 pub(crate) type AdvertTrackerAliasedMap = LinkedHashMap<ArtifactId, AdvertTrackerRef>;
 
-// Final action for the advert
+/// Final action to be taken for the advert
 pub enum AdvertTrackerFinalAction {
     Success,
     Abort,
@@ -329,6 +354,8 @@ pub enum AdvertTrackerFinalAction {
 // entity that defines a variant in the ArtifactId enum.  (vice-versa, every
 // variant in the ArtifactId enum is a type owned by a unique client.
 
+/// Advert mapping (`ArtifactId` -> `AdvertTracker`), along with the
+/// corresponding priority function, for each type of gossip client
 #[derive(Default)]
 struct ClientAdvertMap {
     consensus: ClientAdvertMapInt,
@@ -339,6 +366,7 @@ struct ClientAdvertMap {
     state: ClientAdvertMapInt,
 }
 
+/// A single client advert tracking data structure
 struct ClientAdvertMapInt {
     advert_map: AdvertTrackerAliasedMap,
     get_priority_fn: GetPriorityFn,
@@ -419,9 +447,12 @@ impl IndexMut<ArtifactTag> for ClientAdvertMap {
 // Peer index is a real time (always up-to-date) index that orders the next
 // artifacts to be  downloaded by all known peers. Index order confirms to the
 // last updated client priority  function.
+/// Mapping from peer ID to its advert mapping
 type PeerAdvertMap = LinkedHashMap<NodeId, PeerAdvertMapRef>;
+/// Guarded reference for a PeerAdvertMapInt
 type PeerAdvertMapRef = Arc<RwLock<PeerAdvertMapInt>>;
 
+/// Advert mapping for each priority class
 #[derive(Default)]
 pub(crate) struct PeerAdvertMapInt {
     fetch_now: AdvertTrackerAliasedMap,
@@ -455,7 +486,10 @@ impl IndexMut<Priority> for PeerAdvertMapInt {
     }
 }
 
+/// Implementation for the PeerAdvertMapInt data structure. Allows retrieving an
+/// iterator over the mapping.
 impl PeerAdvertMapInt {
+    /// Returns an iterator over the advert mapping, ordered by priority
     pub fn iter(&self) -> impl Iterator<Item = (&ArtifactId, &AdvertTrackerRef)> {
         self[Priority::FetchNow]
             .iter()
@@ -464,64 +498,67 @@ impl PeerAdvertMapInt {
     }
 }
 
-// The Advert Manager.
-//
-// Maintains two Indices over received adverts
-//  a. Client Index and
-//  b. Peer Index
-//
-// The Advert manager implements the "AdvertManager" trait. This
-// trait has functionality that amounts to ..
-//  1. addition/removal of adverts
-//  2. index/re-index adverts based on client priority functions
-//  3. provided a prioritized advert iterator for the download_next()
-//  function of the "PeerManager" trait.
+/// The Advert Prioritization Manager struct.
+///
+/// Maintains two Indices over received adverts
+///  a. Client Index and
+///  b. Peer Index
+///
+/// The Advert manager implements the "AdvertManager" trait. This
+/// trait has functionality that amounts to ..
+///  1. addition/removal of adverts
+///  2. index/re-index adverts based on client priority functions
+///  3. provided a prioritized advert iterator for the download_next()
+///  function of the "PeerManager" trait.
 pub(crate) struct DownloadPrioritizerImpl {
+    /// Metrics collection
     metrics: DownloadPrioritizerMetrics,
-    // Adverts Indexed by clients types and peer ids
+    /// Adverts Indexed by clients types and peer ids
     replica_map: RwLock<(ClientAdvertMap, PeerAdvertMap)>,
 }
 
-// Guarded Iterators for per-peer download list
-//
-// The Advert Manager generates guarded iterators that iterate over
-// prioritized adverts to be downloaded from a specific peer.
-//
-// The iterators are guarded in the sense that as no mutating updates are
-// allowed to the peer's advert list while a guarded iterator object is alive.
-//
-// PeerManager periodically pulls out the guarded iterators for known peers and
-// "quickly" computes the artifacts to be downloaded before destroying the
-// guarded iterator.  Here "quickly" means that the operations on these
-// iterators should not involve any blocking operations.
-//
-// If the PeerManager needs a blocking operation on the iterator it should copy
-// out the iterator elements and drop the iterator before initiating a blocking
-// call.
-//
-// This fits in with the working model of "compute_work" and "do_work" phases of
-// the peer manager's download next call. "compute_work" quickly computes the
-// work to be done and leaves the heavy lifting to the "do_work" phase.
-//
-// Note: The download prioritizer is thread-safe and multiple threads can work
-// on it.
-
+/// Guarded Iterators for per-peer download list
+///
+/// The Advert Manager generates guarded iterators that iterate over
+/// prioritized adverts to be downloaded from a specific peer.
+///
+/// The iterators are guarded in the sense that as no mutating updates are
+/// allowed to the peer's advert list while a guarded iterator object is alive.
+///
+/// PeerManager periodically pulls out the guarded iterators for known peers and
+/// "quickly" computes the artifacts to be downloaded before destroying the
+/// guarded iterator.  Here "quickly" means that the operations on these
+/// iterators should not involve any blocking operations.
+///
+/// If the PeerManager needs a blocking operation on the iterator it should copy
+/// out the iterator elements and drop the iterator before initiating a blocking
+/// call.
+///
+/// This fits in with the working model of "compute_work" and "do_work" phases
+/// of the peer manager's download next call. "compute_work" quickly computes
+/// the work to be done and leaves the heavy lifting to the "do_work" phase.
+///
+/// Note: The download prioritizer is thread-safe and multiple threads can work
+/// on it.
 pub(crate) struct PeerAdvertQueues<'a> {
+    /// A guard
     _guard: RwLockReadGuard<'a, (ClientAdvertMap, PeerAdvertMap)>,
+    /// Reference for the peer's advert map that holds the iterators
     pub peer_advert_map_ref: PeerAdvertMapRef,
 }
 
-// Download Prioritizer Error Codes
+/// Download Prioritizer Error Codes
 #[derive(PartialEq, Debug)]
 pub(crate) enum DownloadPrioritizerError {
-    ImmediatelyDropped, /* Advert was dropped immediately upon insert into the download
-                         * prioritizer */
-    HasPeerReferences, // Advert was deleted from a peer, but other peers hold references
+    /// Advert was dropped immediately upon insert into the download prioritizer
+    ImmediatelyDropped,
+    /// Advert was deleted from a peer, but other peers hold references
+    HasPeerReferences,
+    /// Advert was not found
     NotFound,
 }
 
-//  DownloadPrioritizer Trait
-//  See Trait documentation:
+///  DownloadPrioritizer Trait implementation
 impl DownloadPrioritizer for DownloadPrioritizerImpl {
     fn peek_priority(&self, advert: &GossipAdvert) -> Result<Priority, DownloadPrioritizerError> {
         let guard = self.replica_map.read().unwrap();
@@ -577,6 +614,14 @@ impl DownloadPrioritizer for DownloadPrioritizerImpl {
     }
 
     fn update_priority_functions(&self, artifact_manager: &dyn ArtifactManager) -> Vec<ArtifactId> {
+        // Atomic update is a simplification and is one of the ways to implement
+        // priority fns.  A non-atomic version where we calculate priorities on
+        // shadow structures and then periodically update the peer advert
+        // priority queues is also a possibility.  In the non-atomic
+        // implementation, there will be a lag between the clients updating the
+        // priority_fn and its output getting reflected in the peer's advert
+        // queues (this trades off performance vs exposure to stale priorities)
+
         self.metrics.priority_fn_updates.inc();
         let guard = self.replica_map.read().unwrap();
         let (client_advert_map, _) = guard.deref();
@@ -799,7 +844,9 @@ impl DownloadPrioritizer for DownloadPrioritizerImpl {
     }
 }
 
+/// Download Prioritizer Implementation
 impl DownloadPrioritizerImpl {
+    /// Updates peer queues by setting a new priority for an advert.
     fn peer_queues_update(
         &self,
         peer_map: &mut PeerAdvertMap,
@@ -821,6 +868,7 @@ impl DownloadPrioritizerImpl {
         })
     }
 
+    /// Constructor. Returns a new instance of DownloadPrioritizer.
     pub fn new(
         artifact_manager: &dyn ArtifactManager,
         metrics: DownloadPrioritizerMetrics,
@@ -855,6 +903,9 @@ pub(crate) mod test {
     use ic_types::crypto::CryptoHash;
     use std::time::Duration;
 
+    /// Returns a priority for a given artifact based on its content.
+    /// This function is used for tests where artifacts are expected to be of
+    /// a certain type (`FileTreeSync`).
     fn priority_fn_dynamic(_id: &ArtifactId, attribute: &ArtifactAttribute) -> Priority {
         if let ArtifactAttribute::FileTreeSync(attr) = attribute {
             let attr = attr.parse::<i32>().unwrap();
@@ -872,39 +923,50 @@ pub(crate) mod test {
         }
     }
 
+    /// Returns a boxed reference to the function `priority_fn_dynamic`
     fn get_priority_dynamic_fn(_: &dyn ArtifactManager, _: ArtifactTag) -> InternalPriorityFn {
         Arc::new(Box::new(priority_fn_dynamic))
     }
 
+    /// Returns `Drop` priority
     fn priority_fn_drop_all(_: &ArtifactId, _: &ArtifactAttribute) -> Priority {
         Priority::Drop
     }
 
+    /// Returns a boxed reference to the function that returns `Drop` priority
     fn get_priority_fn_drop_all(_: &dyn ArtifactManager, _: ArtifactTag) -> InternalPriorityFn {
         Arc::new(Box::new(priority_fn_drop_all))
     }
 
+    /// Returns `Stash` priority
     fn priority_fn_stash_all(_: &ArtifactId, _: &ArtifactAttribute) -> Priority {
         Priority::Stash
     }
 
+    /// Returns a boxed reference to the function that returns `Stash` priority
     fn get_priority_fn_stash_all(_: &dyn ArtifactManager, _: ArtifactTag) -> InternalPriorityFn {
         Arc::new(Box::new(priority_fn_stash_all))
     }
 
+    /// Returns `Stash` priority after a short delay
     fn priority_fn_with_delay(_: &ArtifactId, _: &ArtifactAttribute) -> Priority {
         std::thread::sleep(Duration::from_millis(100));
         Priority::Stash
     }
 
+    /// Returns a boxed reference to the function that returns a delayed `Stash`
+    /// priority
     fn get_priority_fn_with_delay(_: &dyn ArtifactManager, _: ArtifactTag) -> InternalPriorityFn {
         Arc::new(Box::new(priority_fn_with_delay))
     }
 
+    /// Returns `FetchNow` priority
     fn priority_fn_fetch_now_all(_: &ArtifactId, _: &ArtifactAttribute) -> Priority {
         Priority::FetchNow
     }
 
+    /// Returns a boxed reference to the function that returns `FetchNow`
+    /// priority
     fn get_priority_fn_fetch_now_all(
         _: &dyn ArtifactManager,
         _: ArtifactTag,
@@ -912,17 +974,21 @@ pub(crate) mod test {
         Arc::new(Box::new(priority_fn_fetch_now_all))
     }
 
+    /// Returns an advert with the given ID
     pub(crate) fn make_gossip_advert(id: u64) -> GossipAdvert {
         let artifact_id = id.to_string();
         GossipAdvert {
             artifact_id: ArtifactId::FileTreeSync(artifact_id.clone()),
             attribute: ArtifactAttribute::FileTreeSync(artifact_id),
             size: 0,
-            // These are tests and we don't care...
+            // Integrity hash is not checked in the tests here
             integrity_hash: CryptoHash(vec![]),
         }
     }
 
+    /// This test checks a sequence of operations on the prioritizer.
+    /// It inserts adverts, then checks that they are prioritized as expected.
+    /// Then, it removes all of them and verifies that they are indeed removed.
     #[test]
     fn basic_insert_delete_update() {
         let time_source = FastForwardTimeSource::new();
@@ -957,7 +1023,7 @@ pub(crate) mod test {
             assert!(ret.is_ok());
         }
 
-        // Check for  correct prioritization
+        // Check for correct prioritization
         for peer in 0..3 {
             let peer_advert_queues =
                 download_prioritizer.get_peer_priority_queues(node_test_id(peer));
@@ -968,7 +1034,7 @@ pub(crate) mod test {
         }
 
         // Flake drops
-        // drop all the adverts
+        // Check that dropped adverts are not found
         for advert_id in 0..30 {
             let id = ArtifactId::FileTreeSync(advert_id.to_string());
             let ret = download_prioritizer.delete_advert(&id, AdvertTrackerFinalAction::Abort);
@@ -982,6 +1048,7 @@ pub(crate) mod test {
         }
     }
 
+    /// A test to verify reported metrics
     #[test]
     fn validate_timing_metric() {
         let time_source = FastForwardTimeSource::new();
@@ -999,7 +1066,7 @@ pub(crate) mod test {
             let _ = download_prioritizer.add_advert(gossip_advert, peer_id);
         }
         {
-            // update to new new priority function
+            // update to new priority function
             let mut guard = download_prioritizer.replica_map.write().unwrap();
             let (client_advert_map, _peer_map) = guard.deref_mut();
             for client in ArtifactTag::iter() {
@@ -1014,6 +1081,8 @@ pub(crate) mod test {
         assert!(timer_metric.count > 0)
     }
 
+    /// This test checks the correctness of the process of updating the priority
+    /// function
     #[test]
     fn update_priority_queues() {
         let time_source = FastForwardTimeSource::new();
@@ -1030,7 +1099,7 @@ pub(crate) mod test {
             let _ = download_prioritizer.add_advert(gossip_advert, peer_id);
         }
 
-        // Check for  correct prioritization
+        // Check for correct prioritization
         for peer in 0..3 {
             let peer_advert_queues =
                 download_prioritizer.get_peer_priority_queues(node_test_id(peer));
@@ -1041,7 +1110,7 @@ pub(crate) mod test {
         }
 
         {
-            // update to new new priority function
+            // update to new priority function
             let mut guard = download_prioritizer.replica_map.write().unwrap();
             let (client_advert_map, _peer_map) = guard.deref_mut();
             for client in ArtifactTag::iter() {
@@ -1051,7 +1120,7 @@ pub(crate) mod test {
         }
         let dropped_artifacts = download_prioritizer.update_priority_functions(&artifact_manager);
         assert_eq!(dropped_artifacts.len(), 0);
-        // Check for  correct prioritization
+        // Check for correct prioritization
         for peer in 0..3 {
             let peer_advert_queues =
                 download_prioritizer.get_peer_priority_queues(node_test_id(peer));
@@ -1077,6 +1146,8 @@ pub(crate) mod test {
         assert_eq!(count, 10);
     }
 
+    /// This test checks the behavior of the prioritizer when the priority
+    /// function sets the priority of all adverts to `Drop`
     #[test]
     fn drop_all() {
         let time_source = FastForwardTimeSource::new();
@@ -1103,7 +1174,7 @@ pub(crate) mod test {
         }
         let dropped_artifacts = download_prioritizer.update_priority_functions(&artifact_manager);
         assert_eq!(dropped_artifacts.len(), 30);
-        // Check for  correct prioritization
+        // Check for correct prioritization
         for peer in 0..3 {
             let peer_advert_queues =
                 download_prioritizer.get_peer_priority_queues(node_test_id(peer));
@@ -1120,6 +1191,7 @@ pub(crate) mod test {
         }
     }
 
+    /// Translates a priority value to a numeric value
     fn priority_to_num(p: Priority) -> i32 {
         match p {
             Priority::Stash => -1,
@@ -1130,6 +1202,7 @@ pub(crate) mod test {
         }
     }
 
+    /// Adds adverts
     fn add_adverts(
         download_prioritizer: &DownloadPrioritizerImpl,
         num_adverts: u64,
@@ -1143,6 +1216,8 @@ pub(crate) mod test {
         }
     }
 
+    /// This test checks the behavior of the prioritizer with a dynamic priority
+    /// function
     #[test]
     fn priority_test() {
         let time_source = FastForwardTimeSource::new();
@@ -1189,6 +1264,7 @@ pub(crate) mod test {
         assert!(last_prio == priority_to_num(Priority::Later));
     }
 
+    /// Tests various behaviors
     #[test]
     fn crud_test() {
         let time_source = FastForwardTimeSource::new();
@@ -1266,6 +1342,7 @@ pub(crate) mod test {
         }
     }
 
+    /// Tests the `clear_peer_adverts` method of the prioritizer
     #[test]
     fn clear_peer_adverts() {
         let time_source = FastForwardTimeSource::new();
@@ -1305,6 +1382,7 @@ pub(crate) mod test {
         }
     }
 
+    /// Tests the behavior of the prioritizer when all adverts are stashed
     #[test]
     fn stash_advert() {
         let time_source = FastForwardTimeSource::new();
@@ -1378,6 +1456,7 @@ pub(crate) mod test {
         }
     }
 
+    /// Tests the `peek_priority` method
     #[test]
     fn peek_advert() {
         let time_source = FastForwardTimeSource::new();
@@ -1409,7 +1488,7 @@ pub(crate) mod test {
         }
     }
 
-    // Add the same advert from num_peers count of peers
+    /// Add the same advert from multiple peers
     fn test_add_unique_adverts(
         download_prioritizer: &DownloadPrioritizerImpl,
         advert_id: u32,
@@ -1431,11 +1510,11 @@ pub(crate) mod test {
         }
     }
 
+    /// Test download attempt tracking functionality. Advertise the same
+    /// artifact from 2 node and test if the both participate in the
+    /// download attempt round. After the attempt is complete checks if the
+    /// download attempt round is reset.
     #[test]
-    // Test download attempt tracking functionality. Advertise the same artifact
-    // from 2 node and test if the both participate in the download attempt
-    // round. After the attempt is complete checks if the download attempt round
-    // is reset.
     fn download_attempt_basic() {
         let time_source = FastForwardTimeSource::new();
         let artifact_manager = ArtifactManagerImpl::new(time_source);
@@ -1522,6 +1601,7 @@ pub(crate) mod test {
         assert_eq!(node_count, 3);
     }
 
+    /// Test the set/unset of the `in_progress` flag in the advert tracker
     #[test]
     fn download_in_progress_set_reset() {
         let time_source = FastForwardTimeSource::new();

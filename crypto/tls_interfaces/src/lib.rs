@@ -1,3 +1,7 @@
+//! Public interface for a TLS-secured stream
+#![forbid(unsafe_code)]
+#![deny(clippy::unwrap_used)]
+
 use async_trait::async_trait;
 use core::fmt;
 use ic_protobuf::registry::crypto::v1::X509PublicKeyCert;
@@ -16,6 +20,8 @@ use tokio_openssl::SslStream;
 mod tests;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Errors from a TLS handshake performed as the server. Please refer to the
+/// `TlsHandshake` method for detailed error variant descriptions.
 pub enum TlsServerHandshakeError {
     RegistryError(RegistryClientError),
     CertificateNotInRegistry {
@@ -47,6 +53,7 @@ impl Display for TlsServerHandshakeError {
 impl std::error::Error for TlsServerHandshakeError {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// The certificate offered by the peer is malformed.
 pub struct MalformedPeerCertificateError {
     pub internal_error: String,
 }
@@ -66,9 +73,15 @@ impl From<MalformedPeerCertificateError> for TlsServerHandshakeError {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Errors from a TLS handshake due to an unauthorized peer
 pub enum PeerNotAllowedError {
+    /// Validation of claimed identity against authorized identities failed.
     HandshakeCertificateNodeIdNotAllowed,
+    /// Failed to DER encode the peer's certificate
+    /// offered during the handshake.
     CannotDerEncodePeerCertFromHandshake { internal_error: String },
+    /// Peer's certificate offered during the handshake
+    /// doesn't match the trusted certificate.
     CertificatesDiffer,
 }
 
@@ -79,6 +92,8 @@ impl From<PeerNotAllowedError> for TlsServerHandshakeError {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Errors from a TLS handshake performed as the client. Please refer to the
+/// `TlsHandshake` method for detailed error variant descriptions.
 pub enum TlsClientHandshakeError {
     RegistryError(RegistryClientError),
     CertificateNotInRegistry {
@@ -441,6 +456,8 @@ pub trait TlsHandshake {
 }
 
 #[derive(Clone, Debug)]
+/// A list of allowed TLS peers (and their trusted certificates),
+/// which can be `All` to allow any node to connect.
 pub struct AllowedClients {
     nodes: SomeOrAllNodes,
     // Using `Vec` rather than `BTreeSet` because the protobuf struct `X509PublicKeyCert` does not
@@ -459,14 +476,17 @@ impl AllowedClients {
         Ok(allowed_clients)
     }
 
+    /// Create an `AllowedClients` with a set of nodes, but no certificates.
     pub fn new_with_nodes(node_ids: BTreeSet<NodeId>) -> Result<Self, ClientsEmptyError> {
         Self::new(SomeOrAllNodes::Some(node_ids), vec![])
     }
 
+    /// Access the allowed nodes.
     pub fn nodes(&self) -> &SomeOrAllNodes {
         &self.nodes
     }
 
+    /// Access the allowed certificates.
     pub fn certs(&self) -> &Vec<X509PublicKeyCert> {
         &self.certs
     }
@@ -485,23 +505,32 @@ impl AllowedClients {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+/// Attempted to create an `AllowedClients` with `Some` clients
+/// but empty nodes and certificates lists.
 pub struct ClientsEmptyError {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// A list of node IDs, or "all nodes"
 pub enum SomeOrAllNodes {
     Some(BTreeSet<NodeId>),
     All,
 }
 
 #[derive(Clone, Debug, PartialEq)]
+/// A TLS peer, with identification information (if authenticated)
 pub enum Peer {
+    /// Peer hasn't been authenticated.
     Unauthenticated,
+    /// Peer has been authenticated.
     Authenticated(AuthenticatedPeer),
 }
 
 #[derive(Clone, Debug, PartialEq)]
+/// An authenticated Node ID, or an authenticated certificate
 pub enum AuthenticatedPeer {
+    /// Authenticated Node ID
     Node(NodeId),
     // TODO (CRP-773): create a domain object for X509 certificates and use it here
+    /// Authenticated X.509 certificate
     Cert(X509PublicKeyCert),
 }

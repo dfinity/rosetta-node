@@ -89,11 +89,7 @@ impl WasmtimeSignalStack {
     pub fn new() -> Self {
         unsafe {
             let page_size = sysconf(_SC_PAGESIZE) as usize;
-            //default stack size is too small for debug builds on certain machines
-            //(we observed overflows with 8K stacks), so lets make sure we have more
-            // TODO: https://dfinity.atlassian.net/browse/DFN-1328
-
-            // 2020-04-21: mw: wasmtime now overwrites the signal stack if the size is less
+            // 2020-04-21: wasmtime now overwrites the signal stack if the size is less
             // than 64k. Thus we set it to 64k to avoid that. Current wasmtime work in
             // progress indicates this behavior will change in the future. We will keep our
             // own stack until the behavior stabilizes.

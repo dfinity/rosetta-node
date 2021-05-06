@@ -31,6 +31,7 @@ pub enum OnArtifactError<T> {
     AdvertMismatch(AdvertMismatchError),
     ArtifactPoolError(ArtifactPoolError),
     MessageConversionfailed(p2p::GossipAdvert),
+    Throttled,
 }
 
 #[derive(Debug)]

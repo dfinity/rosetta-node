@@ -1,25 +1,31 @@
+//! The objective is to test that a set of needs, each holding one artifact,
+//! exchange their artifacts.
+//!
+//! If there are `N` nodes and each artifact consists of `Q` chunks,
+//! the expected result is that every peer receives all `N-1` artifacts from the
+//! other peers, i.e., `(N-1)Q` chunks in total.
+//!
+//! Note that most of the logic is driven by a test artifact manager.
+
 use ic_test_utilities::metrics::fetch_int_counter;
 use std::time::Duration;
-// Objective: test artifacts are synced to completion using chunking
-//
-// Procedure Startup N nodes with a single artifact each with Q chunks. Run
-// gossip.
-//
-// Expected Results: By end of the test, each node has received (N -1)  chunked
-// artifacts from (N-1) peers. Total Chunks received are (N-1) *
-// Q
-//
-// Notes:  Most of the logic is driven by a test artifact manager
 
 pub mod framework;
 
-// NOTE !!!!
-// the barrier strings constants have to be unique for a every barrier in the
-// test
-const ALL_NODES_SYNCED: &str = "ALL_NODES_SYNCED";
+/// The barrier string constant used to wait on other peers to finish.
+const ALL_NODES_SYNCED: &str = "ALL_NODES_SYNCED"; // Note that barriers have to be unique
+
+/// This constant defines the maximum permissible number of iterations until
+/// test completion.
+/// If the test exceeds this bound, it fails.
 const MAX_ALLOWED_ITER: u32 = 200;
+
+/// The number of nodes in this test.
 #[cfg(test)]
 const NUM_TEST_INSTANCES: u16 = 3;
+
+/// In this test, `NUM_TEST_INSTANCES` peers exchange chunks until each peer has
+/// received the single artifact from each other peer.
 #[tokio::test]
 async fn n_node_chunking() {
     framework::spawn_replicas_as_threads(false, NUM_TEST_INSTANCES, |p2p_test_context| {
@@ -29,7 +35,7 @@ async fn n_node_chunking() {
             std::thread::sleep(Duration::from_millis(600));
             iter += 1;
             if iter > MAX_ALLOWED_ITER {
-                panic!("Test exceeded  {} iterations", MAX_ALLOWED_ITER);
+                panic!("Test exceeded {} iterations", MAX_ALLOWED_ITER);
             }
 
             let artifacts_recv_count = fetch_int_counter(
@@ -38,7 +44,7 @@ async fn n_node_chunking() {
             )
             .expect("Test cannot read gauge");
             println!(
-                "Node {:?} Artifact recv count {}",
+                "Node {:?}: Number of received artifacts: {}",
                 p2p_test_context.node_id, artifacts_recv_count
             );
             if artifacts_recv_count < NUM_TEST_INSTANCES as u64 - 1 {
@@ -47,7 +53,7 @@ async fn n_node_chunking() {
 
             // Node has received all artifacts, continue operating till
             // all other nodes signal that they too have synced all the
-            //artifacts
+            //artifacts.
             match p2p_test_context
                 .test_synchronizer
                 .try_wait_on_barrier(ALL_NODES_SYNCED.to_string())

@@ -272,8 +272,6 @@ impl XNetPayloadBuilderImpl {
     ///
     ///  Panics if reading the node's own `node_operator_id` from the registry
     /// fails.
-    // TODO(DFN-1647): Instead of passing a runtime::Handle here, we probably should
-    // use actix's arbiter or other means to better control the thread pool.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         state_manager: Arc<dyn StateManager<State = ReplicatedState>>,
@@ -799,7 +797,7 @@ impl XNetEndpointResolver {
             .ok_or_else(|| Error::MissingSubnet(subnet_id))?;
 
         // Attempt to pick a node under the same node operator, if such a node exists.
-        // TODO(DFN-1549) Select node based on proximity.
+        // TODO(MR-27) select node based on proximity.
         let mut same_node_operator_nodes: Vec<NodeId> = Vec::new();
 
         for n in nodes.iter() {
@@ -1328,7 +1326,7 @@ impl XNetClientImpl {
         runtime_handle: runtime::Handle,
         tls: Arc<dyn TlsHandshake + Send + Sync>,
     ) -> XNetClientImpl {
-        // TODO(DFN-1550) Make timeout configurable.
+        // TODO(MR-28) Make timeout configurable.
         let http_client: Client<TlsConnector, _> = Client::builder()
             .pool_idle_timeout(Some(Duration::from_secs(600)))
             .pool_max_idle_per_host(1)
@@ -1355,7 +1353,7 @@ impl XNetClientImpl {
 #[async_trait]
 impl XNetClient for XNetClientImpl {
     async fn query(&self, url: Uri) -> Result<CertifiedStreamSlice, XNetClientError> {
-        // TODO(DFN-1550) Make timeout configurable.
+        // TODO(MR-28) Make timeout configurable.
         let result = tokio::time::timeout(Duration::from_secs(5), async {
             let response = self.http_client.get(url.clone()).await.map_err(|e| {
                 if e.is_timeout() {

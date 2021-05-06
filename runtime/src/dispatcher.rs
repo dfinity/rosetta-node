@@ -1,4 +1,3 @@
-use ic_canister_sandbox_replica_controller::controller::SandboxedExecutionController;
 use ic_config::embedders::{Config, EmbedderType};
 use ic_embedders::{
     ExecutionResult, ProcessingGroup, QueueConfig, ResumeToken, RunnerConfig, RunnerOutput,
@@ -7,8 +6,7 @@ use ic_embedders::{
 use ic_logger::ReplicaLogger;
 use ic_system_api::{ApiType, PauseHandler};
 use ic_types::NumInstructions;
-use ic_utils::ic_features::sandboxed_execution_feature;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::thread::JoinHandle;
 
 struct PauseHandlerImpl {
@@ -60,7 +58,6 @@ impl Drop for JoinHandles {
 pub struct WasmExecutionDispatcher {
     task_processor: Arc<ProcessingGroup>,
     query_task_processor: Arc<ProcessingGroup>,
-    sandboxed_execution_controller: Arc<RwLock<SandboxedExecutionController>>,
 }
 
 impl WasmExecutionDispatcher {
@@ -74,20 +71,11 @@ impl WasmExecutionDispatcher {
             num_reusable_runners: config.num_runtime_query_threads,
         };
 
-        let controller_config = QueueConfig {
-            max_num_runners: config.num_runtime_query_threads,
-            num_reusable_runners: config.num_runtime_query_threads,
-        };
-
         let runner_config = RunnerConfig {
             embedder_type,
             config,
             log,
         };
-
-        let sandboxed_execution_controller = Arc::new(RwLock::new(
-            SandboxedExecutionController::new(runner_config.clone(), controller_config),
-        ));
 
         let task_processor = Arc::new(ProcessingGroup::new(
             runner_config.clone(),
@@ -100,32 +88,23 @@ impl WasmExecutionDispatcher {
         Self {
             task_processor,
             query_task_processor,
-            sandboxed_execution_controller,
         }
     }
 
     pub fn execute(&self, input: WasmExecutionInput) -> WasmExecutionResult {
-        if sandboxed_execution_feature::is_enabled(sandboxed_execution_feature::sandboxed_execution)
-        {
-            self.sandboxed_execution_controller
-                .write()
-                .unwrap()
-                .execute(input)
-        } else {
-            match input.api_type {
-                ApiType::ReplicatedQuery { .. }
-                | ApiType::NonReplicatedQuery { .. }
-                | ApiType::InspectMessage { .. } => self.query_task_processor.execute(input),
+        match input.api_type {
+            ApiType::ReplicatedQuery { .. }
+            | ApiType::NonReplicatedQuery { .. }
+            | ApiType::InspectMessage { .. } => self.query_task_processor.execute(input),
 
-                ApiType::Start
-                | ApiType::Init { .. }
-                | ApiType::Heartbeat { .. }
-                | ApiType::Update { .. }
-                | ApiType::Cleanup { .. }
-                | ApiType::ReplyCallback { .. }
-                | ApiType::RejectCallback { .. }
-                | ApiType::PreUpgrade { .. } => self.task_processor.execute(input),
-            }
+            ApiType::Start
+            | ApiType::Init { .. }
+            | ApiType::Heartbeat { .. }
+            | ApiType::Update { .. }
+            | ApiType::Cleanup { .. }
+            | ApiType::ReplyCallback { .. }
+            | ApiType::RejectCallback { .. }
+            | ApiType::PreUpgrade { .. } => self.task_processor.execute(input),
         }
     }
 }

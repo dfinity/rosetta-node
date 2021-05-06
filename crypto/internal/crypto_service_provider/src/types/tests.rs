@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use super::*;
 use ic_crypto_internal_test_vectors::basic_sig::TESTVEC_ED25519_STABILITY_1_SIG;
 use ic_crypto_internal_test_vectors::ed25519::{
@@ -7,6 +8,17 @@ use ic_crypto_internal_test_vectors::ed25519::{
 };
 use ic_crypto_internal_test_vectors::multi_bls12_381::TESTVEC_MULTI_BLS12_381_1_PK;
 use ic_crypto_internal_test_vectors::unhex::hex_to_byte_vec;
+use ic_crypto_internal_threshold_sig_bls12381::dkg::secp256k1::types::{
+    EphemeralKeySetBytes, EphemeralPopBytes, EphemeralPublicKeyBytes, EphemeralSecretKeyBytes,
+};
+use ic_crypto_internal_threshold_sig_bls12381::ni_dkg::groth20_bls12_381::types::{
+    BTENode, FsEncryptionKeySet, FsEncryptionSecretKey,
+};
+use ic_crypto_internal_threshold_sig_bls12381::ni_dkg::types::CspFsEncryptionKeySet;
+use ic_crypto_internal_types::curves::bls12_381::{Fr as FrBytes, G1 as G1Bytes, G2 as G2Bytes};
+use ic_crypto_internal_types::encrypt::forward_secure::groth20_bls12_381::{
+    FsEncryptionPok, FsEncryptionPublicKey,
+};
 use ic_interfaces::crypto::CryptoHashableTestDummy;
 use ic_protobuf::registry::crypto::v1::PublicKey as PublicKeyProto;
 use ic_types::crypto::{AlgorithmId, BasicSig, BasicSigOf, UserPublicKey};
@@ -28,6 +40,90 @@ fn should_return_no_ed25519_secret_key_bytes_for_non_ed25519_secret_key() {
         [0u8; multi_types::SecretKeyBytes::SIZE],
     ));
     assert!(secret_key.ed25519_bytes().is_none())
+}
+
+#[test]
+fn should_redact_csp_secret_key_ed25519_debug() {
+    let cspsk_ed25519 = CspSecretKey::Ed25519(ed25519_types::SecretKeyBytes(
+        [1u8; ed25519_types::SecretKeyBytes::SIZE],
+    ));
+    assert_eq!(
+        "CspSecretKey::Ed25519 - REDACTED",
+        format!("{:?}", cspsk_ed25519)
+    );
+}
+
+#[test]
+fn should_redact_csp_secret_key_multi_debug() {
+    let cspsk_multi = CspSecretKey::MultiBls12_381(multi_types::SecretKeyBytes(
+        [1u8; multi_types::SecretKeyBytes::SIZE],
+    ));
+    assert_eq!(
+        "CspSecretKey::MultiBls12_381 - REDACTED",
+        format!("{:?}", cspsk_multi)
+    );
+}
+
+#[test]
+fn should_redact_csp_secret_key_thres_debug() {
+    let cspsk_thresh = CspSecretKey::ThresBls12_381(threshold_types::SecretKeyBytes(
+        [1u8; threshold_types::SecretKeyBytes::SIZE],
+    ));
+    assert_eq!(
+        "CspSecretKey::ThresBls12_381 - REDACTED",
+        format!("{:?}", cspsk_thresh)
+    );
+}
+
+#[test]
+fn should_redact_csp_secret_key_secp_debug() {
+    let cspsk_secp = CspSecretKey::Secp256k1WithPublicKey(EphemeralKeySetBytes {
+        secret_key_bytes: EphemeralSecretKeyBytes([1u8; EphemeralSecretKeyBytes::SIZE]),
+        public_key_bytes: EphemeralPublicKeyBytes([1u8; EphemeralPublicKeyBytes::SIZE]),
+        pop_bytes: EphemeralPopBytes([1u8; EphemeralPopBytes::SIZE]),
+    });
+    assert!(format!("{:?}", cspsk_secp).contains("secret_key: REDACTED"));
+}
+
+#[test]
+fn should_redact_csp_secret_key_tls_ed25519_debug() {
+    let cspsk_tls = CspSecretKey::TlsEd25519(TlsEd25519SecretKeyDerBytes {
+        bytes: vec![1u8; 3],
+    });
+    assert_eq!(
+        "CspSecretKey::TlsEd25519 - REDACTED",
+        format!("{:?}", cspsk_tls)
+    );
+}
+
+#[test]
+fn should_redact_csp_secret_key_fs_encryption_debug() {
+    let cspsk_fs = CspSecretKey::FsEncryption(CspFsEncryptionKeySet::Groth20_Bls12_381(
+        FsEncryptionKeySet {
+            public_key: FsEncryptionPublicKey(G1Bytes([1u8; G1Bytes::SIZE])),
+            secret_key: FsEncryptionSecretKey {
+                bte_nodes: vec![
+                    BTENode {
+                        tau: vec![1, 2, 3],
+                        a: G1Bytes([1; G1Bytes::SIZE]),
+                        b: G2Bytes([1; G2Bytes::SIZE]),
+                        d_t: vec![G2Bytes([1; G2Bytes::SIZE])],
+                        d_h: vec![G2Bytes([1; G2Bytes::SIZE])],
+                        e: G2Bytes([1; G2Bytes::SIZE]),
+                    };
+                    1
+                ],
+            },
+            pok: FsEncryptionPok {
+                blinder: G1Bytes([1; G1Bytes::SIZE]),
+                response: FrBytes([1; FrBytes::SIZE]),
+            },
+        },
+    ));
+    assert_eq!(
+        "CspSecretKey::FsEncryption - REDACTED",
+        format!("{:?}", cspsk_fs)
+    );
 }
 
 #[test]

@@ -4,7 +4,7 @@ use crate::store::{BlockStore, BlockStoreError, HashedBlock, InMemoryStore, OnDi
 use async_trait::async_trait;
 use core::ops::Deref;
 use dfn_protobuf::{ProtoBuf, ToProto};
-use ic_canister_client::{Agent, HttpClient, HttpContentType, Sender};
+use ic_canister_client::{Agent, HttpClient, Sender};
 use ic_crypto_tree_hash::{Digest, LabeledTree, MixedHashTree};
 use ic_crypto_utils_threshold_sig::verify_combined;
 use ic_types::messages::MessageId;
@@ -40,7 +40,6 @@ pub trait LedgerAccess {
     async fn read_blocks<'a>(&'a self) -> Box<dyn Deref<Target = Blocks> + 'a>;
     async fn sync_blocks(&self, stopped: Arc<AtomicBool>) -> Result<(), ApiError>;
     fn ledger_canister_id(&self) -> &CanisterId;
-    fn agent_client(&self) -> &HttpClient;
     fn testnet_url(&self) -> &Url;
     async fn submit(
         &self,
@@ -52,7 +51,6 @@ pub trait LedgerAccess {
 pub struct LedgerClient {
     blockchain: RwLock<Blocks>,
     canister_id: CanisterId,
-    agent_client: Option<HttpClient>,
     canister_access: Option<CanisterAccess>,
     testnet_url: Url,
     store_max_blocks: Option<u64>,
@@ -76,15 +74,15 @@ impl LedgerClient {
 
         let mut blocks = Blocks::new_on_disk(location)?;
 
-        let (agent_client, canister_access) = if offline {
-            (None, None)
+        let canister_access = if offline {
+            None
         } else {
-            let agent_client = HttpClient::new();
+            let http_client = HttpClient::new();
             let canister_access =
-                CanisterAccess::new(testnet_url.clone(), canister_id, agent_client.clone());
+                CanisterAccess::new(testnet_url.clone(), canister_id, http_client);
             Self::verify_store(&blocks, &canister_access).await?;
 
-            (Some(agent_client), Some(canister_access))
+            Some(canister_access)
         };
 
         info!("Loading blocks from store");
@@ -109,7 +107,6 @@ impl LedgerClient {
         Ok(Self {
             blockchain: RwLock::new(blocks),
             canister_id,
-            agent_client,
             canister_access,
             testnet_url,
             store_max_blocks,
@@ -303,6 +300,29 @@ fn check_certificate(
         })
 }
 
+async fn send_post_request(
+    http_client: &reqwest::Client,
+    url: &str,
+    body: Vec<u8>,
+    timeout: Duration,
+) -> Result<(Vec<u8>, reqwest::StatusCode), String> {
+    let resp = http_client
+        .post(url)
+        .header(reqwest::header::CONTENT_TYPE, "application/cbor")
+        .body(body)
+        .timeout(timeout)
+        .send()
+        .await
+        .map_err(|err| format!("sending post request failed with {}: ", err))?;
+    let resp_status = resp.status();
+    let resp_body = resp
+        .bytes()
+        .await
+        .map_err(|err| format!("receive post response failed with {}: ", err))?
+        .to_vec();
+    Ok((resp_body, resp_status))
+}
+
 #[async_trait]
 impl LedgerAccess for LedgerClient {
     async fn read_blocks(&self) -> Box<dyn Deref<Target = Blocks> + '_> {
@@ -337,6 +357,12 @@ impl LedgerAccess for LedgerClient {
                 next_block_index,
                 chain_length
             );
+        } else {
+            if next_block_index > chain_length {
+                trace!("Tip received from IC lower than what we already have (queried lagging replica?),
+                 new chain length: {}, our {}", chain_length, next_block_index);
+            }
+            return Ok(());
         }
 
         for i in next_block_index..chain_length {
@@ -369,6 +395,9 @@ impl LedgerAccess for LedgerClient {
         if let Some(last_hash) = last_block_hash {
             self.verify_tip(certification, last_hash)
                 .map_err(internal_error)?;
+            blockchain
+                .block_store
+                .mark_last_verified(chain_length - 1)?;
         }
         if next_block_index != chain_length {
             info!(
@@ -384,12 +413,6 @@ impl LedgerAccess for LedgerClient {
 
     fn ledger_canister_id(&self) -> &CanisterId {
         &self.canister_id
-    }
-
-    fn agent_client(&self) -> &HttpClient {
-        self.agent_client
-            .as_ref()
-            .expect("Agent client not present in offline mode")
     }
 
     fn testnet_url(&self) -> &Url {
@@ -447,16 +470,11 @@ impl LedgerAccess for LedgerClient {
             .join(ic_canister_client::UPDATE_PATH)
             .expect("URL join failed");
 
-        let agent_client = HttpClient::new();
-        let (body, status) = agent_client
-            .send_post_request(
-                url.as_str(),
-                Some(HttpContentType::CBOR),
-                Some(http_body.into()),
-                Some(TIMEOUT),
-            )
-            .await
-            .map_err(internal_error)?;
+        let http_client = reqwest::Client::new();
+        let (body, status) =
+            send_post_request(&http_client, url.as_str(), http_body.into(), TIMEOUT)
+                .await
+                .map_err(internal_error)?;
 
         if !status.is_success() {
             let body = String::from_utf8(body).map_err(internal_error)?;
@@ -483,15 +501,14 @@ impl LedgerAccess for LedgerClient {
                 .join(ic_canister_client::QUERY_PATH)
                 .expect("URL join failed");
 
-            let (body, status) = agent_client
-                .send_post_request(
-                    url.as_str(),
-                    Some(HttpContentType::CBOR),
-                    Some(read_state_http_body.clone().into()),
-                    Some(wait_timeout),
-                )
-                .await
-                .map_err(internal_error)?;
+            let (body, status) = send_post_request(
+                &http_client,
+                url.as_str(),
+                read_state_http_body.clone().into(),
+                wait_timeout,
+            )
+            .await
+            .map_err(internal_error)?;
 
             if status.is_success() {
                 let cbor: serde_cbor::Value = serde_cbor::from_slice(&body).map_err(|err| {
@@ -564,9 +581,9 @@ impl LedgerAccess for LedgerClient {
     }
 
     async fn chain_length(&self) -> BlockHeight {
-        match self.blockchain.read().await.synced_to() {
+        match self.blockchain.read().await.block_store.last_verified() {
             None => 0,
-            Some((_, block_index)) => block_index + 1,
+            Some(block_index) => block_index + 1,
         }
     }
 }
@@ -674,7 +691,7 @@ impl BalancesStore for ChunkmapBalancesStore {
 pub struct Blocks {
     balances: HashMap<BlockHeight, Balances>,
     hash_location: HashMap<HashOf<EncodedBlock>, BlockHeight>,
-    block_store: Box<dyn BlockStore + Send + Sync>,
+    pub block_store: Box<dyn BlockStore + Send + Sync>,
     last_hash: Option<HashOf<EncodedBlock>>,
 }
 
@@ -736,23 +753,53 @@ impl Blocks {
         Ok(n)
     }
 
-    pub fn get_at(&self, index: BlockHeight) -> Result<HashedBlock, ApiError> {
+    fn get_at(&self, index: BlockHeight) -> Result<HashedBlock, ApiError> {
         Ok(self.block_store.get_at(index)?)
     }
 
-    pub fn get_balances_at(&self, index: BlockHeight) -> Result<Balances, ApiError> {
-        self.balances
-            .get(&index)
-            .cloned()
-            .ok_or_else(|| internal_error("Balances not found"))
+    pub fn get_verified_at(&self, index: BlockHeight) -> Result<HashedBlock, ApiError> {
+        let last_verified_idx = self
+            .block_store
+            .last_verified()
+            .map(|x| x as i128)
+            .unwrap_or(-1);
+        if index as i128 > last_verified_idx {
+            Err(BlockStoreError::NotFound(index).into())
+        } else {
+            self.get_at(index)
+        }
     }
 
-    pub fn get(&self, hash: HashOf<EncodedBlock>) -> Result<HashedBlock, ApiError> {
+    pub fn get_balances_at(&self, index: BlockHeight) -> Result<Balances, ApiError> {
+        let last_verified_idx = self
+            .block_store
+            .last_verified()
+            .map(|x| x as i128)
+            .unwrap_or(-1);
+        if index as i128 > last_verified_idx {
+            Err(internal_error("Balances not found"))
+        } else {
+            self.balances
+                .get(&index)
+                .cloned()
+                .ok_or_else(|| internal_error("Balances not found"))
+        }
+    }
+
+    fn get(&self, hash: HashOf<EncodedBlock>) -> Result<HashedBlock, ApiError> {
         let index = *self
             .hash_location
             .get(&hash)
             .ok_or_else(|| invalid_block_id(format!("Block number out of bounds {}", hash)))?;
         self.get_at(index)
+    }
+
+    pub fn get_verified(&self, hash: HashOf<EncodedBlock>) -> Result<HashedBlock, ApiError> {
+        let index = *self
+            .hash_location
+            .get(&hash)
+            .ok_or_else(|| invalid_block_id(format!("Block number out of bounds {}", hash)))?;
+        self.get_verified_at(index)
     }
 
     pub fn get_balances(&self, hash: HashOf<EncodedBlock>) -> Result<Balances, ApiError> {
@@ -815,11 +862,26 @@ impl Blocks {
         Ok(())
     }
 
-    pub fn first(&self) -> Result<Option<HashedBlock>, ApiError> {
+    fn first(&self) -> Result<Option<HashedBlock>, ApiError> {
         Ok(self.block_store.first()?)
     }
 
-    pub fn last(&self) -> Result<Option<HashedBlock>, ApiError> {
+    pub fn first_verified(&self) -> Result<Option<HashedBlock>, ApiError> {
+        let last_verified_idx = self
+            .block_store
+            .last_verified()
+            .map(|x| x as i128)
+            .unwrap_or(-1);
+        let first_block = self.block_store.first()?;
+        if let Some(fb) = first_block.as_ref() {
+            if fb.index as i128 > last_verified_idx {
+                return Ok(None);
+            }
+        }
+        Ok(first_block)
+    }
+
+    fn last(&self) -> Result<Option<HashedBlock>, ApiError> {
         match self.last_hash {
             Some(last_hash) => {
                 let last = self.get(last_hash)?;
@@ -829,7 +891,14 @@ impl Blocks {
         }
     }
 
-    pub fn synced_to(&self) -> Option<(HashOf<EncodedBlock>, u64)> {
+    pub fn last_verified(&self) -> Result<Option<HashedBlock>, ApiError> {
+        match self.block_store.last_verified() {
+            Some(h) => Ok(Some(self.block_store.get_at(h)?)),
+            None => Ok(None),
+        }
+    }
+
+    fn synced_to(&self) -> Option<(HashOf<EncodedBlock>, u64)> {
         self.last().ok().flatten().map(|hb| (hb.hash, hb.index))
     }
 
@@ -843,8 +912,12 @@ impl Blocks {
             let last_idx = self.last()?.map(|hb| hb.index).unwrap_or(0);
             if first_idx + block_limit + prune_delay < last_idx {
                 let new_first_idx = last_idx - block_limit;
-                let balances = self.get_balances_at(new_first_idx)?;
-                let hb = self.get_at(new_first_idx)?;
+                let balances = self
+                    .balances
+                    .get(&new_first_idx)
+                    .cloned()
+                    .ok_or_else(|| internal_error("Balances not found"))?;
+                let hb = self.block_store.get_at(new_first_idx)?;
                 self.block_store
                     .prune(&hb, &balances)
                     .map_err(internal_error)?

@@ -5,10 +5,8 @@ use ic_crypto_internal_types::curves::bls12_381::G1;
 use ic_crypto_internal_types::curves::test_vectors::bls12_381 as test_vectors;
 use miracl_core::bls12381::ecp::ECP;
 
-/// Note:
-/// * ECP does not implement Debug.
-/// * Implementing pretty-print would be good too.
-/// * Ditto Eq.  Note that miracl `.equals` takes mutable arguments.
+/// When much of this was written, ECP lacked Debug, pretty-printing,
+/// and Eq, and Miracl's `.equals` took mutable arguments.
 
 /// Verifies that conversions between a value and a test vector work as
 /// expected.
@@ -56,6 +54,15 @@ fn g1_serde_should_match_identity_test_vector() {
         &ECP::new(),
         "Number 0 (infinity)",
     );
+}
+
+#[test]
+fn g1_throws_error_if_compressed_flag_unset() {
+    use ic_crypto_internal_types::curves::bls12_381::G1 as G1Bytes;
+    let mut bytes =
+        g1_bytes_from_vec(&hex::decode(test_vectors::g1::GENERATOR).expect("hex::decode failed"));
+    bytes[G1Bytes::FLAG_BYTE_OFFSET] &= !G1Bytes::COMPRESSED_FLAG;
+    assert!(miracl_g1_from_bytes(&bytes).is_err());
 }
 
 #[test]

@@ -137,7 +137,7 @@ pub type CompleteCheckpointLayout = CheckpointLayout<ReadOnly>;
 
 /// This struct contains bits of the `ExecutionState` that are not already
 /// covered somewhere else and are too small to be serialized separately.
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct ExecutionStateBits {
     pub exported_globals: Vec<Global>,
     pub heap_size: NumWasmPages,
@@ -147,6 +147,7 @@ pub struct ExecutionStateBits {
 
 /// This struct contains bits of the `CanisterState` that are not already
 /// covered somewhere else and are too small to be serialized separately.
+#[derive(Debug)]
 pub struct CanisterStateBits {
     pub controller: PrincipalId,
     pub last_full_execution_round: ExecutionRound,

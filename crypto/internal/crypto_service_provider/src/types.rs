@@ -1,6 +1,7 @@
 // We disable clippy warnings for the whole module because they apply to
 // generated code, meaning we can't locally disable the warnings (the code is
-// defined in another module). https://dfinity.atlassian.net/browse/DFN-467
+// defined in another module).
+// (cf. DFN-467).
 #![allow(clippy::unit_arg)]
 
 pub use conversions::CspSecretKeyConversionError;
@@ -81,7 +82,7 @@ impl std::fmt::Debug for CspSecretKey {
             CspSecretKey::ThresBls12_381(_) => write!(f, "CspSecretKey::ThresBls12_381 - REDACTED"),
             CspSecretKey::Secp256k1WithPublicKey(sk) => write!(
                 f,
-                "CspSecretKey: secret_key: REDACTED public_key: {} pop: {}",
+                "CspSecretKey::Secp256k1WithPublicKey secret_key: REDACTED public_key: {} pop: {}",
                 hex::encode(&sk.public_key_bytes.0[..]),
                 hex::encode(&sk.pop_bytes.0[..])
             ),

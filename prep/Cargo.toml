@@ -45,7 +45,7 @@ slog-async = "2.5.0"
 pretty_assertions = "0.6"
 
 [lib]
-name = "ic_prep"
+name = "ic_prep_lib"
 path = "src/lib.rs"
 
 [[bin]]

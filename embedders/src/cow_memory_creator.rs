@@ -2,7 +2,6 @@ use ic_cow_state::{MappedState, MappedStateImpl};
 use std::sync::{Arc, Mutex};
 
 pub struct CowMemoryCreator {
-    // SHOULD TAKE A HANDLE TO MappedState
     heap_base: u64,
 }
 
@@ -51,7 +50,6 @@ impl crate::LinearMemory for MappedStateMemory {
     }
 }
 
-// TODO is this replacing really necessary?
 // In Wasmtime MemoryCreator is set in the Config when the Engine is created.
 // Since we are caching the Module, we are also (implicitly) caching the
 // Engine. Yet, we want to retain the API that allows setting the MemoryCreator
@@ -60,7 +58,6 @@ impl crate::LinearMemory for MappedStateMemory {
 // internal MemoryCreator it currently contains
 #[derive(Clone)]
 pub(crate) struct CowMemoryCreatorProxy {
-    // TODO do we need the inner most Arc?
     pub memory_creator: Arc<Mutex<Arc<CowMemoryCreator>>>,
     pub memory_creator_lock: Arc<Mutex<()>>,
 }

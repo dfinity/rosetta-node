@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use super::*;
 use ic_base_types::PrincipalId;
 use ic_crypto::utils::get_node_keys_or_generate_if_missing;

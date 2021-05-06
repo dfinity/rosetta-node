@@ -13,7 +13,6 @@ use ed25519_dalek::SecretKey as OtherSecretKey;
 // workload generator
 fn get_pub() -> PublicKey {
     let contents = "-----BEGIN PRIVATE KEY-----\nMFMCAQEwBQYDK2VwBCIEILhMGpmYuJ0JEhDwocj6pxxOmIpGAXZd40AjkNhuae6q\noSMDIQBeXC6ae2dkJ8QC50bBjlyLqsFQFsMsIThWB21H6t6JRA==\n-----END PRIVATE KEY-----";
-    //let contents = read_to_string("foo.pem").expect("Could not read key file.");
     let (_secret_key, public_key) = SecretKey::from_pem(&contents).expect("Invalid secret key.");
     public_key
 }
@@ -42,7 +41,7 @@ lazy_static! {
     // a dedicated identity for when we use --principal-id in the
     // workload generator
     pub static ref TEST_IDENTITY_KEYPAIR_HARD_CODED: ed25519_dalek::Keypair = {
-    get_pair()
+        get_pair()
     };
 
     pub static ref PUBKEY : UserPublicKey = UserPublicKey {
@@ -51,8 +50,8 @@ lazy_static! {
     };
 
     pub static ref PUBKEY_PID : UserPublicKey = UserPublicKey {
-    key: get_pub().as_bytes().to_vec(),
-    algorithm_id: AlgorithmId::Ed25519,
+        key: get_pub().as_bytes().to_vec(),
+        algorithm_id: AlgorithmId::Ed25519,
     };
 
 }

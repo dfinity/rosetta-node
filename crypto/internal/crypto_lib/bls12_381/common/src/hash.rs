@@ -82,9 +82,8 @@ pub fn hash_to_miracl_g1(dst: &[u8], msg: &[u8]) -> MiraclG1 {
 }
 
 // Conversions to and from Miracl
-// TODO(CRP-811): Maybe a standard serialisation of miracl types.  Note the
-// three flag bits in the standard encoding, two in miracl.
-pub fn g1_from_miracl(p: &MiraclG1) -> G1 {
+// TODO(CRP-811): Switch to using the now standardized MIRACL serde.
+fn g1_from_miracl(p: &MiraclG1) -> G1 {
     // MIRACL: 1-byte tag <> 48-byte x-coord <> 48-byte y-coord
     // Serialize without compression.
     let mut buf: [u8; 97] = [0; 97];
@@ -96,7 +95,10 @@ pub fn g1_from_miracl(p: &MiraclG1) -> G1 {
     // Thankfully both libraries encode in big-endian.
     let mut pairing_p: <G1Affine as CurveAffine>::Uncompressed = EncodedPoint::empty();
     pairing_p.as_mut().copy_from_slice(&buf[1..97]);
-    pairing_p.into_affine().unwrap().into_projective()
+    pairing_p
+        .into_affine()
+        .expect("MIRACL returned an invalid point")
+        .into_projective()
 }
 
 pub fn hash_to_fr(hash: Sha256) -> Fr {

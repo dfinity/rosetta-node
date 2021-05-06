@@ -3,8 +3,6 @@
 //! The types in this file correspond to the types used in the spec, including
 //! ephemeral (secp256k1) keys, dealings, complaints and transcripts.  Please
 //! see the specification for more details.
-//!
-//! Spec: https://docs.dfinity.systems/dfinity/spec/replica/ancillary/crypto/index.html#_csp_interface_for_distributed_key_generation
 
 mod advanced_ops;
 #[cfg(test)]

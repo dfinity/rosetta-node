@@ -322,7 +322,7 @@ impl<'a> IngressSelector for IngressManager {
     }
 }
 
-/// A IngressSetQuery implementation based on IngressHistoryReader.
+/// An IngressSetQuery implementation based on IngressHistoryReader.
 struct IngressHistorySet {
     get_status: Box<dyn Fn(&MessageId) -> IngressStatus>,
 }
@@ -362,8 +362,8 @@ struct IngressSetChain<'a, T> {
 }
 
 impl<'a, T: IngressSetQuery> IngressSetChain<'a, T> {
-    /// Return the the Chaining of two IngerssSetQuery object that can be
-    /// used to check if a ingress message with an expiry time in the range
+    /// Return the Chaining of two IngerssSetQuery object that can be
+    /// used to check if an ingress message with an expiry time in the range
     /// of `time .. time + MAX_INGRESS_TTL` already exists in the set.
     ///
     /// If the first IngressSetQuery is enough to cover the full range (i.e.

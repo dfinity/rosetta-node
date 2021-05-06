@@ -223,8 +223,6 @@ impl SlotMgr {
         let data_mdb = db_base.join("data.mdb");
         let read_only = data_mdb.exists() && data_mdb.metadata().unwrap().permissions().readonly();
         let mut slot_mgr = if read_only {
-            // FixME in next restructure handle readonly vs readwrite in a cleaner
-            // fashion with static polymorphism
             env_builder.set_flags(
                 EnvironmentFlags::NO_LOCK
                     | EnvironmentFlags::NO_TLS
@@ -287,9 +285,6 @@ impl SlotMgr {
     }
 
     fn create_db(env: lmdb::Environment, nr_slots: u64) -> SlotMgr {
-        // jww (2021-03-23): Note that on macOS, if you repeatedly run the
-        // test_simple_canister_wasm_cache, it will hang on this line, even if
-        // all we do is call mdb_txn_begin.
         let default_table = env
             .create_db(None, DatabaseFlags::empty())
             .expect("default_table created");
@@ -728,7 +723,6 @@ impl SlotMgr {
         let last_executed_round = self.last_executed_round.load(Ordering::Relaxed);
 
         if overwritten_physical_slot != INVALID_SLOT {
-            // FixME: Add some slot number validation here
             // the overwritten slot is valid and shared then add it to the free list
             // println!("Adding {} to gc list", overwritten_physical_slot);
             rw_txn

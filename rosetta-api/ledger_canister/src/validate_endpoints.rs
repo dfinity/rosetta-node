@@ -1,13 +1,14 @@
 use crate::protobuf;
 use crate::protobuf::transaction::Transfer as PTransfer;
 use crate::{
-    AccountBalanceArgs, AccountIdentifier, Block, BlockArg, BlockRes, EncodedBlock, GetBlocksArgs,
-    GetBlocksRes, HashOf, ICPTs, IterBlocksArgs, IterBlocksRes, Memo, NotifyCanisterArgs, SendArgs,
-    Subaccount, TimeStamp, TipOfChainRes, TotalSupplyArgs, Transaction, TransactionNotification,
-    TransactionNotificationResult, Transfer, HASH_LENGTH, TRANSACTION_FEE,
+    AccountBalanceArgs, AccountIdentifier, Block, BlockArg, BlockRes, CyclesResponse, EncodedBlock,
+    GetBlocksArgs, GetBlocksRes, HashOf, ICPTs, IterBlocksArgs, IterBlocksRes, Memo,
+    NotifyCanisterArgs, SendArgs, Subaccount, TimeStamp, TipOfChainRes, TotalSupplyArgs,
+    Transaction, TransactionNotification, Transfer, HASH_LENGTH, TRANSACTION_FEE,
 };
 use dfn_protobuf::ToProto;
 use ic_base_types::{CanisterId, CanisterIdError};
+use protobuf::cycles_notification_response::Response;
 use std::convert::{TryFrom, TryInto};
 
 /// The point of this file is to validate protobufs as they're received and turn
@@ -76,6 +77,40 @@ impl ToProto for TipOfChainRes {
             chain_length: Some(protobuf::BlockHeight {
                 height: self.tip_index,
             }),
+        }
+    }
+}
+
+impl ToProto for CyclesResponse {
+    type Proto = protobuf::CyclesNotificationResponse;
+
+    fn from_proto(pb: Self::Proto) -> Result<Self, String> {
+        match pb
+            .response
+            .ok_or("No response field received from the cycles canister")?
+        {
+            Response::Refund(protobuf::Refund { error, refund }) => {
+                Ok(CyclesResponse::Refunded(error, refund.map(|bh| bh.height)))
+            }
+            Response::ToppedUp(_) => Ok(CyclesResponse::ToppedUp(())),
+            Response::CreatedCanisterId(pid) => {
+                let cid = CanisterId::try_from(pid).map_err(|e| e.to_string())?;
+                Ok(CyclesResponse::CanisterCreated(cid))
+            }
+        }
+    }
+
+    fn to_proto(self) -> Self::Proto {
+        let response = match self {
+            CyclesResponse::Refunded(error, refund) => Response::Refund(protobuf::Refund {
+                error,
+                refund: refund.map(|height| protobuf::BlockHeight { height }),
+            }),
+            CyclesResponse::ToppedUp(()) => Response::ToppedUp(protobuf::ToppedUp {}),
+            CyclesResponse::CanisterCreated(cid) => Response::CreatedCanisterId(cid.get()),
+        };
+        Self::Proto {
+            response: Some(response),
         }
     }
 }
@@ -437,17 +472,6 @@ impl ToProto for TransactionNotification {
             amount: Some(amount.to_proto()),
             memo: Some(protobuf::Memo { memo: memo.0 }),
         }
-    }
-}
-
-impl ToProto for TransactionNotificationResult {
-    type Proto = protobuf::TransactionNotificationResponse;
-
-    fn from_proto(pb: Self::Proto) -> Result<Self, String> {
-        Ok(Self(pb.response))
-    }
-    fn to_proto(self) -> Self::Proto {
-        Self::Proto { response: self.0 }
     }
 }
 

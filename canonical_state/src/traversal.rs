@@ -80,12 +80,13 @@ mod tests {
     use ic_cow_state::CowMemoryManagerImpl;
     use ic_registry_subnet_type::SubnetType;
     use ic_replicated_state::{
-        canister_state::{CanisterState, ExecutionState, ExportedFunctions, Global, NumWasmPages},
+        canister_state::{ExecutionState, ExportedFunctions, Global, NumWasmPages},
         metadata_state::SubnetTopology,
         page_map::{PageDelta, PageIndex, PageMap, PAGE_SIZE},
     };
     use ic_test_utilities::{
         mock_time,
+        state::new_canister_state,
         types::ids::{canister_test_id, subnet_test_id, user_test_id},
     };
     use ic_types::{Cycles, ExecutionRound};
@@ -152,7 +153,7 @@ mod tests {
     fn test_traverse_canister_empty_execution_state() {
         let canister_id = canister_test_id(2);
         let controller = user_test_id(24);
-        let canister_state = CanisterState::new(
+        let canister_state = new_canister_state(
             canister_id,
             controller.get(),
             INITIAL_CYCLES,
@@ -239,7 +240,7 @@ mod tests {
         let page1 = vec![1u8; *PAGE_SIZE];
         let canister_id = canister_test_id(2);
         let controller = user_test_id(24);
-        let mut canister_state = CanisterState::new(
+        let mut canister_state = new_canister_state(
             canister_id,
             controller.get(),
             INITIAL_CYCLES,
@@ -393,7 +394,7 @@ mod tests {
     fn test_traverse_partial_canister_empty_execution_state() {
         let canister_id = canister_test_id(2);
         let controller = user_test_id(24);
-        let canister_state = CanisterState::new(
+        let canister_state = new_canister_state(
             canister_id,
             controller.get(),
             INITIAL_CYCLES,
@@ -478,7 +479,7 @@ mod tests {
     fn test_traverse_partial_canister_with_execution_state() {
         let canister_id = canister_test_id(2);
         let controller = user_test_id(24);
-        let mut canister_state = CanisterState::new(
+        let mut canister_state = new_canister_state(
             canister_id,
             controller.get(),
             INITIAL_CYCLES,

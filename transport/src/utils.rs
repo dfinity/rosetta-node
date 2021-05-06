@@ -37,21 +37,24 @@ pub(crate) type ReceiveEnd = Receiver<(Instant, TransportPayload)>;
 
 // Since there is no try_recv(), this is the max duration after the first
 // dequeue to batch for
+/// Maximal time to wait for batching
 const MAX_BATCHING_DURATION_MSEC: u64 = 20;
 
+/// Guarded receive end
 struct ReceiveEndContainer {
     state: Mutex<Option<ReceiveEnd>>,
 }
 
 impl ReceiveEndContainer {
+    /// Wraps a given receive end and returns it
     fn new(receive_end: ReceiveEnd) -> Self {
         Self {
             state: Mutex::new(Some(receive_end)),
         }
     }
 
-    // Sets up receive_end state for use by reader
-    // Returns true if the receive end was updated
+    /// Sets up receive_end state for use by reader.
+    /// Returns true if the receive end was updated.
     fn on_reader_start(&self, receive_end: ReceiveEnd) -> bool {
         let mut state = self.state.lock().unwrap();
         if state.is_some() {
@@ -67,39 +70,44 @@ impl ReceiveEndContainer {
         }
     }
 
-    // Updates the receive end
+    /// Updates the receive end
     fn update(&self, receive_end: ReceiveEnd) {
         let mut state = self.state.lock().unwrap();
         *state = Some(receive_end);
     }
 
-    // Takes out the currently active receive end (if any)
+    /// Takes out the currently active receive end (if any)
     fn take(&self) -> Option<ReceiveEnd> {
         let mut state = self.state.lock().unwrap();
         state.take()
     }
 }
 
-// Transport client -> scheduler adapter.
+/// Transport client -> scheduler adapter.
 pub(crate) struct SendQueueImpl {
-    // Flow label, string for use as the value for a metric label
+    /// Flow label, string for use as the value for a metric label
     flow_label: String,
 
-    // Flow Tag, string for use as the value for a metric label
+    /// Flow Tag, string for use as the value for a metric label
     flow_tag: String,
 
+    /// Size of queue
     queue_size: QueueSize,
 
-    // A Mutex is needed around the send/receive end tuples, as they
-    // need to be updated in sync.
+    /// A Mutex is needed around the send/receive end tuples, as they
+    /// need to be updated in sync.
     channel_ends: Mutex<(SendEnd, Arc<ReceiveEndContainer>)>,
 
+    /// Error flag
     error: Arc<AtomicBool>,
 
+    /// Metrics
     metrics: SendQueueMetrics,
 }
 
+/// Implementation for the send queue
 impl SendQueueImpl {
+    /// Initializes and returns a send queue
     pub(crate) fn new(
         flow_label: String,
         flow_tag: &FlowTag,
@@ -186,6 +194,7 @@ impl SendQueue for SendQueueImpl {
     }
 }
 
+/// Send queue implementation
 struct SendQueueReaderImpl {
     flow_label: String,
     flow_tag: String,
@@ -196,6 +205,8 @@ struct SendQueueReaderImpl {
 }
 
 impl SendQueueReaderImpl {
+    /// Receives a message with a given timeout. If timeout expires, returns
+    /// None.
     async fn receive_with_timeout(
         receive_end: &mut ReceiveEnd,
         timeout: Duration,
@@ -211,6 +222,7 @@ impl SendQueueReaderImpl {
         ret.unwrap()
     }
 
+    /// Updates the receive ends
     fn update_cached_receive_end(&mut self) {
         if let Some(receive_end) = self.receive_end_container.take() {
             self.cur_receive_end = Some(receive_end);
@@ -293,7 +305,7 @@ impl SendQueueReader for SendQueueReaderImpl {
     }
 }
 
-// Returns a map of flow_tag -> peer_ip for that flow.
+/// Returns a map of flow_tag -> peer_ip for that flow.
 pub(crate) fn get_flow_ips(
     node_record: &NodeRecord,
 ) -> Result<HashMap<FlowTag, String>, TransportErrorCode> {
@@ -313,7 +325,7 @@ pub(crate) fn get_flow_ips(
     Ok(ret)
 }
 
-// Builds the flow label to use for metrics, from the IP address and the NodeId
+/// Builds the flow label to use for metrics, from the IP address and the NodeId
 pub(crate) fn get_flow_label(node_ip: &str, node_id: &NodeId) -> String {
     // 35: Includes the first 6 groups of 5 chars each + the 5 separators
     let prefix = node_id.to_string().chars().take(35).collect::<String>();

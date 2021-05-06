@@ -30,8 +30,11 @@ use ic_types::{
 };
 use std::{str::FromStr, time::Duration};
 
+/// Errors returned by the [`CyclesAccountManager`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CyclesAccountManagerError {
+    /// One of the API contracts that the cycles account manager enforces was
+    /// violated.
     ContractViolation(String),
 }
 
@@ -57,8 +60,12 @@ pub struct CyclesAccountManager {
     /// The maximum amount of cycles a canister can hold.
     /// If set to None, the canisters have no upper limit.
     max_cycles_per_canister: Option<Cycles>,
+    /// The subnet type of this [`CyclesAccountManager`].
     own_subnet_type: SubnetType,
+    /// The subnet id of this [`CyclesAccountManager`].
     subnet_id: SubnetId,
+    /// The configuration of this [`CyclesAccountManager`] controlling the fees
+    /// that are charged for various operations.
     config: CyclesAccountManagerConfig,
 }
 
@@ -116,6 +123,7 @@ impl CyclesAccountManager {
         }
     }
 
+    /// Returns the subnet type of this [`CyclesAccountManager`].
     pub fn subnet_type(&self) -> SubnetType {
         self.own_subnet_type
     }
@@ -126,22 +134,27 @@ impl CyclesAccountManager {
     //
     ////////////////////////////////////////////////////////////////////////////
 
+    /// Returns the fee to create a canister in [`Cycles`].
     pub fn canister_creation_fee(&self) -> Cycles {
         self.config.canister_creation_fee
     }
 
+    /// Returns the fee for receiving an ingress message in [`Cycles`].
     pub fn ingress_message_received_fee(&self) -> Cycles {
         self.config.ingress_message_reception_fee
     }
 
+    /// Returns the fee per byte of ingress message received in [`Cycles`].
     pub fn ingress_byte_received_fee(&self) -> Cycles {
         self.config.ingress_byte_reception_fee
     }
 
+    /// Returns the fee for performing a xnet call in [`Cycles`].
     pub fn xnet_call_performed_fee(&self) -> Cycles {
         self.config.xnet_call_fee
     }
 
+    /// Returns the fee per byte of transmitted xnet call in [`Cycles`].
     pub fn xnet_call_bytes_transmitted_fee(&self, payload_size: NumBytes) -> Cycles {
         self.config.xnet_byte_transmission_fee * Cycles::from(payload_size.get())
     }
@@ -448,10 +461,13 @@ impl CyclesAccountManager {
         }
     }
 
-    pub fn refund_cycles(&self, system_state: &mut SystemState, cycles: Cycles) {
+    fn refund_cycles(&self, system_state: &mut SystemState, cycles: Cycles) {
         system_state.cycles_account.refund_cycles(cycles);
     }
 
+    /// Returns the maximum amount of `Cycles` that can be added to a canister's
+    /// balance taking into account the `max_cycles_per_canister` value if
+    /// present.
     pub fn check_max_cycles_can_add(
         &self,
         system_state: &SystemState,
@@ -478,6 +494,11 @@ impl CyclesAccountManager {
         system_state.cycles_account.add_cycles(cycles);
     }
 
+    /// Mints `amount_to_mint` [`Cycles`].
+    ///
+    /// # Errors
+    /// Returns a `CyclesAccountManagerError::ContractViolation` if not on a
+    /// system subnet.
     pub fn mint_cycles(
         &self,
         system_state: &mut SystemState,
@@ -507,9 +528,9 @@ impl CyclesAccountManager {
                 * Cycles::from(num_instructions.get() / 10)
     }
 
-    // Charges a canister for its resource allocation and usage for the duration
-    // specified. If fees were successfully charged, then returns
-    // Ok(CanisterState) else returns Err(CanisterState).
+    /// Charges a canister for its resource allocation and usage for the
+    /// duration specified. If fees were successfully charged, then returns
+    /// Ok(CanisterState) else returns Err(CanisterState).
     pub fn charge_canister_for_resource_allocation_and_usage(
         &self,
         log: &ReplicaLogger,
@@ -582,6 +603,7 @@ pub enum IngressInductionCost {
 }
 
 impl IngressInductionCost {
+    /// Returns the cost of inducting an ingress message in [`Cycles`].
     pub fn cost(&self) -> Cycles {
         match self {
             Self::Free => Cycles::from(0),

@@ -8,7 +8,7 @@ use crate::registry::RegistryClientError;
 use crate::{CountBytes, NodeId, RegistryVersion, SubnetId};
 use core::fmt::Formatter;
 use ic_crypto_internal_types::sign::threshold_sig::public_coefficients::CspPublicCoefficients;
-use ic_crypto_internal_types::sign::threshold_sig::public_key::bls12_381::ThresholdSigPublicKeyError;
+use ic_crypto_internal_types::sign::threshold_sig::public_key::bls12_381::ThresholdSigPublicKeyBytesConversionError;
 use ic_crypto_internal_types::sign::threshold_sig::public_key::CspThresholdSigPublicKey;
 use phantom_newtype::Id;
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -102,7 +102,8 @@ pub enum KeyPurpose {
     CommitteeSigning = 4,
 }
 
-/// An algorithm id. This is e.g. used to identify signature algorithms.
+/// An algorithm ID. This is used to specify the signature algorithm associated
+/// with a public key.
 #[derive(
     Clone, Copy, Debug, Deserialize, EnumIter, Eq, Hash, PartialEq, PartialOrd, Ord, Serialize,
 )]
@@ -360,10 +361,10 @@ pub enum CryptoError {
     RootSubnetPublicKeyNotFound { registry_version: RegistryVersion },
 }
 
-impl From<ThresholdSigPublicKeyError> for CryptoError {
-    fn from(error: ThresholdSigPublicKeyError) -> Self {
+impl From<ThresholdSigPublicKeyBytesConversionError> for CryptoError {
+    fn from(error: ThresholdSigPublicKeyBytesConversionError) -> Self {
         match error {
-            ThresholdSigPublicKeyError::Malformed {
+            ThresholdSigPublicKeyBytesConversionError::Malformed {
                 key_bytes,
                 internal_error,
             } => CryptoError::MalformedPublicKey {

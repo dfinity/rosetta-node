@@ -72,15 +72,6 @@ pub struct AccountBalanceResponse {
     #[serde(rename = "balances")]
     pub balances: Vec<Amount>,
 
-    /// If a blockchain is UTXO-based, all unspent Coins owned by an
-    /// account_identifier should be returned alongside the balance. It is
-    /// highly recommended to populate this field so that users of the Rosetta
-    /// API implementation don't need to maintain their own indexer to track
-    /// their UTXOs.
-    #[serde(rename = "coins")]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub coins: Option<Vec<Coin>>,
-
     /// Account-based blockchains that utilize a nonce or sequence number should
     /// include that number in the metadata. This number could be unique to the
     /// identifier or global across the account address.
@@ -94,7 +85,6 @@ impl AccountBalanceResponse {
         AccountBalanceResponse {
             block_identifier,
             balances,
-            coins: None,
             metadata: None,
         }
     }
@@ -1039,6 +1029,7 @@ impl Error {
             ApiError::InvalidNetworkId(r, d) => (710, "Invalid NetworkId", r, d),
             ApiError::InvalidAccountId(r, d) => (711, "Account not found", r, d),
             ApiError::InvalidBlockId(r, d) => (712, "Block not found", r, d),
+            ApiError::InvalidPublicKey(r, d) => (713, "Invalid public key", r, d),
             ApiError::MempoolTransactionMissing(r, d) => {
                 (720, "Transaction not in the mempool", r, d)
             }
@@ -1073,6 +1064,7 @@ pub enum ApiError {
     InvalidNetworkId(bool, Option<Object>),
     InvalidAccountId(bool, Option<Object>),
     InvalidBlockId(bool, Option<Object>),
+    InvalidPublicKey(bool, Option<Object>),
     MempoolTransactionMissing(bool, Option<Object>),
     BlockchainEmpty(bool, Option<Object>),
     InvalidTransaction(bool, Option<Object>),

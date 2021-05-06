@@ -372,9 +372,10 @@ impl Hypervisor {
     ///
     /// - Number of instructions left. This should be <= `instructions_limit`.
     ///
+    /// - The size of the delta of heap change that the execution produced.
+    ///
     /// - A HypervisorResult that on success contains an optional wasm execution
-    ///   result, the size of the delta of heap change that the execution
-    ///   produced and an error if execution failed.
+    ///   result and an error if execution failed.
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     pub fn execute_callback(
         &self,
@@ -391,13 +392,15 @@ impl Hypervisor {
     ) -> ExecResult<(
         CanisterState,
         NumInstructions,
-        HypervisorResult<(Option<WasmResult>, NumBytes)>,
+        NumBytes,
+        HypervisorResult<Option<WasmResult>>,
     )> {
         // Validate that the canister is not stopped.
         if canister.status() == CanisterStatusType::Stopped {
             return EarlyResult::new((
                 canister,
                 instructions_limit,
+                NumBytes::from(0),
                 Err(HypervisorError::CanisterStopped),
             ));
         }
@@ -407,6 +410,7 @@ impl Hypervisor {
             return EarlyResult::new((
                 canister,
                 instructions_limit,
+                NumBytes::from(0),
                 Err(HypervisorError::WasmModuleNotFound),
             ));
         }
@@ -484,22 +488,25 @@ impl Hypervisor {
         output.and_then(move |output| {
             canister.execution_state = Some(output.execution_state);
             match output.wasm_result {
-                Ok(opt_result) => {
+                result @ Ok(_) => {
                     // Executing the reply/reject closure succeeded.
                     canister.system_state = output.system_state;
-                    let result = Ok((
-                        opt_result,
-                        NumBytes::from((output.instance_stats.dirty_pages * *PAGE_SIZE) as u64),
-                    ));
-                    (canister, output.num_instructions_left, result)
+                    let heap_delta =
+                        NumBytes::from((output.instance_stats.dirty_pages * *PAGE_SIZE) as u64);
+                    (canister, output.num_instructions_left, heap_delta, result)
                 }
-                Err(err) => {
+                Err(callback_err) => {
                     // A trap has occurred when executing the reply/reject closure.
                     // Execute the cleanup if it exists.
                     match callback.on_cleanup {
                         None => {
-                            // No cleanup closure present. Return the error as-is.
-                            (canister, output.num_instructions_left, Err(err))
+                            // No cleanup closure present. Return the callback error as-is.
+                            (
+                                canister,
+                                output.num_instructions_left,
+                                NumBytes::from(0),
+                                Err(callback_err),
+                            )
                         }
                         Some(cleanup_closure) => {
                             let func_ref = match call_origin {
@@ -527,22 +534,34 @@ impl Hypervisor {
                             .and_then(move |cleanup_output| {
                                 canister.execution_state = Some(cleanup_output.execution_state);
                                 match cleanup_output.wasm_result {
-                                    Ok(opt_result) => {
+                                    Ok(_) => {
                                         // Executing the cleanup callback has succeeded.
                                         canister.system_state = cleanup_output.system_state;
-                                        let result = Ok((
-                                            opt_result,
-                                            NumBytes::from(
-                                                (cleanup_output.instance_stats.dirty_pages
-                                                    * *PAGE_SIZE)
-                                                    as u64,
-                                            ),
-                                        ));
-                                        (canister, cleanup_output.num_instructions_left, result)
+                                        let heap_delta = NumBytes::from(
+                                            (cleanup_output.instance_stats.dirty_pages * *PAGE_SIZE)
+                                                as u64,
+                                        );
+
+                                        // Note that, even though the callback has succeeded,
+                                        // the original callback error is returned.
+                                        (
+                                            canister,
+                                            cleanup_output.num_instructions_left,
+                                            heap_delta,
+                                            Err(callback_err),
+                                        )
                                     }
-                                    Err(err) => {
+                                    Err(cleanup_err) => {
                                         // Executing the cleanup call back failed.
-                                        (canister, cleanup_output.num_instructions_left, Err(err))
+                                        (
+                                            canister,
+                                            cleanup_output.num_instructions_left,
+                                            NumBytes::from(0),
+                                            Err(HypervisorError::Cleanup {
+                                                callback_err: Box::new(callback_err),
+                                                cleanup_err: Box::new(cleanup_err),
+                                            }),
+                                        )
                                     }
                                 }
                             })

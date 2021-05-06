@@ -1,3 +1,7 @@
+//! Canonical State [`Visitor`] that limits the byte size of blob leaves.
+//!
+//! Used for extracting stream slices of limited size for XNet Endpoint.
+
 use crate::visitor::{Control, Visitor};
 
 #[cfg(test)]

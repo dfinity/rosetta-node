@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 // SECP256K1_PK_1_DER_HEX was generated via the following commands:
 //   openssl ecparam -name secp256k1 -genkey -noout -out private.ec.key
 //   openssl ec -in private.ec.key -pubout -outform DER -out ecpubkey.der

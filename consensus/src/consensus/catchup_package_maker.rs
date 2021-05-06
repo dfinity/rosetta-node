@@ -165,10 +165,18 @@ impl<'a> CatchUpPackageMaker {
                 if let Some(transcript) = active_high_threshold_transcript(pool.as_cache(), height)
                 {
                     match self.crypto.sign(&content, my_node_id, transcript.dkg_id) {
-                        Ok(signature) => Some(CatchUpPackageShare {
-                            content: share_content,
-                            signature,
-                        }),
+                        Ok(signature) => {
+                            // Caution: The log string below is checked in replica_determinism_test.
+                            // Changing the string might break the test.
+                            debug!(
+                                self.log,
+                                "Proposing a CatchUpPackageShare at height {}", height
+                            );
+                            Some(CatchUpPackageShare {
+                                content: share_content,
+                                signature,
+                            })
+                        }
                         Err(err) => {
                             error!(self.log, "Couldn't create a signature: {:?}", err);
                             None

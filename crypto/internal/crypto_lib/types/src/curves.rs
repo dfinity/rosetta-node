@@ -13,6 +13,7 @@ pub mod bls12_381 {
 
     use std::fmt;
     use std::hash::{Hash, Hasher};
+    use zeroize::DefaultIsZeroes;
 
     /// A field representative in serialised, library independent form.
     ///
@@ -45,6 +46,7 @@ pub mod bls12_381 {
             Fr([0; Fr::SIZE])
         }
     }
+    impl DefaultIsZeroes for Fr {}
 
     /// A point in the group "G1" in serialised, library independent form.
     ///
@@ -108,6 +110,7 @@ pub mod bls12_381 {
             G1([0; G1::SIZE])
         }
     }
+    impl DefaultIsZeroes for G1 {}
 
     /// A point in the group "G2".
     ///
@@ -176,5 +179,36 @@ pub mod bls12_381 {
         fn default() -> Self {
             G2([0; G2::SIZE])
         }
+    }
+    impl DefaultIsZeroes for G2 {}
+}
+
+#[cfg(test)]
+mod test {
+    use super::bls12_381::*;
+    use zeroize::Zeroize;
+
+    #[test]
+    fn test_fr_zeroize_leaves_zero() {
+        let mut fr = Fr([42u8; Fr::SIZE]);
+        assert_ne!(fr, Fr::default());
+        fr.zeroize();
+        assert_eq!(fr, Fr::default());
+    }
+
+    #[test]
+    fn test_g1_zeroize_leaves_zero() {
+        let mut g1 = G1([42u8; G1::SIZE]);
+        assert_ne!(g1, G1::default());
+        g1.zeroize();
+        assert_eq!(g1, G1::default());
+    }
+
+    #[test]
+    fn test_g2_zeroize_leaves_zero() {
+        let mut g2 = G2([42u8; G2::SIZE]);
+        assert_ne!(g2, G2::default());
+        g2.zeroize();
+        assert_eq!(g2, G2::default());
     }
 }

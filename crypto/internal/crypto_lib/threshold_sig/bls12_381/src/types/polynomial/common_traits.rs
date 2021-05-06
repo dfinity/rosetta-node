@@ -2,13 +2,20 @@
 //! with the Zeroize trait so we implement it here ourselves.
 
 use super::*;
-use std::mem::{size_of, transmute};
 
 pub fn zeroize_fr(fr: &mut Fr) {
-    #[cfg_attr(tarpaulin, skip)]
+    /*
+    Safety of write_volatile requires that the destination be non-NULL
+    and properly aligned. Both of these preconditions follow from fr
+    being a valid reference.
+
+    This write_volatile + compiler_fence approach is the same as used
+    in the zeroize crate.
+    */
     unsafe {
-        transmute::<Fr, [u8; size_of::<Fr>()]>(*fr).copy_from_slice(&[0u8; size_of::<Fr>()]);
+        std::ptr::write_volatile(fr, Fr::zero());
     }
+    std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
 }
 
 impl Zeroize for Polynomial {

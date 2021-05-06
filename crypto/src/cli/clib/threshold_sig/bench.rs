@@ -117,7 +117,9 @@ fn core(num_signers: &str) -> Result<(), (String, i32)> {
     let mut combined_verification_time = Duration::new(0, 0);
 
     let mut rng = StdRng::from_entropy();
-    let num_signers = num_signers.parse::<usize>().unwrap();
+    let num_signers = num_signers
+        .parse::<usize>()
+        .map_err(|_| (format!("Invalid num_signers {}", num_signers), 2))?;
     let seed = Randomness::from(rng.gen::<[u8; 32]>());
     let threshold = NumberOfNodes::from(num_signers as NodeIndex);
     let eligibility = vec![true; num_signers];

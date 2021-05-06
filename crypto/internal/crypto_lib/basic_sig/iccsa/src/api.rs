@@ -42,6 +42,19 @@ fn ensure_correct_oid(oid: simple_asn1::OID, pk_der: &[u8]) -> CryptoResult<()> 
     Ok(())
 }
 
+/// Verify a canister signature
+///
+/// # Arguments
+/// * `msg` the message to verify
+/// * `sig` the signature
+/// * `pk` the canister public key
+/// * `root_pubkey` the root subnet public key
+///
+/// # Errors
+/// * `MalformedPublicKey` if the public key cannot be parsed or has an
+///   unexpected OID
+/// * `MalformedSignature` if the signature could not be parsed
+/// * `SignatureVerification` if the signature could not be verified
 pub fn verify(
     msg: &[u8],
     sig: SignatureBytes,

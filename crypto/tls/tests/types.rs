@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use ic_crypto_tls::TlsPemParsingError;
 use ic_crypto_tls::{generate_tls_keys, TlsPublicKeyCert};
 
@@ -73,5 +74,11 @@ mod tls_private_key {
         assert!(matches!(error, TlsPemParsingError { internal_error }
             if internal_error.contains("Error parsing PEM via OpenSSL")
         ));
+    }
+
+    #[test]
+    fn should_redact_tls_private_key_debug() {
+        let (_cert, private_key) = generate_tls_keys("some common name", NOT_AFTER);
+        assert_eq!(format!("{:?}", private_key), "REDACTED");
     }
 }

@@ -41,12 +41,14 @@ pub fn g2_to_bytes(g2: &G2) -> [u8; G2_SIZE] {
 }
 pub fn fr_to_bytes(fr: &FrRepr) -> [u8; FR_SIZE] {
     let mut ans = [0u8; FR_SIZE];
-    fr.write_be(&mut ans[0..]).unwrap();
+    fr.write_be(&mut ans[0..])
+        .expect("Insufficient output space");
     ans
 }
 pub fn fr_from_bytes(bytes: &[u8; FR_SIZE]) -> FrRepr {
     let mut ans = FrRepr([0; 4]);
     let mut reader = &bytes[..];
-    ans.read_be(&mut reader).unwrap();
+    ans.read_be(&mut reader)
+        .expect("Insufficient input material");
     ans
 }
