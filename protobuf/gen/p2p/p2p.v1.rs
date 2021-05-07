@@ -115,7 +115,7 @@ pub mod artifact_chunk {
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Data {
-        /// TODO: convert bincoded Artifact to protobuf
+        /// TODO(P2P-483): bincode-encoded Artifact to proto-encoding
         #[prost(bytes, tag="2")]
         Artifact(::prost::alloc::vec::Vec<u8>),
         #[prost(bytes, tag="3")]

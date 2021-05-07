@@ -1,3 +1,4 @@
+//! Test vectors for ECDSA signatures using curve P-256.
 use crate::unhex::*;
 use strum_macros::EnumIter;
 

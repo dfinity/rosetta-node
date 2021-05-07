@@ -1,3 +1,4 @@
+//! The time source public interface.
 use ic_types::time::{Time, UNIX_EPOCH};
 use std::sync::RwLock;
 use std::time::SystemTime;

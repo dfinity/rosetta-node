@@ -1,15 +1,10 @@
-use ic_crypto_tree_hash::{Digest, LabeledTree, MixedHashTree};
-use ic_crypto_utils_threshold_sig::verify_combined;
+use ic_certified_vars::{verify_certificate, CertificateValidationError};
+use ic_crypto_tree_hash::{LabeledTree, MixedHashTree};
 use ic_interfaces::registry::RegistryTransportRecord;
 use ic_registry_transport::pb::v1::{
     registry_mutation::Type, CertifiedResponse, RegistryAtomicMutateRequest,
 };
-use ic_types::{
-    consensus::certification::CertificationContent,
-    crypto::{threshold_sig::ThresholdSigPublicKey, CombinedThresholdSigOf, CryptoHash},
-    time::current_time,
-    CanisterId, CryptoHashOfPartialState, RegistryVersion, Time,
-};
+use ic_types::{crypto::threshold_sig::ThresholdSigPublicKey, CanisterId, RegistryVersion, Time};
 use prost::Message;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -29,12 +24,16 @@ pub enum CertificationError {
     InvalidSignature(String),
     /// The value at path "/canister/<cid>/certified_data" doesn't match the
     /// hash computed from the mixed hash tree with registry deltas.
-    CertifiedDataMismatch { certified: Digest, computed: Digest },
+    CertifiedDataMismatch {
+        certified: Vec<u8>,
+        computed: Vec<u8>,
+    },
     /// Parsing and signature verification was successful, but the list of
     /// deltas doesn't satisfy postconditions of the method.
     InvalidDeltas(String),
     /// The hash tree in the response was not well-formed.
     MalformedHashTree(String),
+    SubnetDelegationNotAllowed,
 }
 
 #[derive(Deserialize)]
@@ -44,86 +43,22 @@ struct CertifiedPayload {
     delta: BTreeMap<u64, Protobuf<RegistryAtomicMutateRequest>>,
 }
 
-fn verify_combined_threshold_sig(
-    msg: &CryptoHashOfPartialState,
-    sig: &CombinedThresholdSigOf<CertificationContent>,
-    pk: &ThresholdSigPublicKey,
-) -> Result<(), CertificationError> {
-    verify_combined(&CertificationContent::new(msg.clone()), sig, pk)
-        .map_err(|e| CertificationError::InvalidSignature(e.to_string()))
-}
-
-/// Parses the certificate and verifies the signature.  If successful,
-/// returns the expected root_hash of the mixed hash tree that holds
-/// registry deltas and the timestamp specified in the certificate.
-fn check_certificate(
-    canister_id: &CanisterId,
-    nns_pk: &ThresholdSigPublicKey,
-    encoded_certificate: &[u8],
-) -> Result<(Digest, Time), CertificationError> {
-    #[derive(Deserialize)]
-    struct Certificate {
-        tree: MixedHashTree,
-        signature: CombinedThresholdSigOf<CertificationContent>,
+fn embed_certificate_error(err: CertificateValidationError) -> CertificationError {
+    type CVE = CertificateValidationError;
+    type CE = CertificationError;
+    match err {
+        CVE::DeserError(err) => CE::DeserError(err),
+        CVE::InvalidSignature(err) => CE::InvalidSignature(err),
+        CVE::CertifiedDataMismatch {
+            certified,
+            computed,
+        } => CE::CertifiedDataMismatch {
+            certified,
+            computed,
+        },
+        CVE::MalformedHashTree(err) => CE::MalformedHashTree(err),
+        CVE::SubnetDelegationNotAllowed => CE::SubnetDelegationNotAllowed,
     }
-
-    #[derive(Deserialize)]
-    struct CanisterView {
-        certified_data: Digest,
-    }
-
-    #[derive(Deserialize)]
-    struct ReplicaState {
-        time: Leb128EncodedU64,
-        canister: BTreeMap<CanisterId, CanisterView>,
-    }
-
-    let certificate: Certificate = serde_cbor::from_slice(encoded_certificate).map_err(|err| {
-        CertificationError::DeserError(format!(
-            "failed to decode certificate from canister {}: {}",
-            canister_id, err
-        ))
-    })?;
-
-    let digest = CryptoHashOfPartialState::from(CryptoHash(certificate.tree.digest().to_vec()));
-
-    verify_combined_threshold_sig(&digest, &certificate.signature, nns_pk).map_err(|err| {
-        CertificationError::InvalidSignature(format!(
-            "failed to verify threshold signature: root_hash={:?}, sig={:?}, pk={:?}, error={:?}",
-            digest, certificate.signature, nns_pk, err
-        ))
-    })?;
-
-    let replica_labeled_tree =
-        LabeledTree::<Vec<u8>>::try_from(certificate.tree).map_err(|err| {
-            CertificationError::MalformedHashTree(format!(
-                "failed to convert hash tree to labeled tree: {:?}",
-                err
-            ))
-        })?;
-
-    let replica_state = ReplicaState::deserialize(LabeledTreeDeserializer::new(
-        &replica_labeled_tree,
-    ))
-    .map_err(|err| {
-        CertificationError::DeserError(format!(
-            "failed to unpack replica state from a labeled tree: {}",
-            err
-        ))
-    })?;
-
-    let time = Time::from_nanos_since_unix_epoch(replica_state.time.0);
-
-    replica_state
-        .canister
-        .get(canister_id)
-        .map(|canister| (canister.certified_data.clone(), time))
-        .ok_or_else(|| {
-            CertificationError::MalformedHashTree(format!(
-                "cannot find certified_data for canister {} in the tree",
-                canister_id
-            ))
-        })
 }
 
 /// Validates that changes in the payload form a valid range.  We want to check
@@ -165,7 +100,6 @@ fn validate_version_range(
     Ok(p.current_version.0)
 }
 
-#[allow(unused)]
 /// Parses a response of the "get_certified_changes_since" registry method,
 /// validates data integrity and authenticity and returns
 ///   * The list of changes to apply.
@@ -177,21 +111,6 @@ pub fn decode_certified_deltas(
     canister_id: &CanisterId,
     nns_pk: &ThresholdSigPublicKey,
     payload: &[u8],
-) -> Result<(Vec<RegistryTransportRecord>, RegistryVersion, Time), CertificationError> {
-    decode_certified_deltas_helper(since_version, canister_id, nns_pk, payload, false)
-}
-
-/// Similar to decode_certificate_deltas, but with an option to disable
-/// certificate validation. `payload` here refers to the serialized
-/// and certified set of `RegistryTransportRecord`s,  as returned from
-/// `get_certified_changes_since` registry method when querying the
-/// registry HTTP endpoint.
-pub(crate) fn decode_certified_deltas_helper(
-    since_version: u64,
-    canister_id: &CanisterId,
-    nns_pk: &ThresholdSigPublicKey,
-    payload: &[u8],
-    disable_certificate_validation: bool,
 ) -> Result<(Vec<RegistryTransportRecord>, RegistryVersion, Time), CertificationError> {
     let certified_response = CertifiedResponse::decode(payload).map_err(|err| {
         CertificationError::DeserError(format!(
@@ -214,23 +133,14 @@ pub(crate) fn decode_certified_deltas_helper(
     })?;
 
     // Verify the authenticity of the root hash stored by the canister in the
-    // certified_data field, and get the value of that field.
-    let time = if disable_certificate_validation {
-        current_time()
-    } else {
-        let (certified_data, time) =
-            check_certificate(canister_id, nns_pk, &certified_response.certificate[..])?;
-
-        // Recompute the root hash of the canister state and compare it to the
-        // certified one.
-        if mixed_hash_tree.digest() != certified_data {
-            return Err(CertificationError::CertifiedDataMismatch {
-                computed: mixed_hash_tree.digest(),
-                certified: certified_data,
-            });
-        }
-        time
-    };
+    // certified_data field, and get the time on the certificate.
+    let time = verify_certificate(
+        &certified_response.certificate[..],
+        canister_id,
+        nns_pk,
+        mixed_hash_tree.digest().as_bytes(),
+    )
+    .map_err(embed_certificate_error)?;
 
     // Extract structured deltas from their tree representation.
     let labeled_tree = LabeledTree::<Vec<u8>>::try_from(mixed_hash_tree).map_err(|err| {

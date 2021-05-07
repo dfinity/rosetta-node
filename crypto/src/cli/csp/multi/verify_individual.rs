@@ -1,4 +1,4 @@
-use crate::common::utils::csp;
+use crate::cli::csp;
 use ic_crypto_internal_csp::api::CspSigner;
 use ic_crypto_internal_csp::types::{CspPublicKey, CspSignature, MultiBls12_381_Signature};
 use ic_crypto_internal_multi_sig_bls12381::types::{IndividualSignatureBytes, PublicKeyBytes};

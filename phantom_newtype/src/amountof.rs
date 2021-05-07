@@ -305,7 +305,7 @@ where
     }
 }
 
-// TODO(roman): Implement `Step` trait once it's stabilised.
+// TODO(MR-32): Implement `Step` trait once it's stabilised.
 impl<Unit, Repr> AmountOf<Unit, Repr>
 where
     Repr: Add<Output = Repr> + From<u8>,

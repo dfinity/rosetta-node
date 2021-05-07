@@ -225,8 +225,8 @@ fn function_info(
     ))
 }
 
-/// TODO allow witnesses to be passed in via attributes for different types of
-/// serialization
+/// TODO(EXC-278): allow witnesses to be passed in via attributes for different
+/// types of serialization
 fn check_attributes(attr: proc_macro::TokenStream, method: &str, mut errors: Errors) -> Errors {
     let tokens = TokenStream::from(attr).into_iter().collect::<Vec<_>>();
     if tokens.is_empty() {

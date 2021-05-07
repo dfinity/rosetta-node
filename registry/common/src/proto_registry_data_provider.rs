@@ -19,7 +19,7 @@ pub struct ProtoRegistryDataProvider {
 
 #[derive(Error, Clone, Debug)]
 pub enum ProtoRegistryDataProviderError {
-    #[error("key {key:} already exists at version {version:}")]
+    #[error("key {key} already exists at version {version}")]
     KeyAlreadyExists {
         key: String,
         version: RegistryVersion,

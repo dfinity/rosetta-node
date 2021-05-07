@@ -5,14 +5,14 @@ use ic_protobuf::types::v1 as pb;
 use serde::{Deserialize, Serialize};
 use std::{convert::TryFrom, fmt};
 
-/// The type representing principals as described in the [public
-/// spec](https://docs.dfinity.systems/spec/public/#_principals).
+/// The type representing principals as described in the [interface
+/// spec](https://sdk.dfinity.org/docs/interface-spec/index.html#_principals).
 ///
 /// A principal is just a blob that is displayed in a particular way.
-/// (see https://docs.dfinity.systems/spec/public/#textual-ids)
+/// (see https://sdk.dfinity.org/docs/interface-spec/index.html#textual-ids)
 ///
 /// Principals have variable length, bounded by 29 bytes. Since we
-/// want PrincipalId to implement the Copy trait, we encode them as
+/// want [`PrincipalId`] to implement the Copy trait, we encode them as
 /// a fixed-size array and a length.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct PrincipalId {
@@ -43,23 +43,22 @@ impl PrincipalId {
 impl fmt::Display for PrincipalId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
         let blob = self.as_slice();
-        // calc checksum
+        // Calculate checksum...
         let mut hasher = crc32fast::Hasher::new();
         hasher.update(&blob);
         let checksum = hasher.finalize();
 
-        // combine blobs
+        // ...combine blobs...
         let mut bytes = vec![];
         bytes.extend_from_slice(&(checksum.to_be_bytes()));
         bytes.extend_from_slice(&blob);
 
-        // base32
+        // ...encode in base32...
         let mut s = base32::encode(base32::Alphabet::RFC4648 { padding: false }, &bytes);
         s.make_ascii_lowercase();
 
-        // write out string with dashes
+        // ...write out the string with dashes.
         while s.len() > 5 {
-            // to bad split_off does not work the other way
             let rest = s.split_off(5);
             write!(f, "{}-", s)?;
             s = rest;
@@ -74,6 +73,8 @@ impl fmt::Debug for PrincipalId {
     }
 }
 
+/// Represents an error that can occur when parsing a blob into a
+/// [`PrincipalId`].
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum PrincipalIdBlobParseError {
     TooLong(usize),
@@ -100,8 +101,8 @@ impl Into<Vec<u8>> for PrincipalId {
     }
 }
 
-/// The TryFrom trait should only be used when parsing data; fresh ids should
-/// always be created with the functions below (PrincipalId::new_*)
+/// The [`TryFrom`] trait should only be used when parsing data; fresh ids
+/// should always be created with the functions below (PrincipalId::new_*)
 impl TryFrom<&[u8]> for PrincipalId {
     type Error = PrincipalIdBlobParseError;
 
@@ -138,6 +139,8 @@ impl AsRef<[u8]> for PrincipalId {
     }
 }
 
+/// Represents an error that can occur when parsing a string into a
+/// [`PrincipalId`].
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum PrincipalIdParseError {
     TooLong,
@@ -170,8 +173,8 @@ impl std::str::FromStr for PrincipalId {
     type Err = PrincipalIdParseError;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
-        // Strategy: Parse very liberally, then pretty-print and compare output
-        // This is both simpler and yields better error messages
+        // Strategy: Parse very liberally, then pretty-print and compare output.
+        // This is both simpler and yields better error messages.
 
         let mut s = input.to_string();
         s.make_ascii_lowercase();
@@ -198,7 +201,7 @@ impl std::str::FromStr for PrincipalId {
 }
 
 /// Some principal ids have special classes (system-generated,
-/// self-authenticating, derived), see https://docs.dfinity.systems/spec/public/#id-classes
+/// self-authenticating, derived), see https://sdk.dfinity.org/docs/interface-spec/index.html#id-classes
 ///
 /// The following functions allow creating and testing for the special forms.
 impl PrincipalId {
@@ -274,8 +277,8 @@ impl PrincipalId {
         PrincipalId { len: 1, data }
     }
 
-    pub fn is_self_authenticating(&self, pubkey: &[u8]) -> bool {
-        let blob = &self.into_vec();
+    pub fn authenticates_for_pubkey(&self, pubkey: &[u8]) -> bool {
+        let blob = self.as_slice();
         if blob.len() != Self::HASH_LEN_IN_BYTES + 1 {
             return false;
         }
@@ -283,6 +286,17 @@ impl PrincipalId {
             return false;
         }
         if Sha224::hash(pubkey) != blob[0..Self::HASH_LEN_IN_BYTES] {
+            return false;
+        }
+        true
+    }
+
+    pub fn is_self_authenticating(&self) -> bool {
+        let blob = self.as_slice();
+        if blob.len() != Self::HASH_LEN_IN_BYTES + 1 {
+            return false;
+        }
+        if blob.last() != Some(&Self::TYPE_SELF_AUTH) {
             return false;
         }
         true
@@ -342,11 +356,11 @@ impl From<PrincipalIdProto> for PrincipalId {
     }
 }
 
-/// Encode/Decode a PrincipalId from/to protobuf.
+/// Encode/Decode a [`PrincipalId`] from/to protobuf.
 ///
 /// This acts as a wrapper around the actual (prost generated)
 /// protobuf type, which defines the pb on-wire format for
-/// PrincipalId. Prost generated types can map this type instead
+/// [`PrincipalId`]. Prost generated types can map this type instead
 /// of the generated type and use it seamlessly, which is particularly
 /// useful when those types are also candid types.
 impl prost::Message for PrincipalId {
@@ -581,7 +595,7 @@ mod tests {
             ),
             Ok(id)
         );
-        assert!(id.is_self_authenticating(&key));
+        assert!(id.authenticates_for_pubkey(&key));
     }
 
     #[test]

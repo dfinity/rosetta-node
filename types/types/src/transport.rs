@@ -7,20 +7,25 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FlowTagType;
+/// A tag attached to a flow.
 pub type FlowTag = Id<FlowTagType, u32>;
 
+/// The payload for the transport layer.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TransportPayload(#[serde(with = "serde_bytes")] pub Vec<u8>);
 
+/// A transport notification.
 #[derive(Debug)]
 pub enum TransportNotification {
     TransportStateChange(TransportStateChange),
     TransportError(TransportError),
 }
 
+/// Represents a blob.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Bytes(#[serde(with = "serde_bytes")] pub Vec<u8>);
 
+/// The type of a transport client.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TransportClientType {
     /// P2P/Gossip module.
@@ -66,6 +71,7 @@ pub struct TransportFlowConfig {
     pub queue_size: usize,
 }
 
+/// State changes that can happen in the transport layer.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TransportStateChange {
     /// Peer flow was established
@@ -75,11 +81,13 @@ pub enum TransportStateChange {
     PeerFlowDown(TransportFlowInfo),
 }
 
+/// Errors that are returned by the transport layer.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TransportError {
     TransportSendError(TransportFlowInfo),
 }
 
+/// Information that can be used to identify a transport flow.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TransportFlowInfo {
     /// The peer for the connection
@@ -296,6 +304,7 @@ pub enum TransportErrorCode {
     /// Missing connection endpoint in NodeRecord
     NodeRecordMissingConnectionEndpoint,
 
+    /// Timeout expired
     TimeoutExpired,
 }
 

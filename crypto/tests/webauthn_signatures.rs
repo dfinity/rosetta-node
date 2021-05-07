@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use ic_config::crypto::CryptoConfig;
 use ic_crypto::{ecdsa_p256_signature_from_der_bytes, user_public_key_from_bytes, CryptoComponent};
 use ic_crypto_internal_test_vectors::test_data;

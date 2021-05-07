@@ -1,3 +1,4 @@
+//! Public interface for running a TLS handshake as a client
 use super::*;
 use ic_crypto_internal_tls::{tls_connector, CreateTlsConnectorError};
 use ic_crypto_tls_interfaces::TlsStream;
@@ -20,6 +21,21 @@ use tokio_openssl::HandshakeError;
 ///
 /// The given `tcp_stream` is consumed. If an error is returned, the TCP
 /// connection is therefore dropped.
+///
+/// # Arguments
+/// * `tcp_stream` is the TCP connection over which to run the TLS handshake
+/// * `client_cert` is the caller's X.509 certificate
+/// * `client_private_key` is the private key corresponding to `client_cert`
+/// * `trusted_server_cert` is the X.509 certificate of the intended peer
+///
+/// # Returns
+/// `Ok(TlsStream)` if the handshake was successful,
+/// `TlsClientHandshakeError` otherwise
+///
+/// # Errors
+/// * `TlsClientHandshakeError::CreateConnectorError` if the key or certs fail
+///   to parse or there is an error creating the configuration
+/// * `TlsClientHandshakeError::HandshakeError` if the handshake fails
 pub async fn perform_tls_client_handshake(
     tcp_stream: TcpStream,
     client_cert: TlsPublicKeyCert,
@@ -41,6 +57,7 @@ pub async fn perform_tls_client_handshake(
 }
 
 #[derive(Error, Clone, Debug, PartialEq, Eq)]
+/// The TLS client handshake failed.
 pub enum TlsClientHandshakeError {
     #[error("{description}: {internal_error}")]
     CreateConnectorError {

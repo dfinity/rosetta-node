@@ -1,3 +1,4 @@
+//! Defines crypto component types.
 pub mod dkg;
 pub mod error;
 pub mod threshold_sig;
@@ -7,7 +8,7 @@ use crate::registry::RegistryClientError;
 use crate::{CountBytes, NodeId, RegistryVersion, SubnetId};
 use core::fmt::Formatter;
 use ic_crypto_internal_types::sign::threshold_sig::public_coefficients::CspPublicCoefficients;
-use ic_crypto_internal_types::sign::threshold_sig::public_key::bls12_381::ThresholdSigPublicKeyError;
+use ic_crypto_internal_types::sign::threshold_sig::public_key::bls12_381::ThresholdSigPublicKeyBytesConversionError;
 use ic_crypto_internal_types::sign::threshold_sig::public_key::CspThresholdSigPublicKey;
 use phantom_newtype::Id;
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -17,6 +18,8 @@ use std::collections::BTreeSet;
 use std::fmt;
 use strum_macros::EnumIter;
 
+/// An id of a key. These ids are used to refer to entries in the crypto secret
+/// key store.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct KeyId(pub [u8; 32]);
 ic_crypto_internal_types::derive_serde!(KeyId, 32);
@@ -45,6 +48,7 @@ impl fmt::Display for KeyId {
     }
 }
 
+/// A cryptographic hash.
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct CryptoHash(#[serde(with = "serde_bytes")] pub Vec<u8>);
 
@@ -54,8 +58,10 @@ impl fmt::Debug for CryptoHash {
     }
 }
 
+/// A cryptographic hash for content of type `T`
 pub type CryptoHashOf<T> = Id<T, CryptoHash>;
 
+/// Signed contains the signed content and its signature.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Signed<T, S> {
     pub content: T,
@@ -68,6 +74,9 @@ impl<T: CountBytes, S: CountBytes> CountBytes for Signed<T, S> {
     }
 }
 
+/// Signed bytes, not containing a domain separator. Also refer to the doc of
+/// `SignedBytesWithoutDomainSeparator::
+/// as_signed_bytes_without_domain_separator`.
 pub trait SignedBytesWithoutDomainSeparator {
     /// Returns a bytes-representation of the object for digital signatures.
     /// The returned value together with a domain-separator (that can be empty,
@@ -76,6 +85,8 @@ pub trait SignedBytesWithoutDomainSeparator {
     fn as_signed_bytes_without_domain_separator(&self) -> Vec<u8>;
 }
 
+/// A purpose of a key. This is used for storing and retrieving keys from the
+/// registry.
 // WARNING: The integer values of those enums discriminant is used in serialized
 // data. This means that existing discriminants should never change. Obsolete
 // discriminants should be marked as being never reusable.
@@ -91,6 +102,8 @@ pub enum KeyPurpose {
     CommitteeSigning = 4,
 }
 
+/// An algorithm ID. This is used to specify the signature algorithm associated
+/// with a public key.
 #[derive(
     Clone, Copy, Debug, Deserialize, EnumIter, Eq, Hash, PartialEq, PartialOrd, Ord, Serialize,
 )]
@@ -110,6 +123,7 @@ pub enum AlgorithmId {
     NiDkg_Groth20_Bls12_381 = 10,
     EcdsaP256 = 11,
     EcdsaSecp256k1 = 12,
+    IcCanisterSignature = 13,
 }
 
 impl From<CspThresholdSigPublicKey> for AlgorithmId {
@@ -124,6 +138,18 @@ impl From<&CspPublicCoefficients> for AlgorithmId {
     fn from(public_coeffs: &CspPublicCoefficients) -> Self {
         match public_coeffs {
             CspPublicCoefficients::Bls12_381(_) => AlgorithmId::ThresBls12_381,
+        }
+    }
+}
+
+impl From<usize> for KeyPurpose {
+    fn from(key_purpose: usize) -> Self {
+        match key_purpose {
+            1 => KeyPurpose::NodeSigning,
+            2 => KeyPurpose::QueryResponseSigning,
+            3 => KeyPurpose::DkgDealingEncryption,
+            4 => KeyPurpose::CommitteeSigning,
+            _ => KeyPurpose::Placeholder,
         }
     }
 }
@@ -143,10 +169,12 @@ impl From<i32> for AlgorithmId {
             10 => AlgorithmId::NiDkg_Groth20_Bls12_381,
             11 => AlgorithmId::EcdsaP256,
             12 => AlgorithmId::EcdsaSecp256k1,
+            13 => AlgorithmId::IcCanisterSignature,
             _ => AlgorithmId::Placeholder,
         }
     }
 }
+
 impl From<KeyPurpose> for AlgorithmId {
     fn from(key_purpose: KeyPurpose) -> Self {
         match key_purpose {
@@ -159,6 +187,7 @@ impl From<KeyPurpose> for AlgorithmId {
     }
 }
 
+/// A public key.
 #[derive(Debug)]
 pub enum PublicKey {
     UserPublicKey(UserPublicKey),
@@ -178,6 +207,7 @@ impl CountBytes for PublicKey {
     }
 }
 
+/// A public key of a user interacting with the IC.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct UserPublicKey {
     #[serde(with = "serde_bytes")]
@@ -202,6 +232,7 @@ impl CountBytes for UserPublicKey {
     }
 }
 
+/// A public key of an IC node.
 #[derive(Debug)]
 pub struct NodePublicKey {
     pub key: Vec<u8>,
@@ -214,6 +245,7 @@ impl CountBytes for NodePublicKey {
     }
 }
 
+/// An ICP public key.
 #[derive(Debug)]
 pub struct IcpPublicKey {
     pub key: Vec<u8>,
@@ -225,6 +257,7 @@ impl CountBytes for IcpPublicKey {
     }
 }
 
+/// A public key of a committee member.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CommitteeMemberPublicKey {
     #[serde(with = "serde_bytes")]
@@ -239,6 +272,7 @@ impl CountBytes for CommitteeMemberPublicKey {
     }
 }
 
+/// An error returned by the crypto component.
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CryptoError {
     /// The arguments are semantically incorrect.
@@ -323,12 +357,14 @@ pub enum CryptoError {
         subnet_id: SubnetId,
         registry_version: RegistryVersion,
     },
+    /// Root subnet public key not found at given registry version.
+    RootSubnetPublicKeyNotFound { registry_version: RegistryVersion },
 }
 
-impl From<ThresholdSigPublicKeyError> for CryptoError {
-    fn from(error: ThresholdSigPublicKeyError) -> Self {
+impl From<ThresholdSigPublicKeyBytesConversionError> for CryptoError {
+    fn from(error: ThresholdSigPublicKeyBytesConversionError) -> Self {
         match error {
-            ThresholdSigPublicKeyError::Malformed {
+            ThresholdSigPublicKeyBytesConversionError::Malformed {
                 key_bytes,
                 internal_error,
             } => CryptoError::MalformedPublicKey {
@@ -582,6 +618,11 @@ impl fmt::Debug for CryptoError {
                 "Cannot find initial DKG transcript for subnet ID {:?} at registry version {:?}",
                 subnet_id, registry_version
             ),
+            CryptoError::RootSubnetPublicKeyNotFound { registry_version } => write!(
+                f,
+                "Cannot find root subnet public key at registry version {:?}",
+                registry_version
+            )
         }
     }
 }
@@ -592,16 +633,13 @@ impl fmt::Display for CryptoError {
     }
 }
 
+/// A `Result` with an error of type `CryptoError`.
 pub type CryptoResult<T> = std::result::Result<T, CryptoError>;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum ListOfLists {
-    Leaf(#[serde(with = "serde_bytes")] Vec<u8>),
-    Node(Vec<ListOfLists>),
-}
-
+/// A basic signature.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct BasicSig(#[serde(with = "serde_bytes")] pub Vec<u8>);
+/// A basic signature for content of type `T`
 pub type BasicSigOf<T> = Id<T, BasicSig>; // Use newtype instead? E.g., `pub struct BasicSigOf<T>(Id<T, BasicSig>);`
 
 impl CountBytes for BasicSig {
@@ -616,8 +654,10 @@ impl<T: CountBytes> CountBytes for BasicSigOf<T> {
     }
 }
 
+/// An individual multi-signature.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct IndividualMultiSig(#[serde(with = "serde_bytes")] pub Vec<u8>);
+/// An individual multi-signature for content of type `T`
 pub type IndividualMultiSigOf<T> = Id<T, IndividualMultiSig>; // Use newtype instead?
 
 impl CountBytes for IndividualMultiSig {
@@ -632,8 +672,10 @@ impl<T: CountBytes> CountBytes for IndividualMultiSigOf<T> {
     }
 }
 
+/// A combined multi-signature.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CombinedMultiSig(#[serde(with = "serde_bytes")] pub Vec<u8>);
+/// A combined multi-signature for content of type `T`
 pub type CombinedMultiSigOf<T> = Id<T, CombinedMultiSig>; // Use newtype instead?
 
 impl CountBytes for CombinedMultiSig {
@@ -648,10 +690,20 @@ impl<T: CountBytes> CountBytes for CombinedMultiSigOf<T> {
     }
 }
 
+/// A threshold signature share.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ThresholdSigShare(#[serde(with = "serde_bytes")] pub Vec<u8>);
+/// A threshold signature share for content of type `T`
 pub type ThresholdSigShareOf<T> = Id<T, ThresholdSigShare>; // Use newtype instead?
 
+/// A combined threshold signature.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CombinedThresholdSig(#[serde(with = "serde_bytes")] pub Vec<u8>);
+/// A combined threshold signature for content of type `T`
 pub type CombinedThresholdSigOf<T> = Id<T, CombinedThresholdSig>; // Use newtype instead?
+
+/// A canister signature (ICCSA).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CanisterSig(#[serde(with = "serde_bytes")] pub Vec<u8>);
+/// A canister signature for content of type `T`
+pub type CanisterSigOf<T> = Id<T, CanisterSig>;

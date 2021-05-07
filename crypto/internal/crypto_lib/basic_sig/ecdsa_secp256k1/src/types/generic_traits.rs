@@ -24,6 +24,12 @@ impl Clone for PublicKeyBytes {
     }
 }
 
+impl Clone for SecretKeyBytes {
+    fn clone(&self) -> Self {
+        SecretKeyBytes(self.0.clone())
+    }
+}
+
 impl PartialEq for SignatureBytes {
     fn eq(&self, other: &Self) -> bool {
         self.0[..] == other.0[..]

@@ -120,15 +120,16 @@ impl<R: Rng + CryptoRng, S: SecretKeyStore> Csp<R, S> {
     }
 }
 
+/// Compute the key identifier of the given public key
+pub fn public_key_hash_as_key_id(pk: &CspPublicKey) -> KeyId {
+    bytes_hash_as_key_id(pk.algorithm_id(), pk.pk_bytes())
+}
+
 // KeyId is SHA256 computed on the bytes:
 //     domain_separator | algorithm_id | size(pk_bytes) | pk_bytes
 // where  domain_separator is DomainSeparationContext(KEY_ID_DOMAIN),
 // algorithm_id is a 1-byte value, and size(pk_bytes) is the size of
 // pk_bytes as u32 in BigEndian format.
-pub fn public_key_hash_as_key_id(pk: &CspPublicKey) -> KeyId {
-    bytes_hash_as_key_id(pk.algorithm_id(), pk.pk_bytes())
-}
-
 fn bytes_hash_as_key_id(alg_id: AlgorithmId, bytes: &[u8]) -> KeyId {
     let mut hasher = Sha256Hasher::new(&DomainSeparationContext::new(KEY_ID_DOMAIN.to_string()));
     hasher.update(&[alg_id as u8]);
@@ -138,6 +139,7 @@ fn bytes_hash_as_key_id(alg_id: AlgorithmId, bytes: &[u8]) -> KeyId {
     KeyId::from(hasher.finalize())
 }
 
+/// Compute the key identifier for a forward secure encryption public key
 pub fn forward_secure_key_id(public_key: &CspFsEncryptionPublicKey) -> KeyId {
     let mut hash = Sha256::new();
     hash.write(DomainSeparationContext::new("KeyId from CspFsEncryptionPublicKey").as_bytes());
@@ -157,10 +159,12 @@ mod tls_keygen {
         TlsEd25519CertificateDerBytes, TlsEd25519SecretKeyDerBytes,
     };
 
+    /// Create a key identifier by hashing the bytes of the certificate
     pub fn tls_cert_hash_as_key_id(cert: &TlsEd25519CertificateDerBytes) -> KeyId {
         bytes_hash_as_key_id(AlgorithmId::Tls, &cert.bytes)
     }
 
+    /// Create a key identifier by hashing the bytes of the certificate
     pub fn tls_registry_cert_hash_as_key_id(cert: X509PublicKeyCert) -> KeyId {
         tls_cert_hash_as_key_id(&TlsEd25519CertificateDerBytes {
             bytes: cert.certificate_der,
@@ -182,27 +186,29 @@ mod tls_keygen {
 
 pub mod utils {
     use ic_crypto_internal_types::encrypt::forward_secure::{
-        CspFsEncryptionPok, CspFsEncryptionPublicKey,
+        CspFsEncryptionPop, CspFsEncryptionPublicKey,
     };
     use ic_protobuf::registry::crypto::v1::AlgorithmId as AlgorithmIdProto;
     use ic_protobuf::registry::crypto::v1::PublicKey as PublicKeyProto;
 
+    /// Form a protobuf structure of the public key and proof of possession
     pub fn dkg_dealing_encryption_pk_to_proto(
         pk: CspFsEncryptionPublicKey,
-        pok: CspFsEncryptionPok,
+        pop: CspFsEncryptionPop,
     ) -> PublicKeyProto {
-        match (pk, pok) {
+        match (pk, pop) {
             (
                 CspFsEncryptionPublicKey::Groth20_Bls12_381(fs_enc_pk),
-                CspFsEncryptionPok::Groth20_Bls12_381(_),
+                CspFsEncryptionPop::Groth20WithPop_Bls12_381(_),
             ) => PublicKeyProto {
                 algorithm: AlgorithmIdProto::Groth20Bls12381 as i32,
                 key_value: fs_enc_pk.as_bytes().to_vec(),
                 version: 0,
-                proof_data: Some(serde_cbor::to_vec(&pok).expect(
-                    "Failed to serialize DKG dealing encryption key proof of knowledge (PoK) to CBOR",
+                proof_data: Some(serde_cbor::to_vec(&pop).expect(
+                    "Failed to serialize DKG dealing encryption key proof of possession (PoP) to CBOR",
                 )),
             },
+            _=> panic!("Unsupported types")
         }
     }
 }

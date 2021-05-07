@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use ic_crypto_test_utils::tls::custom_server::CustomServer;
 use ic_crypto_test_utils::tls::x509_certificates::CertWithPrivateKey;
 use ic_crypto_tls::{

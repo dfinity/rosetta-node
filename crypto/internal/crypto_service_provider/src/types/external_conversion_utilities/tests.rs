@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Tests for external and generic conversions
 use super::*;
 use ic_interfaces::crypto::CryptoHashableTestDummy;

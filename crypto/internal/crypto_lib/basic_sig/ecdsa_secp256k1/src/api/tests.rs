@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 // SECP256K1_PK_1_DER_HEX was generated via the following commands:
 //   openssl ecparam -name secp256k1 -genkey -noout -out private.ec.key
 //   openssl ec -in private.ec.key -pubout -outform DER -out ecpubkey.der
@@ -10,7 +11,7 @@ const ED25519_PK_DER_BASE64: &str = "MCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqo
 
 mod keygen {
     use super::*;
-    use crate::{new_keypair, public_key_from_der};
+    use crate::{new_keypair, public_key_from_der, public_key_to_der};
     #[test]
     fn should_correctly_generate_secp256k1_keys() {
         let (_sk, _pk) = new_keypair().unwrap();
@@ -20,6 +21,14 @@ mod keygen {
     fn should_correctly_parse_der_encoded_pk() {
         let pk_der = hex::decode(SECP256K1_PK_1_DER_HEX).unwrap();
         let _pk = public_key_from_der(&pk_der).unwrap();
+    }
+
+    #[test]
+    fn should_correctly_der_encode_pk() {
+        let pk_der = hex::decode(SECP256K1_PK_1_DER_HEX).unwrap();
+        let pk = public_key_from_der(&pk_der).unwrap();
+        let der_encoded = public_key_to_der(&pk).unwrap();
+        assert_eq!(pk_der, der_encoded);
     }
 
     #[test]

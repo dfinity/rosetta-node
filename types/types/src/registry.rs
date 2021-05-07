@@ -1,10 +1,11 @@
-// We disable the clippy warning for the whole module because they apply to
-// generated code, meaning we can't locally disable the warnings (the code is
-// defined in another module). https://dfinity.atlassian.net/browse/DFN-467
+// (DFN-467): We disable the clippy warning for the whole module because they
+// apply to generated code, meaning we can't locally disable the warnings (the
+// code is defined in another module).
 #![allow(clippy::redundant_closure)]
+//! Types for working with the registry.
 
-use crate::crypto::{AlgorithmId, KeyId, KeyPurpose};
-use crate::{time, NodeId, RegistryVersion};
+use crate::crypto::KeyPurpose;
+use crate::RegistryVersion;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::result::Result;
@@ -12,40 +13,6 @@ use std::str::FromStr;
 use thiserror::Error;
 
 pub mod connection_endpoint;
-
-#[cfg(test)]
-use proptest::prelude::{any, Strategy};
-#[cfg(test)]
-use proptest_derive::Arbitrary;
-
-#[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-#[cfg_attr(test, derive(Arbitrary))]
-pub struct TimeRecord {
-    #[cfg_attr(
-        test,
-        proptest(strategy = "any::<u64>().prop_map(|x| RegistryVersion::from(x))")
-    )]
-    pub version: RegistryVersion,
-    #[cfg_attr(
-        test,
-        proptest(strategy = "any::<std::time::Duration>().prop_map(|x| time::UNIX_EPOCH + x)")
-    )]
-    pub time: time::Time,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-// Disabled until phantom newtype issues are fixed:
-//#[cfg_attr(test, derive(Arbitrary))]
-//#[proptest(filter="|x| x.valid_thru.map_or(true, |thru| x.valid_from<thru)")]
-pub struct PublicKeyRegistryRecord {
-    pub node_id: NodeId,
-    pub key_purpose: KeyPurpose,
-    pub key: Vec<u8>,
-    pub key_id: KeyId,
-    pub algorithm_id: AlgorithmId,
-    pub version: RegistryVersion,
-    //pub custodian: (NodeId, KeyPurpose),
-}
 
 // FromStr implementation for the the registry admin tool.
 impl FromStr for KeyPurpose {
@@ -62,6 +29,7 @@ impl FromStr for KeyPurpose {
     }
 }
 
+/// Errors returned when requesting a value from the registry.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum RegistryError {
     /// Requested registry version is older than minimum known version.
@@ -178,6 +146,7 @@ impl RegistryError {
     }
 }
 
+/// Errors returned by the registry data provider.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum RegistryDataProviderError {
     /// Timeout occurred when attempting to fetch updates from the registry
@@ -203,18 +172,19 @@ impl fmt::Display for RegistryDataProviderError {
     }
 }
 
+/// Errors returned by the registry client.
 #[derive(Error, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum RegistryClientError {
-    #[error("the requested version is not available locally: {version:}")]
+    #[error("the requested version is not available locally: {version}")]
     VersionNotAvailable { version: RegistryVersion },
 
-    #[error("failed to query data provider: {source:}")]
+    #[error("failed to query data provider: {source}")]
     DataProviderQueryFailed {
         #[from]
         source: RegistryDataProviderError,
     },
 
-    #[error("failed to acquire poll lock: {error:}")]
+    #[error("failed to acquire poll lock: {error}")]
     PollLockFailed {
         // Ideally this would be a TryLockError, but that takes a type parameter
         // which 'infects' this enum, and everything that uses it.

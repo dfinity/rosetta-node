@@ -1,4 +1,4 @@
-use crate::common::utils::csp;
+use crate::cli::csp;
 use ic_crypto_internal_csp::api::CspKeyGenerator;
 use ic_crypto_internal_csp::types::{CspPop, CspPublicKey};
 use ic_types::crypto::AlgorithmId;

@@ -1,4 +1,4 @@
-use crate::api::{arg_data, kickstart, reject, reply};
+use crate::api::{arg_data, reject, reply, spawn};
 use crate::{printer, setup};
 use core::fmt::Debug;
 use core::future::Future;
@@ -161,6 +161,21 @@ where
     })
 }
 
+pub fn over_async_may_reject_explicit<In, Out, F, Fut>(f: F)
+where
+    In: FromWire + NewType,
+    Out: IntoWire + NewType,
+    F: FnOnce(In) -> Fut + 'static,
+    Fut: Future<Output = Result<Out, String>> + 'static,
+{
+    over_async_bytes_may_reject(|inp| async move {
+        let input = In::from_bytes(inp).expect("Deserialization Failed");
+        f(input)
+            .await
+            .map(|output| Out::into_bytes(output).expect("Serialization Failed"))
+    })
+}
+
 pub fn over_bytes<F>(f: F)
 where
     F: FnOnce(Vec<u8>) -> Vec<u8>,
@@ -206,7 +221,7 @@ where
     let res = f(bs).map(move |bytes| {
         reply(&bytes);
     });
-    kickstart(res)
+    spawn(res)
 }
 
 pub fn over_async_bytes_may_reject<F, Fut>(f: F)
@@ -222,7 +237,7 @@ where
         Ok(output) => reply(&output),
         Err(msg) => reject(msg.as_str()),
     });
-    kickstart(res)
+    spawn(res)
 }
 
 pub fn over_bytes_result<F, Err>(f: F)

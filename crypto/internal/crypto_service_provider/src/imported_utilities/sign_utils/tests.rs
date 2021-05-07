@@ -1,7 +1,10 @@
+#![allow(clippy::unwrap_used)]
 use crate::imported_utilities::sign_utils as utils;
+use ic_crypto_internal_basic_sig_der_utils::subject_public_key_info_der;
 use ic_crypto_internal_test_vectors::test_data;
-use ic_types::crypto::AlgorithmId;
+use simple_asn1::{oid, BigUint, OID};
 
+use ic_types::crypto::AlgorithmId;
 use openssl::ec::{EcGroup, EcKey};
 use openssl::ecdsa::EcdsaSig;
 use openssl::nid::Nid;
@@ -17,6 +20,22 @@ fn should_correctly_parse_der_encoded_ecdsa_p256_pk() {
     assert_eq!(
         bytes_type,
         utils::KeyBytesContentType::EcdsaP256PublicKeyDer
+    );
+}
+
+#[test]
+fn should_correctly_parse_der_encoded_iccsa_pubkey() {
+    let pubkey = b"public key".to_vec();
+    let pubkey_der =
+        subject_public_key_info_der(oid!(1, 3, 6, 1, 4, 1, 56387, 1, 2), &pubkey).unwrap();
+
+    let (parsed_pubkey, content_type) = utils::user_public_key_from_bytes(&pubkey_der).unwrap();
+
+    assert_eq!(parsed_pubkey.algorithm_id, AlgorithmId::IcCanisterSignature);
+    assert_eq!(parsed_pubkey.key, pubkey);
+    assert_eq!(
+        content_type,
+        utils::KeyBytesContentType::IcCanisterSignatureAlgPublicKeyDer
     );
 }
 
@@ -50,6 +69,17 @@ fn should_correctly_parse_der_encoded_firefox_ecdsa_p256_pk() {
     assert_eq!(
         bytes_type,
         utils::KeyBytesContentType::EcdsaP256PublicKeyDer
+    );
+}
+
+#[test]
+fn should_correctly_parse_der_encoded_ecdsa_secp256k1_pk() {
+    let pk_der = hex::decode(test_data::ECDSA_SECP256K1_PK_DER_HEX).unwrap();
+    let (pk, bytes_type) = utils::user_public_key_from_bytes(&pk_der).unwrap();
+    assert_eq!(pk.algorithm_id, AlgorithmId::EcdsaSecp256k1);
+    assert_eq!(
+        bytes_type,
+        utils::KeyBytesContentType::EcdsaSecp256k1PublicKeyDer
     );
 }
 

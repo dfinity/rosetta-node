@@ -2,11 +2,9 @@ use ic_types::Height;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Default capacity, in number of messages, for validated and unvalidated pools
 const MAX_INGRESS_POOL_VALIDATED_CAPACITY: usize = 1024;
-// TODO(KB): Fix this size. Should it be received from the Registry? Currently
-// increasing this size to pass tests and in absence of purging of Ingress
-// Messages.
-const MAX_INGRESS_POOL_UNVALIDATED_CAPACITY_PER_USER: usize = 100_000_000;
+const MAX_INGRESS_POOL_UNVALIDATED_CAPACITY_PER_PEER: usize = 100_000_000;
 const MAX_CONSENSUS_POOL_VALIDATED_CAPACITY: usize = 2048;
 const MAX_CONSENSUS_POOL_UNVALIDATED_CAPACITY_PER_PEER: usize = 2048;
 const PERSISTENT_POOL_VALIDATED_PURGE_INTERVAL: u64 = 5000;
@@ -53,8 +51,8 @@ pub struct ArtifactPoolConfig {
     /// of the ingress pool.
     pub ingress_pool_validated_capacity: usize,
     /// The maximum size, in number of messages, of the unvalidated section
-    /// of the ingress pool, per user.
-    pub ingress_pool_unvalidated_capacity_per_user: usize,
+    /// of the ingress pool, per peer.
+    pub ingress_pool_unvalidated_capacity_per_peer: usize,
     /// Threshold for ingress rate limiting. If this field is not
     /// specified, throttling would be disabled.
     pub ingress_pool_size_threshold: Option<usize>,
@@ -126,8 +124,8 @@ impl From<ArtifactPoolTomlConfig> for ArtifactPoolConfig {
         };
         ArtifactPoolConfig {
             ingress_pool_validated_capacity: MAX_INGRESS_POOL_VALIDATED_CAPACITY,
-            ingress_pool_unvalidated_capacity_per_user:
-                MAX_INGRESS_POOL_UNVALIDATED_CAPACITY_PER_USER,
+            ingress_pool_unvalidated_capacity_per_peer:
+                MAX_INGRESS_POOL_UNVALIDATED_CAPACITY_PER_PEER,
             ingress_pool_size_threshold: toml_config.ingress_pool_size_threshold,
             consensus_pool_unvalidated_capacity_per_peer: MAX_CONSENSUS_POOL_VALIDATED_CAPACITY,
             consensus_pool_validated_capacity: MAX_CONSENSUS_POOL_UNVALIDATED_CAPACITY_PER_PEER,

@@ -24,14 +24,33 @@ fn usage() -> Result<(), (String, i32)> {
 }
 
 fn parse_message_size(message_size: &str) -> Result<usize, (String, i32)> {
+    if message_size.is_empty() {
+        return Err(("Invalid message length: ''".to_string(), 2));
+    }
     let mut chars = message_size.chars();
-    let last_char = chars.next_back();
-    match last_char {
-        None => Err(("Invalid message length: ''".to_string(), 2)),
-        Some('G') => Ok(chars.as_str().parse::<usize>().unwrap() << 30),
-        Some('M') => Ok(chars.as_str().parse::<usize>().unwrap() << 20),
-        Some('K') => Ok(chars.as_str().parse::<usize>().unwrap() << 10),
-        Some(_) => Ok(message_size.parse::<usize>().unwrap()),
+    let last_char = chars.next_back().expect("Message size arg was empty");
+
+    let mult = match last_char {
+        'G' => Some(1 << 30),
+        'M' => Some(1 << 20),
+        'K' => Some(1 << 10),
+        _ => None,
+    };
+
+    match mult {
+        Some(mult) => {
+            let d = chars
+                .as_str()
+                .parse::<usize>()
+                .map_err(|_| (format!("Invalid message length {}", message_size), 2))?;
+            Ok(d * mult)
+        }
+        None => {
+            let d = message_size
+                .parse::<usize>()
+                .map_err(|_| (format!("Invalid message length {}", message_size), 2))?;
+            Ok(d)
+        }
     }
 }
 

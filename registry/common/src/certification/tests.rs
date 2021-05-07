@@ -277,7 +277,7 @@ fn test_decode_bad_root_hash() {
     );
     match decode_certified_deltas(0, &cid, &pk, &payload[..]) {
         Err(CertificationError::CertifiedDataMismatch { certified, .. })
-            if certified == bad_digest => {}
+            if &certified[..] == bad_digest.as_bytes() => {}
         other => panic!(
             "Expected CertifiedDataMismatch error containing the bad digest {}, got {:?}",
             bad_digest, other

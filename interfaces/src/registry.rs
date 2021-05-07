@@ -1,41 +1,10 @@
+//! The registry public interface.
 use ic_types::{
-    registry::RegistryDataProviderError,
-    registry::{RegistryClientError, RegistryError},
-    CanisterId, NodeId, RegistryVersion, SubnetId,
+    registry::RegistryClientError, registry::RegistryDataProviderError, RegistryVersion,
 };
 pub use prost::Message as RegistryValue;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use std::{cmp::Eq, fmt::Debug, hash::Hash};
-
-pub type RegistryResult<T> = Result<Option<T>, RegistryError>;
-
-// XXX: The following interfaces should be used.
-pub type RegistryVersionBounds = (RegistryVersion, RegistryVersion);
-
-pub trait RegistryKind {
-    type K: Hash + Eq + Clone + Debug + Serialize + DeserializeOwned;
-    type V: Debug + Clone + Serialize + DeserializeOwned;
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct CanisterRegistryKind;
-impl RegistryKind for CanisterRegistryKind {
-    type K = CanisterId;
-    type V = SubnetId;
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct NodeRegistryKind;
-impl RegistryKind for NodeRegistryKind {
-    type K = SubnetId;
-    type V = Vec<NodeInfo>;
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct NodeInfo {
-    // Node Id
-    pub id: NodeId,
-}
 
 /// The registry at version `0` is the empty registry.
 pub const ZERO_REGISTRY_VERSION: RegistryVersion = RegistryVersion::new(0);
@@ -70,7 +39,7 @@ pub trait RegistryClient: Send + Sync {
     ///    will always result in equal return values if both
     ///    calls do not return an error.)
     ///
-    /// XXX(2020-05-27): The current implementation employs full replication
+    /// NOTE: The current implementation employs full replication
     /// and the cache only grows. Thus, it holds that
     ///
     ///    ∀ k, t <= get_latest_version(): get_value(k, t).is_ok().
@@ -123,6 +92,7 @@ pub trait RegistryClient: Send + Sync {
     fn get_latest_version(&self) -> RegistryVersion;
 }
 
+/// A versioned (Key, Value) pair returned from the registry.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct RegistryVersionedRecord<T> {
     /// The key of the record.
@@ -153,12 +123,14 @@ impl<T> std::ops::Deref for RegistryVersionedRecord<T> {
     }
 }
 
+/// Result returns when fetching a versioned value from the registry.
 pub type RegistryClientVersionedResult<T> = Result<RegistryVersionedRecord<T>, RegistryClientError>;
+/// Result returns when fetching a value from the registry.
 pub type RegistryClientResult<T> = Result<Option<T>, RegistryClientError>;
 
 /// A RegistryRecord represents a versioned k/v-pair as stored in the registry
 /// canister.
-/// TODO (dsd, 2020-05-27): This needs to be renamed to `RegistryRecord` after
+/// TODO(IC-102): This needs to be renamed to `RegistryRecord` after
 /// we removed the legacy `RegistryRecord`.
 pub type RegistryTransportRecord = RegistryVersionedRecord<Vec<u8>>;
 
@@ -179,14 +151,6 @@ pub trait RegistryDataProvider: Send + Sync {
     /// Thus, if the local cache is at version `version`, after the returned
     /// records have been added to the local cache, the local registry is at
     /// the current version.
-    ///
-    /// TODO(dsd, 2020-11-29): This API should *not* return the latest version:
-    /// As we are talking about an async system, there is little to no value
-    /// knowing the latest version. In most cases however, it is redundant as
-    /// the registry, e.g., will just return the entire tail of the changelog.
-    /// This is a potential source of bugs if that is the assumed behavior on
-    /// the client side, while the canister might change at some point and only
-    /// return a subsequence of the changelog for performance reasons.
     fn get_updates_since(
         &self,
         version: RegistryVersion,

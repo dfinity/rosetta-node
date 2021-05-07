@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use super::super::api as tsig;
 use super::super::crypto;
 use super::super::test_utils::select_n;
@@ -155,7 +156,7 @@ fn test_threshold_sig_api_and_core_match(
 #[test]
 fn test_public_key_to_der() {
     // Test vectors generated from Haskell as follows:
-    // ~/dfinity/ic-ref/impl $ cabal repl ic-ref
+    // ic-ref/impl $ cabal repl ic-ref
     // …
     // Ok, 35 modules loaded.
     // *Main> import IC.Types (prettyBlob)

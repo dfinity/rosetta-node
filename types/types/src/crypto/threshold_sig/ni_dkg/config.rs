@@ -1,3 +1,4 @@
+//! Types related to the non-interactive DKG configuration.
 use crate::crypto::threshold_sig::ni_dkg::{NiDkgId, NiDkgTranscript};
 use crate::{NodeId, NodeIndex, NumberOfNodes, RegistryVersion};
 use core::fmt;
@@ -16,6 +17,9 @@ pub mod dealers;
 pub mod errors;
 pub mod receivers;
 
+/// A validated configuration for non-interactive DKG. This configuration can
+/// only exist if all configuration invariants are satisfied. See
+/// `NiDkgConfig::new` for a description of the invariants.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NiDkgConfig {
     pub(crate) dkg_id: NiDkgId,
@@ -100,6 +104,8 @@ impl TryFrom<pb::NiDkgConfig> for NiDkgConfig {
     }
 }
 
+/// The non-validated config parameter object to be passed to the `NiDkgConfig`
+/// constructor.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NiDkgConfigData {
     pub dkg_id: NiDkgId,
@@ -286,7 +292,8 @@ impl fmt::Display for NiDkgConfig {
     }
 }
 
-/// The minimum number of nodes required to generate a valid threshold signature
+/// The minimum number of nodes required to generate a valid threshold
+/// signature.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NiDkgThreshold {
     threshold: NumberOfNodes,

@@ -1,16 +1,6 @@
-// Load the allocator
-cfg_if::cfg_if! {
-    // When the `wee_alloc` feature is enabled, use `wee_alloc` as the global
-    // allocator.
-    if #[cfg(feature = "wee_alloc")] {
-        #[global_allocator]
-        static ALLOC: wee_alloc::WeeAlloc<'_> = wee_alloc::WeeAlloc::INIT;
-    }
-}
-
 pub mod futures;
-pub use self::futures::kickstart;
-use self::futures::{CallFuture, FutureResult, RefCounted};
+pub use self::futures::spawn;
+use self::futures::{CallFuture, FutureResult, RefCounted, TopLevelFuture};
 pub use ic_base_types::{CanisterId, PrincipalId};
 use on_wire::{FromWire, IntoWire, NewType};
 use std::convert::TryFrom;
@@ -20,23 +10,19 @@ use std::{cell::RefCell, future::Future};
 /// This is a simplified version of `ic_types::Funds`.
 pub struct Funds {
     pub cycles: u64,
-    pub icpts: u64,
 }
 
 impl Funds {
-    pub fn new(cycles: u64, icpts: u64) -> Self {
-        Self { cycles, icpts }
+    pub fn new(cycles: u64) -> Self {
+        Self { cycles }
     }
 
     pub fn zero() -> Self {
-        Self {
-            cycles: 0,
-            icpts: 0,
-        }
+        Self { cycles: 0 }
     }
 }
 
-/// This is the raw system API as documented by the dfinity public spec
+/// This is the raw system API as documented by the IC public spec
 /// I would advise not using this as it's difficult to use and likely to change
 #[allow(dead_code)]
 #[cfg(target_arch = "wasm32")]
@@ -82,7 +68,7 @@ pub mod ic0 {
             reject_env: u32,
         );
         pub fn call_data_append(src: u32, size: u32);
-        pub fn call_funds_add(unit_src: u32, unit_size: u32, amount: u64);
+        pub fn call_on_cleanup(fun: usize, env: u32);
         pub fn call_cycles_add(amount: u64);
         pub fn call_perform() -> i32;
         pub fn stable_size() -> u32;
@@ -90,7 +76,6 @@ pub mod ic0 {
         pub fn stable_read(dst: u32, offset: u32, size: u32);
         pub fn stable_write(offset: u32, src: u32, size: u32);
         pub fn time() -> u64;
-        pub fn canister_balance(unit_src: u32, unit_size: u32) -> u64;
         pub fn canister_cycle_balance() -> u64;
         pub fn msg_cycles_available() -> u64;
         pub fn msg_cycles_refunded() -> u64;
@@ -100,6 +85,7 @@ pub mod ic0 {
         pub fn data_certificate_size() -> u32;
         pub fn data_certificate_copy(dst: u32, offset: u32, size: u32);
         pub fn canister_status() -> u32;
+        pub fn mint_cycles(amount: u64) -> u64;
     }
 }
 
@@ -133,7 +119,7 @@ pub mod ic0 {
         wrong_arch("controller_size")
     }
     pub unsafe fn debug_print(_offset: u32, _size: u32) {
-        wrong_arch("debug_print")
+        println!("You tried to debug_print, that isn't supported in native code")
     }
     pub unsafe fn msg_arg_data_copy(_dst: u32, _offset: u32, _size: u32) {
         wrong_arch("msg_arg_data_copy")
@@ -201,8 +187,8 @@ pub mod ic0 {
         wrong_arch("call_data_append")
     }
 
-    pub unsafe fn call_funds_add(_unit_src: u32, _unit_size: u32, _amount: u64) {
-        wrong_arch("call_funds_add")
+    pub unsafe fn call_on_cleanup(_fun: usize, _env: u32) {
+        wrong_arch("call_on_cleanup")
     }
 
     pub unsafe fn call_cycles_add(_amount: u64) {
@@ -234,10 +220,6 @@ pub mod ic0 {
             .duration_since(std::time::SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_nanos() as u64
-    }
-
-    pub unsafe fn canister_balance(_unit_src: u32, _unit_size: u32) -> u64 {
-        wrong_arch("canister_balance")
     }
 
     pub unsafe fn canister_cycle_balance() -> u64 {
@@ -275,6 +257,10 @@ pub mod ic0 {
     pub unsafe fn canister_status() -> u32 {
         wrong_arch("canister_status")
     }
+
+    pub unsafe fn mint_cycles(_amount: u64) -> u64 {
+        wrong_arch("mint_cycles")
+    }
 }
 
 // Convenience wrappers around the DFINTY System API
@@ -288,6 +274,8 @@ pub fn call_raw(
     data: &[u8],
     on_reply: fn(ptr: *mut ()),
     on_reject: fn(ptr: *mut ()),
+    // This is an option just until the error messaging issue is fixed
+    on_cleanup: Option<fn(ptr: *mut ())>,
     env: *mut (),
     funds: Funds,
 ) -> i32 {
@@ -305,6 +293,9 @@ pub fn call_raw(
         ic0::call_data_append(data.as_ptr() as u32, data.len() as u32);
         if funds.cycles > 0 {
             call_cycles_add(funds.cycles);
+        }
+        if let Some(on_cleanup) = on_cleanup {
+            ic0::call_on_cleanup(on_cleanup as usize, env as u32);
         }
         ic0::call_perform()
     }
@@ -336,6 +327,7 @@ pub fn call_with_callbacks(
         data,
         on_reply,
         on_reject,
+        None,
         env as *mut (),
         Funds::zero(),
     );
@@ -358,17 +350,23 @@ pub fn call_bytes(
     // the callback from IC dereferences the future from a raw pointer, assigns the
     // result and calls the waker
     fn callback(future_ptr: *mut ()) {
+        let ref_counted = unsafe { RefCounted::from_raw(future_ptr as *const RefCell<CallFuture>) };
+        let top_level_future = ref_counted.borrow_mut().top_level_future;
         let waker = {
-            let ref_counted =
-                unsafe { RefCounted::from_raw(future_ptr as *const RefCell<CallFuture>) };
             let mut future = ref_counted.borrow_mut();
             future.result = Some(match reject_code() {
                 0 => Ok(arg_data()),
                 n => Err((Some(n), reject_message())),
             });
-            future.waker.clone()
+            future.waker.take()
         };
-        waker.expect("there is a waker").wake();
+        waker.expect("there is no waker").wake();
+        std::mem::drop(ref_counted);
+        if !top_level_future.is_null() {
+            unsafe {
+                TopLevelFuture::release(top_level_future);
+            }
+        }
     };
     let future_for_closure = RefCounted::new(CallFuture::new());
     let future = future_for_closure.clone();
@@ -379,6 +377,71 @@ pub fn call_bytes(
         data,
         callback,
         callback,
+        None,
+        future_ptr as *mut (),
+        funds,
+    );
+    // 0 is a special error code, meaning call_simple call succeeded
+    if err_code != 0 {
+        // Decrease the refcount as the closure will not be called.
+        std::mem::drop(unsafe { RefCounted::from_raw(future_ptr) });
+        future.borrow_mut().result =
+            Some(Err((Some(err_code), "Couldn't send message".to_string())));
+    }
+    future
+}
+
+pub fn call_bytes_with_cleanup(
+    id: CanisterId,
+    method: &str,
+    data: &[u8],
+    funds: Funds,
+) -> impl Future<Output = futures::FutureResult<Vec<u8>>> {
+    // the callback from IC dereferences the future from a raw pointer, assigns the
+    // result and calls the waker
+    fn callback(future_ptr: *mut ()) {
+        let ref_counted = unsafe { RefCounted::from_raw(future_ptr as *const RefCell<CallFuture>) };
+        let top_level_future = ref_counted.borrow_mut().top_level_future;
+        let waker = {
+            let mut future = ref_counted.borrow_mut();
+            future.result = Some(match reject_code() {
+                0 => Ok(arg_data()),
+                n => Err((Some(n), reject_message())),
+            });
+            future.waker.take()
+        };
+        waker.expect("there is no waker").wake();
+        std::mem::drop(ref_counted);
+        if !top_level_future.is_null() {
+            unsafe {
+                TopLevelFuture::release(top_level_future);
+            }
+        }
+    };
+
+    fn cleanup(future_ptr: *mut ()) {
+        let f = unsafe { RefCounted::from_raw(future_ptr as *const RefCell<CallFuture>) };
+        let top_level_future = f.borrow_mut().top_level_future;
+        std::mem::drop(f);
+
+        if !top_level_future.is_null() {
+            unsafe {
+                TopLevelFuture::release(top_level_future);
+                TopLevelFuture::drop_if_last_reference(top_level_future);
+            }
+        }
+    };
+
+    let future_for_closure = RefCounted::new(CallFuture::new());
+    let future = future_for_closure.clone();
+    let future_ptr = future_for_closure.into_raw();
+    let err_code = call_raw(
+        id,
+        method,
+        data,
+        callback,
+        callback,
+        Some(cleanup),
         future_ptr as *mut (),
         funds,
     );
@@ -392,6 +455,8 @@ pub fn call_bytes(
     future
 }
 
+/// This function has some really nasty behavior if it traps in a callback.
+/// Use call_with_cleanup.
 pub async fn call<Payload, ReturnType, Witness>(
     id: CanisterId,
     method: &str,
@@ -408,6 +473,22 @@ where
     Ok(res.into_inner())
 }
 
+pub async fn call_with_cleanup<Payload, ReturnType, Witness>(
+    id: CanisterId,
+    method: &str,
+    _: Witness,
+    payload: Payload::Inner,
+) -> FutureResult<ReturnType::Inner>
+where
+    Payload: IntoWire + NewType,
+    ReturnType: FromWire + NewType,
+    Witness: FnOnce(ReturnType, Payload::Inner) -> (ReturnType::Inner, Payload),
+{
+    let payload = Payload::from_inner(payload);
+    let res: ReturnType = call_explicit_with_cleanup(id, method, payload, Funds::zero()).await?;
+    Ok(res.into_inner())
+}
+
 pub fn call_no_reply<Payload, ReturnType, Witness>(
     id: CanisterId,
     method: &str,
@@ -421,7 +502,6 @@ where
     Witness: FnOnce(ReturnType, Payload::Inner) -> (ReturnType::Inner, Payload),
 {
     // This is a function that does nothing and allocates nothing to the heap
-    fn no_op(_: *mut ()) {}
     let payload = Payload::from_inner(payload);
     let bytes: Vec<u8> = payload.into_bytes()?;
     match call_raw(
@@ -430,6 +510,7 @@ where
         &bytes,
         no_op,
         no_op,
+        None,
         std::ptr::null_mut(),
         funds,
     ) {
@@ -457,6 +538,21 @@ where
     ReturnType::from_bytes(res).map_err(|e| (None, e))
 }
 
+pub async fn call_explicit_with_cleanup<Payload, ReturnType>(
+    id: CanisterId,
+    method: &str,
+    payload: Payload,
+    funds: Funds,
+) -> FutureResult<ReturnType>
+where
+    Payload: IntoWire + NewType,
+    ReturnType: FromWire + NewType,
+{
+    let bytes: Vec<u8> = payload.into_bytes().map_err(|e| (None, e))?;
+    let res: Vec<u8> = call_bytes_with_cleanup(id, method, &bytes, funds).await?;
+    ReturnType::from_bytes(res).map_err(|e| (None, e))
+}
+
 pub async fn call_with_funds<Payload, ReturnType, Witness>(
     id: CanisterId,
     method: &str,
@@ -474,17 +570,32 @@ where
     Ok(res.into_inner())
 }
 
-pub fn call_funds_add(unit: TokenUnit, amount: u64) {
-    let unit_blob: Vec<u8> = unit.into();
-    unsafe {
-        ic0::call_funds_add(unit_blob.as_ptr() as u32, unit_blob.len() as u32, amount);
-    }
+pub async fn call_with_funds_and_cleanup<Payload, ReturnType, Witness>(
+    id: CanisterId,
+    method: &str,
+    _: Witness,
+    payload: Payload::Inner,
+    funds: Funds,
+) -> FutureResult<ReturnType::Inner>
+where
+    Payload: IntoWire + NewType,
+    ReturnType: FromWire + NewType,
+    Witness: FnOnce(ReturnType, Payload::Inner) -> (ReturnType::Inner, Payload),
+{
+    let payload = Payload::from_inner(payload);
+    let res: ReturnType = call_explicit_with_cleanup(id, method, payload, funds).await?;
+    Ok(res.into_inner())
 }
 
 pub fn call_cycles_add(amount: u64) {
     unsafe {
         ic0::call_cycles_add(amount);
     }
+}
+
+/// Safe wrapper around an unsafe function
+pub fn arg_size() -> u32 {
+    unsafe { ic0::msg_arg_data_size() }
 }
 
 /// Returns the argument extracted from the message payload.
@@ -602,12 +713,6 @@ impl Into<Vec<u8>> for TokenUnit {
 }
 
 /// Returns the amount of cycles in the canister's account.
-pub fn canister_balance(unit: TokenUnit) -> u64 {
-    let unit_blob: Vec<u8> = unit.into();
-    unsafe { ic0::canister_balance(unit_blob.as_ptr() as u32, unit_blob.len() as u32) }
-}
-
-/// Returns the amount of cycles in the canister's account.
 pub fn canister_cycle_balance() -> u64 {
     unsafe { ic0::canister_cycle_balance() }
 }
@@ -668,3 +773,9 @@ pub fn canister_status() -> CanisterStatus {
         other => panic!("Weird canister status: {}", other),
     }
 }
+
+pub fn mint_cycles(amount: u64) -> u64 {
+    unsafe { ic0::mint_cycles(amount) }
+}
+
+fn no_op(_: *mut ()) {}

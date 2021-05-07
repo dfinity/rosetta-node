@@ -54,7 +54,7 @@ impl RegistryCanister {
         let payload = serialize_get_changes_since_request(version).unwrap();
         match self
             .choose_random_agent()
-            .execute_query(&self.canister_id, "get_changes_since", Some(payload))
+            .execute_query(&self.canister_id, "get_changes_since", payload)
             .await
         {
             Ok(result) => match result {
@@ -70,33 +70,36 @@ impl RegistryCanister {
         }
     }
 
+    /// Same as `get_changes_since`, but also converts the deltas into transport
+    /// records.
+    ///
+    /// The registry records returned by this function are guaranteed to be
+    /// sorted by version.
+    pub async fn get_changes_since_as_transport_records(
+        &self,
+        version: u64,
+    ) -> Result<(Vec<RegistryTransportRecord>, u64), Error> {
+        let (deltas, latest_version) = self.get_changes_since(version).await?;
+        Ok((
+            registry_deltas_to_registry_transport_records(deltas)?,
+            latest_version,
+        ))
+    }
+
     /// Queries the registry for all the changes that occurred since `version`
     /// using a certified endpoint.
+    ///
+    /// The registry records returned by this function are guaranteed to be
+    /// sorted by version.
     pub async fn get_certified_changes_since(
         &self,
         version: u64,
         nns_public_key: &ThresholdSigPublicKey,
     ) -> Result<(Vec<RegistryTransportRecord>, RegistryVersion, Time), Error> {
-        self.get_certified_changes_since_helper(version, nns_public_key, false)
-            .await
-    }
-
-    /// Similar to get_certified_changes_since, but with an option to disable
-    /// certificate validation.
-    pub async fn get_certified_changes_since_helper(
-        &self,
-        version: u64,
-        nns_public_key: &ThresholdSigPublicKey,
-        disable_certificate_validation: bool,
-    ) -> Result<(Vec<RegistryTransportRecord>, RegistryVersion, Time), Error> {
         let payload = serialize_get_changes_since_request(version).unwrap();
         let response = self
             .choose_random_agent()
-            .execute_query(
-                &self.canister_id,
-                "get_certified_changes_since",
-                Some(payload),
-            )
+            .execute_query(&self.canister_id, "get_certified_changes_since", payload)
             .await
             .map_err(|err| {
                 Error::UnknownError(format!(
@@ -111,12 +114,11 @@ impl RegistryCanister {
                 ))
             })?;
 
-        crate::certification::decode_certified_deltas_helper(
+        crate::certification::decode_certified_deltas(
             version,
             &self.canister_id,
             nns_public_key,
             &response[..],
-            disable_certificate_validation,
         )
         .map_err(|err| Error::UnknownError(format!("{:?}", err)))
     }
@@ -133,7 +135,7 @@ impl RegistryCanister {
         let agent = self.choose_random_agent();
 
         match agent
-            .execute_query(&self.canister_id, "get_value", Some(payload))
+            .execute_query(&self.canister_id, "get_value", payload)
             .await
         {
             Ok(result) => match result {
@@ -176,6 +178,41 @@ impl RegistryCanister {
             ))]),
         }
     }
+}
+
+/// Convert `Vec<RegistryDelta>` to `Vec<RegistryTransportRecord>`.
+pub fn registry_deltas_to_registry_transport_records(
+    deltas: Vec<RegistryDelta>,
+) -> Result<Vec<RegistryTransportRecord>, Error> {
+    let mut records = Vec::new();
+    for delta in deltas.into_iter() {
+        let string_key = std::str::from_utf8(&delta.key[..])
+            .map_err(|_| {
+                ic_registry_transport::Error::UnknownError(format!(
+                    "Failed to convert key {:?} to string",
+                    delta.key
+                ))
+            })?
+            .to_string();
+
+        for value in delta.values.into_iter() {
+            records.push(RegistryTransportRecord {
+                key: string_key.clone(),
+                value: if value.deletion_marker {
+                    None
+                } else {
+                    Some(value.value)
+                },
+                version: RegistryVersion::new(value.version),
+            });
+        }
+    }
+    records.sort_by(|lhs, rhs| {
+        lhs.version
+            .cmp(&rhs.version)
+            .then_with(|| lhs.key.cmp(&rhs.key))
+    });
+    Ok(records)
 }
 
 #[cfg(test)]

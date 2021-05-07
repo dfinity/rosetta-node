@@ -1,9 +1,11 @@
+//! Messages used in various components.
 use ic_types::{
     messages::{Ingress, Request, Response, StopCanisterContext},
     Funds, PrincipalId,
 };
 use std::convert::TryFrom;
 
+/// A wrapper around ingress messages and canister requests/responses.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum CanisterInputMessage {
     Response(Response),

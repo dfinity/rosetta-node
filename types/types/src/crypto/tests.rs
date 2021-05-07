@@ -15,6 +15,8 @@ fn should_correctly_convert_i32_to_algorithm_id() {
     assert_eq!(AlgorithmId::from(9), AlgorithmId::Groth20_Bls12_381);
     assert_eq!(AlgorithmId::from(10), AlgorithmId::NiDkg_Groth20_Bls12_381);
     assert_eq!(AlgorithmId::from(11), AlgorithmId::EcdsaP256);
+    assert_eq!(AlgorithmId::from(12), AlgorithmId::EcdsaSecp256k1);
+    assert_eq!(AlgorithmId::from(13), AlgorithmId::IcCanisterSignature);
     assert_eq!(AlgorithmId::from(42), AlgorithmId::Placeholder);
 }
 
@@ -32,6 +34,8 @@ fn should_correctly_convert_algorithm_id_to_i32() {
     assert_eq!(AlgorithmId::Groth20_Bls12_381 as i32, 9);
     assert_eq!(AlgorithmId::NiDkg_Groth20_Bls12_381 as i32, 10);
     assert_eq!(AlgorithmId::EcdsaP256 as i32, 11);
+    assert_eq!(AlgorithmId::EcdsaSecp256k1 as i32, 12);
+    assert_eq!(AlgorithmId::IcCanisterSignature as i32, 13);
 }
 
 pub fn set_of(node_ids: &[NodeId]) -> BTreeSet<NodeId> {

@@ -4,8 +4,30 @@ use ic_protobuf::registry::crypto::v1::X509PublicKeyCert;
 use ic_types::crypto::{AlgorithmId, CryptoError, KeyId};
 use ic_types::NodeId;
 
+/// A trait that can be used to generate cryptographic key pairs
 pub trait CspKeyGenerator {
+    /// Generate a public/private key pair.
+    ///
+    /// # Arguments
+    /// * `alg_id` specifies the algorithm to be used
+    /// # Returns
+    /// The key ID and the public key of the keypair
+    /// # Errors
+    /// * `CryptoError::InvalidArgument` if the algorithm is not supported by
+    ///   the trait implementation. (Note: Currently only BLS12-381 and Ed25519
+    ///   are supported by implementations of this trait)
     fn gen_key_pair(&self, alg_id: AlgorithmId) -> Result<(KeyId, CspPublicKey), CryptoError>;
+
+    /// Generate a public/private key pair with proof of possession.
+    ///
+    /// # Arguments
+    /// * `alg_id` specifies the algorithm to be used
+    /// # Returns
+    /// The key ID referring to the secret key, the public key, and the PoP
+    /// # Errors
+    /// * `CryptoError::InvalidArgument` if the algorithm is not supported by
+    ///   the trait implementation. (Note: Currently only BLS12-381 is supported
+    ///   by implementations of this trait)
     fn gen_key_pair_with_pop(
         &self,
         algorithm_id: AlgorithmId,
@@ -30,6 +52,8 @@ pub trait CspKeyGenerator {
     fn gen_tls_key_pair(&mut self, node_id: NodeId, not_after: &str) -> X509PublicKeyCert;
 }
 
+/// A trait that allows checking the secret key store for the availability of a
+/// key.
 pub trait CspSecretKeyStoreChecker {
     /// Checks whether the store contains a key with the given `id`.
     fn sks_contains(&self, key_id: &KeyId) -> bool;
@@ -38,6 +62,8 @@ pub trait CspSecretKeyStoreChecker {
     fn sks_contains_tls_key(&self, cert: &X509PublicKeyCert) -> bool;
 }
 
+/// A trait that exposes the information about node public keys and key
+/// identifiers.
 pub trait NodePublicKeyData {
     /// Returns the public keys of this node.
     fn node_public_keys(&self) -> NodePublicKeys;

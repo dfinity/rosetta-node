@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use crate::arbitrary::arbitrary_mixed_hash_tree;
 use crate::MixedHashTree as T;
 use proptest::prelude::*;

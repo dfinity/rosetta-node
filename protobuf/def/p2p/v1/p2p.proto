@@ -62,7 +62,7 @@ message GossipChunk {
 message ArtifactChunk {
   repeated bytes witnesses = 1;
   oneof data {
-    bytes artifact = 2;  // TODO: convert bincoded Artifact to protobuf
+    bytes artifact = 2;  // TODO(P2P-483): bincode-encoded Artifact to proto-encoding
     bytes chunk = 3;
   }
 }

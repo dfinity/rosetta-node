@@ -1,5 +1,4 @@
 // Protobuf message that are used in the local_store.
-// TODO: Consider moving them to the registry-directory.
 
 syntax = "proto3";
 package ic_registry_common.pb.local_store.v1;

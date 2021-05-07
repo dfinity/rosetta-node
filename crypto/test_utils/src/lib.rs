@@ -1,3 +1,4 @@
+//! Utilities for testing crypto code.
 pub mod dkg;
 pub mod tls;
 

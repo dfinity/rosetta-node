@@ -2,13 +2,14 @@ use super::*;
 use crate::consensus::Threshold;
 
 use crate::{NodeIndex, NumberOfNodes};
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::slice::Iter;
 
 #[cfg(test)]
 mod tests;
 
+/// Configures interactive DKG.
 // TODO (CRP-311): replace Config by DkgConfig in two steps:
 // 1. internally in crypto: convert Config to DkgConfig in each method and use
 // DkgConfig
@@ -24,6 +25,9 @@ pub struct Config {
     pub resharing_transcript: Option<Transcript>,
 }
 
+/// A validated configuration for interactive DKG. This configuration can only
+/// exist if all configuration invariants are satisfied. See `DkgConfig::new`
+/// for a description of the invariants.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DkgConfig {
     dkg_id: IDkgId,
@@ -34,6 +38,8 @@ pub struct DkgConfig {
     resharing_transcript: Option<Transcript>,
 }
 
+/// The non-validated config parameter object to be passed to the `DkgConfig`
+/// constructor.
 pub struct DkgConfigData {
     pub dkg_id: IDkgId,
     pub dealers: Vec<NodeId>,
@@ -141,6 +147,7 @@ impl DkgConfig {
     }
 }
 
+/// A set of dealers for interactive DKG.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Dealers {
     dealers: Vec<NodeId>,
@@ -200,6 +207,7 @@ impl Dealers {
     }
 }
 
+/// A set of receivers for interactive DKG.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Receivers {
     // The ordering of receivers defines the node indices for threshold.
@@ -268,7 +276,7 @@ pub struct DkgThreshold {
     threshold: NumberOfNodes,
 }
 
-// TODO (CRP-311): maybe replace `Threshold` with DkgThreshold?
+// TODO (CRP-311): Consider replacing `Threshold` with DkgThreshold.
 impl DkgThreshold {
     /// A `DkgThreshold` can only be created if the following invariants hold:
     /// * The threshold is at least 1 (error: `ThresholdIsZero`)

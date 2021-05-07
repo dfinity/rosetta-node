@@ -1,3 +1,5 @@
+//! Utilities for file handling to test crypto code.
+#![allow(clippy::unwrap_used)]
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use tempfile::tempdir as tempdir_deleted_at_end_of_scope;
@@ -27,6 +29,7 @@ pub fn temp_dir() -> TempDir {
         .expect("unable to create temp dir")
 }
 
+/// Converts the given temporary directory into a string.
 pub fn path_str(temp_dir: &TempDir) -> &str {
     temp_dir
         .path()

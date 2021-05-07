@@ -1,6 +1,6 @@
 [package]
 name = "ic-crypto-internal-basic-sig-ecdsa-secp256r1"
-version = "0.0.0"
+version = "0.8.0"
 edition = "2018"
 
 [dependencies]

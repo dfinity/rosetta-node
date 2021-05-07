@@ -14,40 +14,47 @@ use ic_crypto_internal_threshold_sig_bls12381::ni_dkg::groth20_bls12_381::types:
 use ic_crypto_internal_threshold_sig_bls12381::types as threshold_sig_types;
 use ic_crypto_internal_tls::keygen::TlsEd25519SecretKeyDerBytes;
 use ic_crypto_internal_types::encrypt::forward_secure::groth20_bls12_381::{
-    FsEncryptionPok, FsEncryptionPublicKey,
+    FsEncryptionPop, FsEncryptionPublicKey,
 };
 
 impl CspSecretKey {
+    /// This function is only used for tests
     pub fn ed25519_from_hex(hex: &str) -> Self {
         CspSecretKey::Ed25519(ed25519_types::SecretKeyBytes(hex_to_32_bytes(hex)))
     }
 
+    /// This function is only used for tests
     pub fn multi_bls12381_from_hex(hex: &str) -> Self {
         CspSecretKey::MultiBls12_381(multi_types::SecretKeyBytes(hex_to_32_bytes(hex)))
     }
 }
 
 impl CspPublicKey {
+    /// This function is only used for tests
     pub fn ed25519_from_hex(hex: &str) -> Self {
         CspPublicKey::Ed25519(ed25519_types::PublicKeyBytes(hex_to_32_bytes(hex)))
     }
 
+    /// This function is only used for tests
     pub fn multi_bls12381_from_hex(hex: &str) -> Self {
         CspPublicKey::MultiBls12_381(multi_types::PublicKeyBytes(hex_to_96_bytes(hex)))
     }
 }
 
 impl CspSignature {
+    /// This function is only used for tests
     pub fn ed25519_from_hex(hex: &str) -> Self {
         CspSignature::Ed25519(ed25519_types::SignatureBytes(hex_to_64_bytes(hex)))
     }
 
+    /// This function is only used for tests
     pub fn multi_bls12381_individual_from_hex(hex: &str) -> Self {
         CspSignature::MultiBls12_381(MultiBls12_381_Signature::Individual(
             multi_types::IndividualSignatureBytes(hex_to_48_bytes(hex)),
         ))
     }
 
+    /// This function is only used for tests
     pub fn thres_bls12381_indiv_from_array_of(byte: u8) -> Self {
         CspSignature::ThresBls12_381(ThresBls12_381_Signature::Individual(
             threshold_types::IndividualSignatureBytes(
@@ -56,6 +63,7 @@ impl CspSignature {
         ))
     }
 
+    /// This function is only used for tests
     pub fn thres_bls12381_combined_from_array_of(byte: u8) -> Self {
         CspSignature::ThresBls12_381(ThresBls12_381_Signature::Combined(
             threshold_types::CombinedSignatureBytes(
@@ -66,11 +74,13 @@ impl CspSignature {
 }
 
 impl CspPop {
+    /// This function is only used for tests
     pub fn multi_bls12381_from_hex(hex: &str) -> Self {
         CspPop::MultiBls12_381(multi_types::PopBytes(hex_to_48_bytes(hex)))
     }
 }
 
+/// This function is only used for tests
 #[allow(unused)]
 pub fn arbitrary_ecdsa_secp256r1_signature() -> CspSignature {
     let mut random_bytes = [0; ecdsa_secp256r1_types::SignatureBytes::SIZE];
@@ -80,6 +90,7 @@ pub fn arbitrary_ecdsa_secp256r1_signature() -> CspSignature {
     CspSignature::EcdsaP256(ecdsa_secp256r1_types::SignatureBytes(random_bytes))
 }
 
+/// This function is only used for tests
 #[allow(unused)]
 pub fn arbitrary_ecdsa_secp256k1_public_key() -> CspPublicKey {
     let mut random_bytes = [0; ecdsa_secp256k1_types::PublicKeyBytes::SIZE];
@@ -89,6 +100,7 @@ pub fn arbitrary_ecdsa_secp256k1_public_key() -> CspPublicKey {
     CspPublicKey::EcdsaSecp256k1(ecdsa_secp256k1_types::PublicKeyBytes(random_bytes.to_vec()))
 }
 
+/// This function is only used for tests
 #[allow(unused)]
 pub fn arbitrary_ecdsa_secp256r1_public_key() -> CspPublicKey {
     let mut random_bytes = [0; ecdsa_secp256r1_types::PublicKeyBytes::SIZE];
@@ -98,6 +110,7 @@ pub fn arbitrary_ecdsa_secp256r1_public_key() -> CspPublicKey {
     CspPublicKey::EcdsaP256(ecdsa_secp256r1_types::PublicKeyBytes(random_bytes.to_vec()))
 }
 
+/// This function is only used for tests
 #[allow(unused)]
 pub fn arbitrary_ed25519_public_key() -> CspPublicKey {
     let mut random_bytes = [0; ed25519_types::PublicKeyBytes::SIZE];
@@ -107,6 +120,7 @@ pub fn arbitrary_ed25519_public_key() -> CspPublicKey {
     CspPublicKey::Ed25519(ed25519_types::PublicKeyBytes(random_bytes))
 }
 
+/// This function is only used for tests
 #[allow(unused)]
 pub fn arbitrary_ed25519_secret_key() -> CspSecretKey {
     let mut random_bytes = [0; ed25519_types::SecretKeyBytes::SIZE];
@@ -116,6 +130,7 @@ pub fn arbitrary_ed25519_secret_key() -> CspSecretKey {
     CspSecretKey::Ed25519(ed25519_types::SecretKeyBytes(random_bytes))
 }
 
+/// This function is only used for tests
 #[allow(unused)]
 pub fn arbitrary_secp256k1_signature() -> CspSignature {
     let mut random_bytes = [0; 64];
@@ -125,6 +140,7 @@ pub fn arbitrary_secp256k1_signature() -> CspSignature {
     CspSignature::EcdsaSecp256k1(ecdsa_secp256k1_types::SignatureBytes(random_bytes))
 }
 
+/// This function is only used for tests
 #[allow(unused)]
 pub fn arbitrary_ed25519_signature() -> CspSignature {
     let mut random_bytes = [0; 64];
@@ -134,6 +150,7 @@ pub fn arbitrary_ed25519_signature() -> CspSignature {
     CspSignature::Ed25519(ed25519_types::SignatureBytes(random_bytes))
 }
 
+/// This function is only used for tests
 #[allow(unused)]
 pub fn arbitrary_multi_bls12381_public_key() -> CspPublicKey {
     let mut random_bytes = [0; multi_sig_types::PublicKeyBytes::SIZE];
@@ -143,6 +160,7 @@ pub fn arbitrary_multi_bls12381_public_key() -> CspPublicKey {
     CspPublicKey::MultiBls12_381(multi_sig_types::PublicKeyBytes(random_bytes))
 }
 
+/// This function is only used for tests
 #[allow(unused)]
 pub fn arbitrary_multi_bls12381_secret_key() -> CspSecretKey {
     let mut random_bytes = [0; multi_sig_types::SecretKeyBytes::SIZE];
@@ -152,6 +170,7 @@ pub fn arbitrary_multi_bls12381_secret_key() -> CspSecretKey {
     CspSecretKey::MultiBls12_381(multi_sig_types::SecretKeyBytes(random_bytes))
 }
 
+/// This function is only used for tests
 #[allow(unused)]
 pub fn arbitrary_tls_ed25519_secret_key() -> CspSecretKey {
     let mut random_bytes = [0; 42];
@@ -163,6 +182,7 @@ pub fn arbitrary_tls_ed25519_secret_key() -> CspSecretKey {
     })
 }
 
+/// This function is only used for tests
 #[allow(unused)]
 pub fn arbitrary_multi_bls12381_combined_signature() -> MultiBls12_381_Signature {
     let mut random_bytes = [0; multi_sig_types::CombinedSignatureBytes::SIZE];
@@ -172,6 +192,7 @@ pub fn arbitrary_multi_bls12381_combined_signature() -> MultiBls12_381_Signature
     MultiBls12_381_Signature::Combined(multi_sig_types::CombinedSignatureBytes(random_bytes))
 }
 
+/// This function is only used for tests
 #[allow(unused)]
 pub fn arbitrary_multi_bls12381_individual_signature() -> MultiBls12_381_Signature {
     let mut random_bytes = [0; multi_sig_types::IndividualSignatureBytes::SIZE];
@@ -181,6 +202,7 @@ pub fn arbitrary_multi_bls12381_individual_signature() -> MultiBls12_381_Signatu
     MultiBls12_381_Signature::Individual(multi_sig_types::IndividualSignatureBytes(random_bytes))
 }
 
+/// This function is only used for tests
 #[allow(unused)]
 pub fn arbitrary_threshold_bls12381_secret_key() -> CspSecretKey {
     let mut random_bytes = [0; threshold_sig_types::SecretKeyBytes::SIZE];
@@ -190,6 +212,7 @@ pub fn arbitrary_threshold_bls12381_secret_key() -> CspSecretKey {
     CspSecretKey::ThresBls12_381(threshold_sig_types::SecretKeyBytes(random_bytes))
 }
 
+/// This function is only used for tests
 #[allow(unused)]
 pub fn arbitrary_ephemeral_key_set() -> CspSecretKey {
     let mut random_sk_bytes = [0; EphemeralSecretKeyBytes::SIZE];
@@ -212,20 +235,25 @@ pub fn arbitrary_ephemeral_key_set() -> CspSecretKey {
     CspSecretKey::Secp256k1WithPublicKey(eph_key_set)
 }
 
+/// This function is only used for tests
 #[allow(unused)]
 pub fn arbitrary_fs_encryption_key_set() -> CspSecretKey {
     // TODO(CRP-862): produce random values rather than default.
-    let fs_enc_key_set = ni_dkg_types::FsEncryptionKeySet {
+    let fs_enc_key_set = ni_dkg_types::FsEncryptionKeySetWithPop {
         public_key: FsEncryptionPublicKey(Default::default()),
-        pok: FsEncryptionPok {
-            blinder: Default::default(),
+        pop: FsEncryptionPop {
+            pop_key: Default::default(),
+            challenge: Default::default(),
             response: Default::default(),
         },
         secret_key: FsEncryptionSecretKey { bte_nodes: vec![] },
     };
-    CspSecretKey::FsEncryption(CspFsEncryptionKeySet::Groth20_Bls12_381(fs_enc_key_set))
+    CspSecretKey::FsEncryption(CspFsEncryptionKeySet::Groth20WithPop_Bls12_381(
+        fs_enc_key_set,
+    ))
 }
 
+/// This function is only used for tests
 #[allow(unused)]
 pub fn arbitrary_threshold_bls12381_combined_signature() -> ThresBls12_381_Signature {
     let mut random_bytes = [0; threshold_sig_types::CombinedSignatureBytes::SIZE];
@@ -235,6 +263,7 @@ pub fn arbitrary_threshold_bls12381_combined_signature() -> ThresBls12_381_Signa
     ThresBls12_381_Signature::Combined(threshold_sig_types::CombinedSignatureBytes(random_bytes))
 }
 
+/// This function is only used for tests
 #[allow(unused)]
 pub fn arbitrary_threshold_bls12381_individual_signature() -> ThresBls12_381_Signature {
     let mut random_bytes = [0; threshold_sig_types::IndividualSignatureBytes::SIZE];

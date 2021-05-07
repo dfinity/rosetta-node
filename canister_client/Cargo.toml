@@ -1,10 +1,13 @@
 [package]
 name = "ic-canister-client"
-version = "0.1.0"
+version = "0.8.0"
 edition = "2018"
 
 [dependencies]
+ic-crypto-sha256 = { path = "../crypto/sha256" }
 ic-crypto-tree-hash = { path = "../crypto/tree_hash" }
+# TODO(CRP-909): use public crate (not the internal one) for ecdsa-secp256k1 when available.
+ecdsa-secp256k1 = { path = "../crypto/internal/crypto_lib/basic_sig/ecdsa_secp256k1", package = "ic-crypto-internal-basic-sig-ecdsa-secp256k1"}
 ic-interfaces = { path = "../interfaces" }
 ic-protobuf = { path = "../protobuf" }
 ic-types = { path = "../types/types" }
@@ -27,6 +30,7 @@ url = "2.1.1"
 hex = "0.4.2"
 ic-test-utilities = { path = "../test_utilities" }
 ic-validator = { path = "../validator" }
+libsecp256k1 = "0.3.5"
 rand_chacha = "0.2.2"
 rand_core = "0.5.1"
 tokio-test = "0.2.1"

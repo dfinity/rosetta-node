@@ -319,10 +319,6 @@ fn transcript_with_committee(committee: &[Option<NodeId>]) -> Transcript {
     }
 }
 
-fn set_from(dealers: &[NodeId]) -> BTreeSet<NodeId> {
-    dealers.iter().cloned().collect()
-}
-
 fn assert_error(
     config_result: Result<DkgConfig, DkgConfigValidationError>,
     error: DkgConfigValidationError,

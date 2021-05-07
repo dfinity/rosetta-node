@@ -20,12 +20,13 @@ fn bls12_key_generation_is_stable() {
     assert_eq!(
         secret_key,
         SecretKeyBytes(hex_to_32_bytes(
-            "2adbd0e8c9394918190a545d007167d56902c9f9a31763998398bc11d7b54878"
+            "54ee2937b4dfc1905ccaf277a60b5e53c7ea791f6b9bdadd7e84e7f458d4d0a4"
         ))
     );
     assert_eq!(
         public_key,
-        PublicKeyBytes(hex_to_96_bytes("8985344664badd2aa2d24167fa478ec03a6fc76eb05ba1c3fac9dd88b74a44ccdd5d088bb6975c06a8df4b1006f8e5350adbf82b3a758613f56d4519da62f9075adfdd882b35f35a55f532471191348924a5c3858529f83cfb032cc8962f7922"))
+        PublicKeyBytes(hex_to_96_bytes("986b177ef16c61c633e13769c42b079791cfa9702decd36eeb347be21bd98e8d1c4d9f2a1f16f2e09b995ae7ff856a830d382d0081c6ae253a7d2abf97de945f70a42e677ca30b129bcd08c91f78f8573fe2463a86afacf870e9fe4960f5c55f"))
+
         );
 }
 

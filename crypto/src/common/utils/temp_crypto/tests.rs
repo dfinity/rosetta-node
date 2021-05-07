@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 use super::*;
 
 use ic_test_utilities::crypto::empty_fake_registry;

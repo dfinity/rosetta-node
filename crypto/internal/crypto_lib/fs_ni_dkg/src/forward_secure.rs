@@ -12,13 +12,16 @@ use std::vec::Vec;
 // and
 //    g^x  corresponds to g.mul(x)
 
+use crate::encryption_key_pop::{prove_pop, verify_pop, EncryptionKeyInstance, EncryptionKeyPop};
 use crate::nizk_chunking::CHALLENGE_BITS;
 use crate::nizk_chunking::NUM_ZK_REPETITIONS;
+use crate::random_oracles::{random_oracle, HashedMap};
 use crate::utils::*;
 use ic_crypto_internal_bls12381_serde_miracl::{
     miracl_fr_from_bytes, miracl_fr_to_bytes, miracl_g1_from_bytes, miracl_g1_to_bytes, FrBytes,
     G1Bytes,
 };
+use ic_crypto_internal_types::sign::threshold_sig::ni_dkg::Epoch;
 use miracl_core::bls12381::ecp::ECP;
 use miracl_core::bls12381::ecp2::ECP2;
 use miracl_core::bls12381::fp12::FP12;
@@ -37,6 +40,7 @@ pub const CHUNK_SIZE: isize = 1 << (CHUNK_BYTES << 3); // Number of distinct chu
 pub const CHUNK_MIN: isize = 0;
 pub const CHUNK_MAX: isize = CHUNK_MIN + CHUNK_SIZE - 1;
 pub const NUM_CHUNKS: usize = (MESSAGE_BYTES + CHUNK_BYTES - 1) / CHUNK_BYTES;
+pub const DOMAIN_CIPHERTEXT_NODE: &str = "ic-fs-encryption/binary-tree-node";
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Bit {
@@ -49,7 +53,6 @@ impl From<u8> for Bit {
         if i == 0 {
             Bit::Zero
         } else {
-            // TODO: Should we distinguish 1 and other non-zero values?
             Bit::One
         }
     }
@@ -74,17 +77,35 @@ impl From<&Bit> for i32 {
 }
 
 /// Generates tau (a vector of bits) from an epoch.
-pub fn tau_from_u32(sys: &SysParam, epoch: u32) -> Vec<Bit> {
+pub fn tau_from_epoch(sys: &SysParam, epoch: Epoch) -> Vec<Bit> {
     (0..sys.lambda_t)
         .rev()
         .map(|index| {
-            if (epoch >> index) & 1 == 0 {
+            if (epoch.get() >> index) & 1 == 0 {
                 Bit::Zero
             } else {
                 Bit::One
             }
         })
         .collect()
+}
+
+/// Converts an epoch prefix to an epoch by filling in remaining bits with
+/// zeros.
+pub fn epoch_from_tau_vec(tau: &[Bit]) -> Epoch {
+    let num_bits = ::std::mem::size_of::<Epoch>() * 8;
+    Epoch::from(
+        (0..num_bits)
+            .rev()
+            .zip(tau)
+            .fold(0u32, |epoch, (shift, tau)| {
+                epoch
+                    | ((match *tau {
+                        Bit::One => 1,
+                        Bit::Zero => 0,
+                    }) << shift)
+            }),
+    )
 }
 
 /// A node of a Binary Tree Encryption scheme.
@@ -142,69 +163,63 @@ pub struct SecretKey {
 }
 
 #[derive(Clone)]
-pub struct PublicKey {
-    pub y: ECP,
-    pub nizk_a: ECP,
-    pub nizk_z: BIG,
+pub struct PublicKeyWithPop {
+    pub key_value: ECP,
+    pub proof_data: EncryptionKeyPop,
 }
 
-/// Domain separator for the zk proof of knowledge of DLOG in FS Encryption
-pub const DOMAIN_POK_DLOG_FS_ENCRYPTION: &[u8; 0x12] = b"\x11ic-zk-pok-dlog-fs";
-
-impl PublicKey {
-    pub fn challenge_oracle(y: &ECP, nizk_a: &ECP) -> BIG {
-        let mut oracle = miracl_core::hash256::HASH256::new();
-        oracle.process_array(DOMAIN_POK_DLOG_FS_ENCRYPTION);
-        process_ecp(&mut oracle, &ECP::generator());
-        process_ecp(&mut oracle, &y);
-        process_ecp(&mut oracle, &nizk_a);
-        let rng = &mut RAND_ChaCha20::new(oracle.hash());
-        BIG::randomnum(&curve_order(), rng)
-    }
-    pub fn verify(&self) -> bool {
-        let nizk_e = Self::challenge_oracle(&self.y, &self.nizk_a);
-        let mut lhs = self.y.mul(&nizk_e);
-        lhs.add(&self.nizk_a);
-        let g1 = ECP::generator();
-        let rhs = g1.mul(&self.nizk_z);
-        lhs.equals(&rhs)
+impl PublicKeyWithPop {
+    pub fn verify(&self, associated_data: &[u8]) -> bool {
+        let instance = EncryptionKeyInstance {
+            g1_gen: ECP::generator(),
+            public_key: self.key_value.clone(),
+            associated_data: associated_data.to_vec(),
+        };
+        verify_pop(&instance, &self.proof_data).is_ok()
     }
     pub fn serialize(&self) -> Vec<u8> {
         [
-            &miracl_g1_to_bytes(&self.y).0[..],
-            &miracl_g1_to_bytes(&self.nizk_a).0[..],
-            &miracl_fr_to_bytes(&self.nizk_z).0[..],
+            &miracl_g1_to_bytes(&self.key_value).0[..],
+            &miracl_g1_to_bytes(&self.proof_data.pop_key).0[..],
+            &miracl_fr_to_bytes(&self.proof_data.challenge).0[..],
+            &miracl_fr_to_bytes(&self.proof_data.response).0[..],
         ]
         .concat()
         .to_vec()
     }
-    pub fn deserialize(buf: &[u8]) -> PublicKey {
+    pub fn deserialize(buf: &[u8]) -> PublicKeyWithPop {
         let mut buf = buf;
-        let expected_length = G1Bytes::SIZE + G1Bytes::SIZE + FrBytes::SIZE;
+        let expected_length = G1Bytes::SIZE + G1Bytes::SIZE + FrBytes::SIZE + FrBytes::SIZE;
         let mut y = G1Bytes([0u8; G1Bytes::SIZE]);
-        let mut nizk_a = G1Bytes([0u8; G1Bytes::SIZE]);
-        let mut nizk_z = FrBytes([0u8; FrBytes::SIZE]);
+        let mut pop_key = G1Bytes([0u8; G1Bytes::SIZE]);
+        let mut pop_challenge = FrBytes([0u8; FrBytes::SIZE]);
+        let mut pop_response = FrBytes([0u8; FrBytes::SIZE]);
         assert_eq!(
             buf.read_vectored(&mut [
                 IoSliceMut::new(&mut y.0),
-                IoSliceMut::new(&mut nizk_a.0),
-                IoSliceMut::new(&mut nizk_z.0)
+                IoSliceMut::new(&mut pop_key.0),
+                IoSliceMut::new(&mut pop_challenge.0),
+                IoSliceMut::new(&mut pop_response.0)
             ])
             .expect("Read failed"),
             expected_length,
             "Input too short"
         );
-        PublicKey {
-            y: miracl_g1_from_bytes(&y.0).expect("Malformed y"),
-            nizk_a: miracl_g1_from_bytes(&nizk_a.0).expect("Malformed nizk_a"),
-            nizk_z: miracl_fr_from_bytes(&nizk_z.0).expect("Malformed nizk_z"),
+        PublicKeyWithPop {
+            key_value: miracl_g1_from_bytes(&y.0).expect("Malformed y"),
+            proof_data: EncryptionKeyPop {
+                pop_key: miracl_g1_from_bytes(&pop_key.0).expect("Malformed pop_key"),
+                challenge: miracl_fr_from_bytes(&pop_challenge.0).expect("Malformed challenge"),
+                response: miracl_fr_from_bytes(&pop_response.0).expect("Malformed challenge"),
+            },
         }
     }
 }
-impl std::fmt::Debug for PublicKey {
+
+impl std::fmt::Debug for PublicKeyWithPop {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "y: ")?;
-        format_ecp(f, &self.y)?;
+        format_ecp(f, &self.key_value)?;
         write!(f, ", ...}}")
     }
 }
@@ -219,10 +234,18 @@ pub struct SysParam {
 }
 
 /// Generates a (public key, secret key) pair for of forward-secure
-/// public-key encryption scheme for the specified system parameters,
-/// using the given random generator `rng`.
-/// (KGen of Section 9.1)
-pub fn kgen(sys: &SysParam, rng: &mut impl RAND) -> (PublicKey, SecretKey) {
+/// public-key encryption scheme.
+///
+/// # Arguments:
+/// * `associated_data`: public information for the Proof of Possession of the
+///   key.
+/// * `sys`: system parameters for the FS Encryption scheme.
+/// * `rng`: seeded pseudo random number generator.
+pub fn kgen(
+    associated_data: &[u8],
+    sys: &SysParam,
+    rng: &mut impl RAND,
+) -> (PublicKeyWithPop, SecretKey) {
     let g1 = ECP::generator();
     let g2 = ECP2::generator();
     let spec_p = BIG::new_ints(&rom::CURVE_ORDER);
@@ -258,24 +281,28 @@ pub fn kgen(sys: &SysParam, rng: &mut impl RAND) -> (PublicKey, SecretKey) {
 
     let y = g1.mul(&spec_x);
 
-    // NIZK proof. See section 8.3.
-    //   r <- getRandomZp
-    //   let a = g1^r
-    //   let e = oracle(y, a)
-    //   let z = e*x + r
-    //   pi_dlog = (a, z)
-    let mut nizk_r = ZeroizedBIG {
-        big: BIG::randomnum(&spec_p, rng),
+    let pop_instance = EncryptionKeyInstance {
+        g1_gen: ECP::generator(),
+        public_key: y.clone(),
+        associated_data: associated_data.to_vec(),
     };
-    let nizk_a = g1.mul(&nizk_r.big);
-    let nizk_e = PublicKey::challenge_oracle(&y, &nizk_a);
-    let mut nizk_z = BIG::modmul(&nizk_e, &spec_x, &spec_p);
-    nizk_z = BIG::modadd(&nizk_z, &nizk_r.big, &spec_p);
-    nizk_r.zeroize();
-    (PublicKey { y, nizk_a, nizk_z }, sk)
+
+    let pop =
+        prove_pop(&pop_instance, &spec_x, rng).expect("Implementation bug: Pop generation failed");
+
+    (
+        PublicKeyWithPop {
+            key_value: y,
+            proof_data: pop,
+        },
+        sk,
+    )
 }
 
 /// Generates the specified child of a given BTE node.
+/// Only used by slow_derive(), which has been superseded by fast_derive().
+/// We keep it around as documentation. Hopefully it makes fast_derive() easier
+/// to understand.
 pub fn node_gen(node: &BTENode, child: Bit, rng: &mut impl RAND, sys: &SysParam) -> BTENode {
     let spec_r = BIG::new_ints(&rom::CURVE_ORDER);
     let delta = BIG::randomnum(&spec_r, rng);
@@ -292,7 +319,12 @@ pub fn node_gen(node: &BTENode, child: Bit, rng: &mut impl RAND, sys: &SysParam)
     // Compute new b and new d_t.
     let mut new_b = node.b.clone();
     let mut new_d_t = LinkedList::new();
-    let f_tau = ftau_partial(&new_tau, &sys).unwrap(); // TODO: remove unwrap()
+    let f_tau = match ftau_partial(&new_tau, &sys) {
+        None => {
+            unreachable!("node_gen() on leaf node");
+        }
+        Some(x) => x,
+    };
     let offset = node.tau.len();
     let mut iter = node.d_t.iter().enumerate();
     // The first entry of `d_t` is used for `new_b`
@@ -363,7 +395,7 @@ impl SecretKey {
         if self.bte_nodes.is_empty() {
             return;
         }
-        let now = self.current().unwrap();
+        let now = self.current().expect("bte_nodes unexpectedly empty");
         for i in 0..sys.lambda_t {
             if i < now.tau.len() {
                 epoch.push(now.tau[i]);
@@ -408,7 +440,6 @@ impl SecretKey {
     /// Updates this key to the next epoch.  After an update,
     /// the decryption keys for previous epochs are not accessible any more.
     /// (KUpd(dk, 1) from Sect. 9.1)
-    // TODO: consider removing `sys` and `rng` as arguments.
     pub fn update(&mut self, sys: &SysParam, rng: &mut impl RAND) {
         self.fast_derive(sys, rng);
         match self.bte_nodes.pop_back() {
@@ -439,7 +470,10 @@ impl SecretKey {
                     }
                 }
             }
-            self.bte_nodes.pop_back().unwrap().zeroize();
+            self.bte_nodes
+                .pop_back()
+                .expect("bte_nodes unexpectedly empty")
+                .zeroize();
         }
 
         let g1 = ECP::generator();
@@ -452,7 +486,7 @@ impl SecretKey {
         //   * The current epoch is now 01101.
         //   * We can still derive the keys for 01110 and 01111 from 0111.
         //   * We can no longer decrypt 01100.
-        let mut node = self.bte_nodes.pop_back().unwrap();
+        let mut node = self.bte_nodes.pop_back().expect("self.bte_nodes was empty");
         let mut n = node.tau.len();
         // Nothing to do if `node.tau` is already `epoch`.
         if n == epoch.len() {
@@ -464,7 +498,7 @@ impl SecretKey {
         //   b_acc = b * product [d_i^tau_i | i <- [1..n]]
         //   f_acc = f0 * product [f_i^tau_i | i <- [1..n]]
         let mut b_acc = node.b.clone();
-        let mut f_acc = ftau_partial(&node.tau, sys).unwrap();
+        let mut f_acc = ftau_partial(&node.tau, sys).expect("node.tau not the expected size");
         let mut tau = node.tau.clone();
         while n < epoch.len() {
             if epoch[n] == Bit::Zero {
@@ -475,7 +509,7 @@ impl SecretKey {
 
                 let mut a_blind = g1.mul(&delta);
                 a_blind.add(&node.a);
-                let mut b_blind = d_t.pop_front().unwrap();
+                let mut b_blind = d_t.pop_front().expect("d_t not sufficiently large");
                 b_blind.add(&b_acc);
                 let mut ftmp = f_acc.clone();
                 ftmp.add(&sys.f[n]);
@@ -508,7 +542,7 @@ impl SecretKey {
             } else {
                 // Update accumulators.
                 f_acc.add(&sys.f[n]);
-                b_acc.add(&d_t.pop_front().unwrap());
+                b_acc.add(&d_t.pop_front().expect("d_t not sufficiently large"));
             }
             tau.push(epoch[n]);
             n += 1;
@@ -685,7 +719,7 @@ pub fn enc_single(
     let cc = pk.mul2(&spec_r, &g1, &m);
     let rr = g1.mul(&spec_r);
     let ss = g1.mul(&s);
-    let id = ftau_partial(tau, sys).unwrap();
+    let id = ftau_partial(tau, sys).expect("tau not the expected size");
     let mut zz = id.mul(&spec_r);
     zz.add(&sys.h.mul(&s));
     SingleCiphertext { cc, rr, ss, zz }
@@ -699,10 +733,10 @@ pub fn dec_single(dks: &mut SecretKey, ct: &SingleCiphertext, sys: &SysParam) ->
     let g1 = ECP::generator();
     let g2 = ECP2::generator();
 
-    let dk = dks.current().unwrap();
+    let dk = dks.current().expect("No current node in nkey");
 
     // Sanity check.
-    let id = ftau_partial(&dk.tau, sys).unwrap();
+    let id = ftau_partial(&dk.tau, sys).expect("tau not the expected size");
 
     let mut g1neg = g1.clone();
     g1neg.neg();
@@ -719,7 +753,7 @@ pub fn dec_single(dks: &mut SecretKey, ct: &SingleCiphertext, sys: &SysParam) ->
     x = pair::fexp(&x);
 
     let base = pair::fexp(&pair::ate(&g2, &g1));
-    baby_giant(&x, &base, 0, CHUNK_SIZE).unwrap()
+    baby_giant(&x, &base, 0, CHUNK_SIZE).expect("Invalid ciphertext")
 }
 
 pub struct CRSZ {
@@ -770,19 +804,26 @@ pub fn enc_chunks(
     sij: &[Vec<isize>],
     pks: Vec<&ECP>,
     tau: &[Bit],
+    associated_data: &[u8],
     sys: &SysParam,
     rng: &mut impl RAND,
 ) -> Option<(CRSZ, ToxicWaste)> {
+    if sij.is_empty() {
+        return None;
+    }
+
     // do
     //   chunks <- headMay allChunks
     //   guard $ all (== chunks) allChunks
+
     let all_chunks: LinkedList<_> = sij.iter().map(Vec::len).collect();
-    let chunks = *all_chunks.front().unwrap();
+    let chunks = *all_chunks.front().expect("sij was empty");
     for si in sij.iter() {
         if si.len() != chunks {
             return None; // Chunk lengths disagree.
         }
     }
+
     use miracl_core::bls12381::pair::g1mul;
     use miracl_core::bls12381::pair::g2mul;
     let g1 = ECP::generator();
@@ -821,8 +862,8 @@ pub fn enc_chunks(
         })
         .collect();
 
-    let extendedtau = extend_tau(&cc, &rr, &ss, &tau);
-    let id = ftau(&extendedtau, sys).unwrap();
+    let extended_tau = extend_tau_with_associated_data(&cc, &rr, &ss, &tau, associated_data);
+    let id = ftau(&extended_tau, sys).expect("extended_tau not the correct size");
     let mut zz = Vec::new();
     for j in 0..chunks {
         let mut tmp = g2mul(&id, &spec_r[j]);
@@ -940,8 +981,15 @@ pub fn dec_chunks(
     i: usize,
     crsz: &CRSZ,
     tau: &[Bit],
+    associated_data: &[u8],
+    sys: &SysParam,
 ) -> Result<Vec<isize>, DecErr> {
-    let extendedtau = extend_tau(&crsz.cc, &crsz.rr, &crsz.ss, &tau);
+    let extended_tau = if verify_ciphertext_integrity(crsz, tau, associated_data, sys).is_ok() {
+        extend_tau_with_associated_data(&crsz.cc, &crsz.rr, &crsz.ss, &tau, associated_data)
+    } else {
+        extend_tau(&crsz.cc, &crsz.rr, &crsz.ss, &tau)
+    };
+
     let dk = match find_prefix(dks, &tau) {
         None => return Err(DecErr::ExpiredKey),
         Some(node) => node,
@@ -949,13 +997,13 @@ pub fn dec_chunks(
     let mut bneg = dk.b.clone();
     let mut l = dk.tau.len();
     for tmp in dk.d_t.iter() {
-        if extendedtau[l] == Bit::One {
+        if extended_tau[l] == Bit::One {
             bneg.add(&tmp);
         }
         l += 1
     }
     for k in 0..LAMBDA_H {
-        if extendedtau[LAMBDA_T + k] == Bit::One {
+        if extended_tau[LAMBDA_T + k] == Bit::One {
             bneg.add(&dk.d_h[k]);
         }
     }
@@ -1021,10 +1069,15 @@ pub fn dec_chunks(
     Ok(redundant)
 }
 
-// Part of DVfy of Section 9.1.
+// Part of DVfy of Section 7.1.
 // In addition to verifying the proofs of chunking and sharing,
 // we must also verify ciphertext integrity.
-pub fn verify_ciphertext_integrity(crsz: &CRSZ, tau: &[Bit], sys: &SysParam) -> Result<(), ()> {
+pub fn verify_ciphertext_integrity(
+    crsz: &CRSZ,
+    tau: &[Bit],
+    associated_data: &[u8],
+    sys: &SysParam,
+) -> Result<(), ()> {
     let n = if crsz.cc.is_empty() {
         0
     } else {
@@ -1039,8 +1092,9 @@ pub fn verify_ciphertext_integrity(crsz: &CRSZ, tau: &[Bit], sys: &SysParam) -> 
 
     use miracl_core::bls12381::pair;
     let g1 = ECP::generator();
-    let extendedtau = extend_tau(&crsz.cc, &crsz.rr, &crsz.ss, &tau);
-    let id = ftau(&extendedtau, sys).unwrap();
+    let extended_tau =
+        extend_tau_with_associated_data(&crsz.cc, &crsz.rr, &crsz.ss, &tau, associated_data);
+    let id = ftau(&extended_tau, sys).expect("extended_tau not the correct size");
 
     // check for all j:
     //   e(g1, Z_j) = e(R_j, f_0 \Prod_{i=0}^{\lambda) f_i^{\tau_i) * e(S_j, h)
@@ -1061,9 +1115,9 @@ pub fn verify_ciphertext_integrity(crsz: &CRSZ, tau: &[Bit], sys: &SysParam) -> 
     checks
 }
 
+// CRP-897: Remove support for old `extend_tau` once all ciphertexts use
+// `extend_tau_with_associated_data`.
 /// Returns tau ++ bitsOf (sha256 (cc, rr, ss, tau)).
-///
-/// See the description of Deal in Section 9.1.
 fn extend_tau(cc: &[Vec<ECP>], rr: &[ECP], ss: &[ECP], tau: &[Bit]) -> Vec<Bit> {
     let mut h = miracl_core::hash256::HASH256::new();
     cc.iter()
@@ -1072,13 +1126,41 @@ fn extend_tau(cc: &[Vec<ECP>], rr: &[ECP], ss: &[ECP], tau: &[Bit]) -> Vec<Bit> 
     ss.iter().for_each(|point| process_ecp(&mut h, point));
     tau.iter().for_each(|t| h.process_num(t.into()));
 
-    let mut extendedtau: Vec<Bit> = tau.to_vec();
+    let mut extended_tau: Vec<Bit> = tau.to_vec();
     h.hash().iter().for_each(|byte| {
         for b in 0..8 {
-            extendedtau.push(Bit::from((byte >> b) & 1));
+            extended_tau.push(Bit::from((byte >> b) & 1));
         }
     });
-    extendedtau
+    extended_tau
+}
+
+/// Returns (tau || RO(cc, rr, ss, tau, associated_data)).
+///
+/// See the description of Deal in Section 7.1.
+fn extend_tau_with_associated_data(
+    cc: &[Vec<ECP>],
+    rr: &[ECP],
+    ss: &[ECP],
+    tau: &[Bit],
+    associated_data: &[u8],
+) -> Vec<Bit> {
+    let mut map = HashedMap::new();
+    map.insert_hashed("ciphertext-chunks", &cc.to_vec());
+    map.insert_hashed("randomizers-r", &rr.to_vec());
+    map.insert_hashed("randomizers-s", &ss.to_vec());
+    map.insert_hashed("epoch", &(epoch_from_tau_vec(&tau).get() as usize));
+    map.insert_hashed("associated-data", &associated_data.to_vec());
+
+    let hash = random_oracle(DOMAIN_CIPHERTEXT_NODE, &map);
+
+    let mut extended_tau: Vec<Bit> = tau.to_vec();
+    hash.iter().for_each(|byte| {
+        for b in 0..8 {
+            extended_tau.push(Bit::from((byte >> b) & 1));
+        }
+    });
+    extended_tau
 }
 
 /// Computes the function f of the paper.

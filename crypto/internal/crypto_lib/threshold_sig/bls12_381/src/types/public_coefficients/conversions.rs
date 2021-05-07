@@ -7,7 +7,7 @@ use ic_crypto_internal_types::sign::threshold_sig::ni_dkg::ni_dkg_groth20_bls12_
 pub use ic_crypto_internal_types::sign::threshold_sig::public_coefficients::bls12_381::PublicCoefficientsBytes as InternalPublicCoefficients;
 use ic_crypto_internal_types::sign::threshold_sig::public_coefficients::CspPublicCoefficients;
 use ic_crypto_internal_types::sign::threshold_sig::public_key::bls12_381::{
-    PublicKeyBytes, ThresholdSigPublicKeyError,
+    PublicKeyBytes, ThresholdSigPublicKeyBytesConversionError,
 };
 use ic_types::crypto::{CryptoError, CryptoResult};
 use ic_types::{NodeIndex, NumberOfNodes};
@@ -125,7 +125,7 @@ impl From<PublicCoefficients> for InternalPublicCoefficients {
 impl TryFrom<&InternalPublicCoefficients> for PublicCoefficients {
     type Error = CryptoError;
     fn try_from(bytes: &InternalPublicCoefficients) -> Result<PublicCoefficients, CryptoError> {
-        let coefficients: Result<Vec<PublicKey>, ThresholdSigPublicKeyError> =
+        let coefficients: Result<Vec<PublicKey>, ThresholdSigPublicKeyBytesConversionError> =
             bytes.coefficients.iter().map(PublicKey::try_from).collect();
         let coefficients = coefficients?;
         Ok(PublicCoefficients { coefficients })

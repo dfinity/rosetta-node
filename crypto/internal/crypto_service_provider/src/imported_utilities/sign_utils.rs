@@ -3,6 +3,7 @@ use ic_crypto_internal_basic_sig_der_utils as der_utils;
 use ic_crypto_internal_basic_sig_ecdsa_secp256k1 as ecdsa_secp256k1;
 use ic_crypto_internal_basic_sig_ecdsa_secp256r1 as ecdsa_secp256r1;
 use ic_crypto_internal_basic_sig_ed25519 as ed25519;
+use ic_crypto_internal_basic_sig_iccsa as iccsa;
 use ic_crypto_internal_threshold_sig_bls12381 as bls12_381;
 use ic_crypto_internal_types::sign::threshold_sig::public_key::bls12_381::PublicKeyBytes as BlsPublicKeyBytes;
 use ic_crypto_internal_types::sign::threshold_sig::public_key::CspThresholdSigPublicKey;
@@ -25,6 +26,7 @@ pub enum KeyBytesContentType {
     EcdsaP256PublicKeyDer,
     EcdsaSecp256k1PublicKeyDer,
     EcdsaP256PublicKeyDerWrappedCose,
+    IcCanisterSignatureAlgPublicKeyDer,
 }
 
 /// Parses the given `bytes` as a DER- or COSE-encoded public key, and returns,
@@ -43,6 +45,28 @@ pub fn user_public_key_from_bytes(
             },
             KeyBytesContentType::Ed25519PublicKeyDer,
         ));
+    }
+    // Try DER-encoded ICCSA public key.
+    if let Ok(iccsa_pk) = iccsa::api::public_key_bytes_from_der(bytes) {
+        return Ok((
+            UserPublicKey {
+                key: iccsa_pk.0,
+                algorithm_id: AlgorithmId::IcCanisterSignature,
+            },
+            KeyBytesContentType::IcCanisterSignatureAlgPublicKeyDer,
+        ));
+    }
+    // Try DER-wrapped COSE ECDSA-P256 public key.
+    if let Ok(pk_cose) = der_utils::public_key_bytes_from_der_wrapped_cose(bytes) {
+        if let Ok(ecdsa_pk) = ecdsa_secp256r1::api::public_key_from_cose(&pk_cose) {
+            return Ok((
+                UserPublicKey {
+                    key: ecdsa_pk.0,
+                    algorithm_id: AlgorithmId::EcdsaP256,
+                },
+                KeyBytesContentType::EcdsaP256PublicKeyDerWrappedCose,
+            ));
+        }
     }
     // Try DER-encoded ECDSA-P256 public key.
     if let Ok(ecdsa_pk) = ecdsa_secp256r1::api::public_key_from_der(bytes) {
@@ -65,42 +89,44 @@ pub fn user_public_key_from_bytes(
         ));
     }
 
-    // Try DER-wrapped COSE ECDSA-P256 public key.
-    if let Ok(pk_cose) = der_utils::public_key_bytes_from_der_wrapping(bytes) {
-        if let Ok(ecdsa_pk) = ecdsa_secp256r1::api::public_key_from_cose(&pk_cose) {
-            return Ok((
-                UserPublicKey {
-                    key: ecdsa_pk.0,
-                    algorithm_id: AlgorithmId::EcdsaP256,
-                },
-                KeyBytesContentType::EcdsaP256PublicKeyDerWrappedCose,
-            ));
-        }
-    }
-
     Err(CryptoError::AlgorithmNotSupported {
         algorithm: AlgorithmId::Placeholder,
         reason: "Unsupported public key".to_string(),
     })
 }
 
-#[allow(unused)]
+/// Decodes an ECDSA P-256 signature from DER.
+///
+/// # Errors
+/// * `CryptoError::MalformedSignature`: if the signature cannot be DER decoded.
 pub fn ecdsa_p256_signature_from_der_bytes(bytes: &[u8]) -> CryptoResult<BasicSig> {
     let ecdsa_sig = ecdsa_secp256r1::api::signature_from_der(bytes)?;
     Ok(BasicSig(ecdsa_sig.0.to_vec()))
 }
 
+/// Encodes a threshold signature public key into DER.
+///
+/// # Errors
+/// * `CryptoError::MalformedPublicKey`: if the public cannot be DER encoded.
 pub fn threshold_sig_public_key_to_der(pk: ThresholdSigPublicKey) -> CryptoResult<Vec<u8>> {
     // TODO(CRP-641): add a check that the key is indeed a BLS key.
     let pk = BlsPublicKeyBytes(pk.into_bytes());
     bls12_381::api::public_key_to_der(pk)
 }
 
+/// Decodes a threshold signature public key from DER.
+///
+/// # Errors
+/// * `CryptoError::MalformedPublicKey`: if the public cannot be DER decoded.
 pub fn threshold_sig_public_key_from_der(bytes: &[u8]) -> CryptoResult<ThresholdSigPublicKey> {
     let pk = bls12_381::api::public_key_from_der(bytes)?;
     Ok(pk.into())
 }
 
+/// Encodes a raw ed25519 public key into DER.
+///
+/// # Errors
+/// * `CryptoError::MalformedPublicKey`: if the raw public key is malformed.
 pub fn ed25519_public_key_to_der(raw_key: Vec<u8>) -> CryptoResult<Vec<u8>> {
     let key: [u8; 32] = raw_key.as_slice().try_into().map_err(|_| {
         let key_length = raw_key.len();
@@ -119,7 +145,8 @@ pub fn ed25519_public_key_to_der(raw_key: Vec<u8>) -> CryptoResult<Vec<u8>> {
     )))
 }
 
-// TODO(CRP-622): remove this helper once crypto has NNS-verfification built in.
+/// Verifies a combined threshold signature.
+// TODO(CRP-622): remove this helper once crypto has NNS-verification built in.
 #[allow(dead_code)]
 pub fn verify_combined_threshold_sig<T: Signable>(
     msg: &T,
@@ -139,6 +166,8 @@ pub fn verify_combined_threshold_sig<T: Signable>(
     bls12_381::api::verify_combined_signature(&msg.as_signed_bytes(), bls_sig, bls_pk)
 }
 
+/// Creates a combined threshold signature together with its public key. This is
+/// only used for testing.
 // TODO(CRP-622): consider turning it into a test_util once crypto has
 // NNS-verfification built in.
 #[allow(dead_code)]

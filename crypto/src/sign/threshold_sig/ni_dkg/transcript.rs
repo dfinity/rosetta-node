@@ -13,6 +13,7 @@ mod tests;
 
 mod creation {
     use super::*;
+    use crate::sign::threshold_sig::ni_dkg::utils::dealer_index_in_dealers_or_panic;
     use ic_crypto_internal_threshold_sig_bls12381::api::dkg_errors::InvalidArgumentError;
     use ic_crypto_internal_types::sign::threshold_sig::ni_dkg::{
         CspNiDkgDealing, CspNiDkgTranscript,
@@ -160,16 +161,6 @@ mod creation {
             config.receivers().count(),
             csp_dealings,
         )?)
-    }
-
-    fn dealer_index_in_dealers_or_panic(dealers: &NiDkgDealers, dealer: NodeId) -> NodeIndex {
-        // the following never panics due to `ensure_dealing_node_ids_in_dealers`
-        dealers.position(dealer).unwrap_or_else(|| {
-            panic!(
-                "This operation requires node ({}) to be a dealer, but it is not.",
-                dealer
-            )
-        })
     }
 
     fn csp_dealings(

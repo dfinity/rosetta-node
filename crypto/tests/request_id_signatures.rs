@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use ic_config::crypto::CryptoConfig;
 use ic_crypto::{
     ecdsa_p256_signature_from_der_bytes, ed25519_public_key_to_der, user_public_key_from_bytes,
@@ -155,13 +156,21 @@ fn should_fail_verifying_sig_on_wrong_msg_with_der_encoded_ed25519_pk() {
 #[test]
 fn should_verify_request_id_ecdsa_signature() {
     let request_id = MessageId::from([42; 32]);
-    let (signature, public_key) = ecdsa_p256_signature_and_public_key(&request_id);
+    let (signature, public_key) = ecdsa_signature_and_public_key(Nid::SECP256K1, &request_id);
     CryptoConfig::run_with_temp_config(|config| {
         let crypto = crypto_component(&config);
         assert!(crypto
             .verify_basic_sig_by_public_key(&signature, &request_id, &public_key)
             .is_ok());
-    })
+    });
+    let (signature, public_key) =
+        ecdsa_signature_and_public_key(Nid::X9_62_PRIME256V1, &request_id);
+    CryptoConfig::run_with_temp_config(|config| {
+        let crypto = crypto_component(&config);
+        assert!(crypto
+            .verify_basic_sig_by_public_key(&signature, &request_id, &public_key)
+            .is_ok());
+    });
 }
 
 #[test]
@@ -278,6 +287,14 @@ fn should_correctly_parse_der_encoded_openssl_ecdsa_p256_pk() {
 }
 
 #[test]
+fn should_correctly_parse_der_encoded_openssl_ecdsa_secp256k1_pk() {
+    let pk_der = new_pk_der(Nid::SECP256K1);
+    let (pk, bytes_type) = user_public_key_from_bytes(&pk_der).unwrap();
+    assert_eq!(pk.algorithm_id, AlgorithmId::EcdsaSecp256k1);
+    assert_eq!(bytes_type, KeyBytesContentType::EcdsaSecp256k1PublicKeyDer);
+}
+
+#[test]
 fn should_fail_parsing_corrupted_raw_ed25519_pk() {
     let pk_raw = hex::decode(test_data::ED25519_PK_1_RFC8032_HEX).unwrap();
     let pk_result = user_public_key_from_bytes(&pk_raw[1..]);
@@ -347,12 +364,12 @@ fn ed25519_signature_and_public_key(
     (signature, public_key)
 }
 
-fn ecdsa_p256_signature_and_public_key(
+fn ecdsa_signature_and_public_key(
+    nid: Nid,
     request_id: &MessageId,
 ) -> (BasicSigOf<MessageId>, UserPublicKey) {
     let ec_key = {
-        let group =
-            EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).expect("unable to create EC group");
+        let group = EcGroup::from_curve_name(nid).expect("unable to create EC group");
         EcKey::generate(&group).expect("unable to generate EC key")
     };
 

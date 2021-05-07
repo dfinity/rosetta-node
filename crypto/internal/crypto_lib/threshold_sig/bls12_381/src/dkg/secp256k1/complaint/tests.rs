@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Tests for distributed key generation complaints and complaint verification
 
 use super::*;

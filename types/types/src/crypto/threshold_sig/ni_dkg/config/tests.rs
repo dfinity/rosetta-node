@@ -230,8 +230,8 @@ fn should_return_correct_config_values() {
 // message should be well readable and in particular contain hex encodings where
 // applicable.
 //
-// The format of the subnet ids is specified in the public spec:
-// https://docs.dfinity.systems/dfinity/spec/public/index.html#textual-ids
+// The format of the subnet ids is specified in the interface spec:
+// https://sdk.dfinity.org/docs/interface-spec/index.html#textual-ids
 fn should_correctly_format_config_display_message() {
     let config = NiDkgConfig::new(valid_dkg_config_data());
 

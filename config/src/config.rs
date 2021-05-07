@@ -27,7 +27,7 @@ use std::{convert::TryFrom, path::PathBuf};
 
 /// The config struct for the replica.  Just consists of `Config`s for
 /// the components.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     pub registry_client: RegistryClientConfig,
     pub transport: TransportConfig,
@@ -40,6 +40,9 @@ pub struct Config {
     pub consensus: ConsensusConfig,
     pub crypto: CryptoConfig,
     pub logger: LoggerConfig,
+    // If `manager_logger` is not specified in the configuration file, it
+    // defaults to the value specified for `logger`.
+    pub nodemanager_logger: LoggerConfig,
     pub message_routing: MessageRoutingConfig,
     pub malicious_behaviour: MaliciousBehaviour,
     pub firewall: FirewallConfig,
@@ -49,7 +52,7 @@ pub struct Config {
 
 /// Mirrors the Config struct except that fields are made optional. This is
 /// meant for use with config_parser, where sections can be omitted.
-#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct ConfigOptional {
     pub registry_client: Option<RegistryClientConfig>,
     pub transport: Option<TransportConfig>,
@@ -62,6 +65,7 @@ pub struct ConfigOptional {
     pub consensus: Option<ConsensusConfig>,
     pub crypto: Option<CryptoConfig>,
     pub logger: Option<LoggerConfig>,
+    pub nodemanager_logger: Option<LoggerConfig>,
     pub message_routing: Option<MessageRoutingConfig>,
     pub malicious_behaviour: Option<MaliciousBehaviour>,
     pub firewall: Option<FirewallConfig>,
@@ -88,7 +92,8 @@ impl Config {
             artifact_pool: ArtifactPoolTomlConfig::new(parent_dir.join("consensus_pool"), None),
             consensus: ConsensusConfig::default(),
             crypto: CryptoConfig::new(parent_dir.join("crypto")),
-            logger,
+            logger: logger.clone(),
+            nodemanager_logger: logger,
             message_routing: MessageRoutingConfig::default(),
             malicious_behaviour: MaliciousBehaviour::default(),
             firewall: FirewallConfig::default(),
@@ -126,9 +131,8 @@ impl Config {
     pub fn load_with_default(source: &ConfigSource, default: Config) -> Result<Self, ConfigError> {
         let cfg = source.load::<ConfigOptional>()?;
 
-        let logger = LoggerConfig {
-            ..cfg.logger.unwrap_or(default.logger)
-        };
+        let logger = cfg.logger.unwrap_or(default.logger);
+        let nodemanager_logger = cfg.nodemanager_logger.unwrap_or_else(|| logger.clone());
 
         Ok(Self {
             registry_client: cfg.registry_client.unwrap_or(default.registry_client),
@@ -147,6 +151,7 @@ impl Config {
             consensus: cfg.consensus.unwrap_or(default.consensus),
             crypto: cfg.crypto.unwrap_or(default.crypto),
             logger,
+            nodemanager_logger,
             message_routing: cfg.message_routing.unwrap_or(default.message_routing),
             malicious_behaviour: cfg
                 .malicious_behaviour

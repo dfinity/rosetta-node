@@ -82,7 +82,9 @@ fn core(num_signers: &str) -> Result<(), (String, i32)> {
     let mut combining_time = 0;
     let mut combined_verification_time = 0;
 
-    let num_signers = num_signers.parse::<usize>().unwrap();
+    let num_signers = num_signers
+        .parse::<usize>()
+        .map_err(|_| (format!("Invalid num_signers {}", num_signers), 2))?;
     let mut rng = StdRng::from_entropy();
 
     let iterations = 10_000 / num_signers + 1;

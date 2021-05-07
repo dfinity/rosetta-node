@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 use super::*;
 use crate::common::test_utils::mockall_csp::MockAllCryptoServiceProvider;
 use crate::sign::tests::{
@@ -47,8 +49,9 @@ mod create_dealing {
         let mut csp = MockAllCryptoServiceProvider::new();
         csp.expect_create_dealing()
             .withf(
-                move |algorithm_id, dkg_id, threshold, epoch_, receiver_keys| {
+                move |algorithm_id, dkg_id, dealer_index, threshold, epoch_, receiver_keys| {
                     *dkg_id == DKG_ID
+                        && *dealer_index == 0
                         && *algorithm_id == AlgorithmId::NiDkg_Groth20_Bls12_381
                         && *threshold == THRESHOLD
                         && *epoch_ == epoch(REG_V2)
@@ -98,11 +101,16 @@ mod create_dealing {
         let key_record_2 = dealing_enc_pk_record(NODE_2, REG_V2, PK_VALUE_2);
         let key_record_3 = dealing_enc_pk_record(NODE_3, REG_V2, PK_VALUE_3);
 
-        let csp = csp_with_create_dealing_expecting_receiver_keys(map_of(vec![
-            (0u32, csp_fs_enc_pk(PK_VALUE_1)),
-            (1u32, csp_fs_enc_pk(PK_VALUE_2)),
-            (2u32, csp_fs_enc_pk(PK_VALUE_3)),
-        ]));
+        // NODE_1 is the first one in the set of dealers. Note that the nodes are sorted
+        // lexicographically.
+        let csp = csp_with_create_dealing_expecting_receiver_keys_and_dealer_index(
+            0,
+            map_of(vec![
+                (0u32, csp_fs_enc_pk(PK_VALUE_1)),
+                (1u32, csp_fs_enc_pk(PK_VALUE_2)),
+                (2u32, csp_fs_enc_pk(PK_VALUE_3)),
+            ]),
+        );
 
         let _ = create_dealing(
             &NODE_1,
@@ -292,14 +300,16 @@ mod create_dealing {
         csp
     }
 
-    fn csp_with_create_dealing_expecting_receiver_keys(
+    fn csp_with_create_dealing_expecting_receiver_keys_and_dealer_index(
+        expected_index: NodeIndex,
         expected_receiver_keys: BTreeMap<NodeIndex, CspFsEncryptionPublicKey>,
     ) -> impl CryptoServiceProvider {
         let mut csp = MockAllCryptoServiceProvider::new();
         csp.expect_create_dealing()
             .withf(
-                move |algorithm_id, dkg_id, threshold, epoch_, receiver_keys| {
+                move |algorithm_id, dkg_id, dealer_index, threshold, epoch_, receiver_keys| {
                     *dkg_id == DKG_ID
+                        && *dealer_index == expected_index
                         && *algorithm_id == AlgorithmId::NiDkg_Groth20_Bls12_381
                         && *threshold == THRESHOLD
                         && *epoch_ == epoch(REG_V2)
@@ -386,6 +396,7 @@ mod create_dealing_with_resharing_transcript {
             REG_V1,
             RESHARING_TRANSCRIPT_DKG_ID,
         );
+
         let dkg_config = dkg_config(NiDkgConfigData {
             dkg_id: DKG_ID,
             receivers: set_of(&[NODE_3]),
@@ -397,18 +408,21 @@ mod create_dealing_with_resharing_transcript {
         });
         let resharing_enc_pk_record = dealing_enc_pk_record(NODE_3, REG_V1, PK_VALUE_1);
         let enc_pk_record = dealing_enc_pk_record(NODE_3, REG_V2, PK_VALUE_2);
-
         let mut csp = MockAllCryptoServiceProvider::new();
         expect_load_threshold_signing_key_returning(&mut csp, Ok(()));
         csp.expect_create_resharing_dealing()
             .withf(
                 move |algorithm_id,
                       dkg_id,
+                      dealer_index,
                       threshold,
                       epoch_,
                       receiver_keys,
                       resharing_public_coefficients| {
                     *dkg_id == DKG_ID
+                        // The dealer index is the index of NODE_3 in the set of dealers.
+                        // Note that the nodes are sorted lexicographically.
+                        && *dealer_index == 2
                         && *algorithm_id == AlgorithmId::NiDkg_Groth20_Bls12_381
                         && *threshold == THRESHOLD
                         && *epoch_ == epoch(REG_V2)
@@ -568,8 +582,15 @@ mod verify_dealing {
         let mut csp = MockAllCryptoServiceProvider::new();
         csp.expect_verify_dealing()
             .withf(
-                move |algorithm_id, dkg_id, threshold, epoch_, receiver_keys, dealing| {
+                move |algorithm_id,
+                      dkg_id,
+                      dealer_index,
+                      threshold,
+                      epoch_,
+                      receiver_keys,
+                      dealing| {
                     *dkg_id == DKG_ID
+                        && *dealer_index == 0
                         && *algorithm_id == AlgorithmId::NiDkg_Groth20_Bls12_381
                         && *threshold == THRESHOLD
                         && *epoch_ == epoch(REG_V2)
@@ -791,7 +812,13 @@ mod verify_dealing {
         let mut csp = MockAllCryptoServiceProvider::new();
         csp.expect_verify_dealing()
             .withf(
-                move |_algorithm_id, _dkg_id, _threshold, _epoch, receiver_keys, _dealing| {
+                move |_algorithm_id,
+                      _dkg_id,
+                      _dealer_index,
+                      _threshold,
+                      _epoch,
+                      receiver_keys,
+                      _dealing| {
                     println!("{:?}", receiver_keys);
                     *receiver_keys == expected_receiver_keys
                 },
@@ -820,7 +847,7 @@ mod verify_dealing_with_resharing_transcript {
     use ic_crypto_internal_threshold_sig_bls12381::api::ni_dkg_errors::CspDkgVerifyReshareDealingError;
 
     #[test]
-    fn should_call_csp_create_resharing_dealing_with_correct_parameters() {
+    fn should_call_csp_verify_resharing_dealing_with_correct_parameters() {
         let resharing_transcript = transcript(
             set_of(&[NODE_3, NODE_2, NODE_4, NODE_1]),
             REG_V1,
@@ -843,12 +870,12 @@ mod verify_dealing_with_resharing_transcript {
             .withf(
                 move |algorithm_id,
                       dkg_id,
+                      dealer_resharing_index,
                       threshold,
                       epoch_,
                       receiver_keys,
                       dealing,
-                      resharing_pub_coeffs,
-                      resharing_dealer_idx| {
+                      resharing_pub_coeffs| {
                     *dkg_id == DKG_ID
                         && *algorithm_id == AlgorithmId::NiDkg_Groth20_Bls12_381
                         && *threshold == THRESHOLD
@@ -858,7 +885,7 @@ mod verify_dealing_with_resharing_transcript {
                         && *resharing_pub_coeffs == expected_resharing_pub_coeffs
                         // The resharing dealer index is the index of NODE_3 in the resharing committee.
                         // Note that the nodes are sorted lexicographically.
-                        && *resharing_dealer_idx == 2
+                        && *dealer_resharing_index == 2
                 },
             )
             .times(1)

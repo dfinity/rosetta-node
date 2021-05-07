@@ -4,14 +4,24 @@ use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
 use strum_macros::EnumString;
 
+/// Defines the different types of subnets that can exist on the IC.
 #[derive(CandidType, Clone, Copy, Deserialize, Debug, Eq, EnumString, PartialEq, Serialize)]
 pub enum SubnetType {
+    /// The application subnet type where most of the normal applications will
+    /// be hosted.
     #[strum(serialize = "application")]
     #[serde(rename = "application")]
     Application,
+    /// System subnet type is allowed special privileges. The NNS subnet is of
+    /// this type.
     #[strum(serialize = "system")]
     #[serde(rename = "system")]
     System,
+    /// Similar to application subnet type. The main differences are that the
+    /// prices are lower, and only whitelisted principals can use them.
+    #[strum(serialize = "verified_application")]
+    #[serde(rename = "verified_application")]
+    VerifiedApplication,
 }
 
 impl Default for SubnetType {
@@ -25,23 +35,29 @@ impl From<SubnetType> for i32 {
         match subnet_type {
             SubnetType::Application => 1,
             SubnetType::System => 2,
+            SubnetType::VerifiedApplication => 4,
         }
     }
 }
 
 impl TryFrom<i32> for SubnetType {
-    type Error = String;
+    type Error = ProxyDecodeError;
 
     fn try_from(input: i32) -> Result<Self, Self::Error> {
         if input == 1 {
             Ok(SubnetType::Application)
         } else if input == 2 {
             Ok(SubnetType::System)
+        } else if input == 4 {
+            Ok(SubnetType::VerifiedApplication)
         } else {
-            Err(format!(
-                "Unknown subnet type {}. Expected 1 (application) or 2 (system).",
-                input
-            ))
+            Err(ProxyDecodeError::ValueOutOfRange {
+                typ: "SubnetType",
+                err: format!(
+                    "Expected 1 (application), 2 (system), or 4 (VerifiedApplication), got {}",
+                    input
+                ),
+            })
         }
     }
 }
@@ -51,6 +67,7 @@ impl From<SubnetType> for pb::SubnetType {
         match subnet_type {
             SubnetType::Application => Self::Application,
             SubnetType::System => Self::System,
+            SubnetType::VerifiedApplication => Self::VerifiedApplication,
         }
     }
 }
@@ -69,6 +86,7 @@ impl TryFrom<pb::SubnetType> for SubnetType {
             }),
             pb::SubnetType::Application => Ok(SubnetType::Application),
             pb::SubnetType::System => Ok(SubnetType::System),
+            pb::SubnetType::VerifiedApplication => Ok(SubnetType::VerifiedApplication),
         }
     }
 }

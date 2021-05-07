@@ -22,7 +22,7 @@ use std::convert::TryFrom;
 #[cfg(test)]
 mod tests;
 
-// TODO (DFN-1479): Remove generic methods in CSP conversions
+// TODO (CRP-201): Remove generic methods in CSP conversions
 impl<T> TryFrom<&IndividualMultiSigOf<T>> for CspSignature {
     type Error = CryptoError;
 
@@ -49,7 +49,7 @@ impl<T> TryFrom<&IndividualMultiSigOf<T>> for CspSignature {
     }
 }
 
-// TODO (DFN-1479): Remove generic methods in CSP conversions
+// TODO (CRP-201): Remove generic methods in CSP conversions
 impl<T> TryFrom<&CombinedMultiSigOf<T>> for CspSignature {
     type Error = CryptoError;
 
@@ -76,7 +76,7 @@ impl<T> TryFrom<&CombinedMultiSigOf<T>> for CspSignature {
     }
 }
 
-// TODO (DFN-1479): Remove generic methods in CSP conversions
+// TODO (CRP-201): Remove generic methods in CSP conversions
 impl<T> TryFrom<&ThresholdSigShareOf<T>> for CspSignature {
     type Error = CryptoError;
 
@@ -103,7 +103,7 @@ impl<T> TryFrom<&ThresholdSigShareOf<T>> for CspSignature {
     }
 }
 
-// TODO (DFN-1479): Remove generic methods in CSP conversions
+// TODO (CRP-201): Remove generic methods in CSP conversions
 impl<T> TryFrom<&CombinedThresholdSigOf<T>> for CspSignature {
     type Error = CryptoError;
 
@@ -151,6 +151,7 @@ impl<T> TryFrom<CspSignature> for CombinedThresholdSigOf<T> {
 }
 
 impl SigConverter {
+    /// Convert from a BasicSigOf to a CspSignature
     pub fn try_from_basic<T>(&self, signature: &BasicSigOf<T>) -> CryptoResult<CspSignature> {
         match self.target_algorithm {
             AlgorithmId::Ed25519 => {

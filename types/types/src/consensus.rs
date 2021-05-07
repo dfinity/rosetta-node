@@ -24,32 +24,43 @@ pub use catchup::*;
 use hashed::Hashed;
 pub use payload::{BlockPayload, Payload};
 
+/// BasicSignature captures basic signature on a value and the identity of the
+/// replica that signed it
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct BasicSignature<T> {
     pub signature: BasicSigOf<T>,
     pub signer: NodeId,
 }
 
+/// BasicSigned<T> captures a value of type T and a BasicSignature on it
 pub type BasicSigned<T> = Signed<T, BasicSignature<T>>;
 
+/// ThresholdSignature captures a threshold signature on a value and the
+/// DKG id of the threshold key material used to sign
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ThresholdSignature<T> {
     pub signature: CombinedThresholdSigOf<T>,
     pub signer: NiDkgId,
 }
 
+/// ThresholdSignatureShare captures a share of a threshold signature on a value
+/// and the identity of the replica that signed
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ThresholdSignatureShare<T> {
     pub signature: ThresholdSigShareOf<T>,
     pub signer: NodeId,
 }
 
+/// MultiSignature captures a cryptographic multi-signature, which is one
+/// message signed by multiple signers
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct MultiSignature<T> {
     pub signature: CombinedMultiSigOf<T>,
     pub signers: Vec<NodeId>,
 }
 
+/// MultiSignatureShare is a signature from one replica. Multiple shares can be
+/// aggregated into a MultiSignature.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct MultiSignatureShare<T> {
     pub signature: IndividualMultiSigOf<T>,
@@ -71,7 +82,7 @@ pub trait HasRank {
     fn rank(&self) -> Rank;
 }
 
-/// Abstract messages with role attribute
+/// Abstract messages with committee attribute
 pub trait HasCommittee {
     fn committee() -> Committee;
 }
@@ -237,21 +248,30 @@ impl HasCommittee for RandomTapeContent {
     }
 }
 
-// tag::types[]
+/// Rank is used to indicate the priority of a block maker, where 0 indicates
+/// the highest priority.
 #[derive(Copy, Clone, Debug, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Rank(pub u64);
 
+/// Block is the type that is used to create blocks out of which we build a
+/// block chain
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Block {
     version: ReplicaVersion,
+    /// the parent block that this block extends, forming a block chain
     pub parent: CryptoHashOf<Block>,
+    /// the payload of the block
     pub payload: Payload,
+    /// the height of the block, which is the height of the parent + 1
     pub height: Height,
+    /// rank indicates the rank of the block maker that created this block
     pub rank: Rank,
+    /// the context with respect to which this block should be validated
     pub context: ValidationContext,
 }
 
 impl Block {
+    /// Create a new block
     pub fn new(
         parent: CryptoHashOf<Block>,
         payload: Payload,
@@ -269,6 +289,7 @@ impl Block {
         }
     }
 
+    /// Create a BlockLogEntry from this block
     pub fn log_entry(&self, block_hash: String) -> BlockLogEntry {
         BlockLogEntry {
             byte_size: None,
@@ -291,9 +312,10 @@ impl SignedBytesWithoutDomainSeparator for Block {
     }
 }
 
+/// HashedBlock contains a Block together with its hash
 pub type HashedBlock = Hashed<CryptoHashOf<Block>, Block>;
 
-/// We store the hash of block in block proposal too.
+/// A BlockProposal is a HashedBlock that is signed by the block maker.
 pub type BlockProposal = Signed<HashedBlock, BasicSignature<Block>>;
 
 impl From<&BlockProposal> for pb::BlockProposal {
@@ -314,8 +336,7 @@ impl TryFrom<pb::BlockProposal> for BlockProposal {
             content: Hashed {
                 value: Block::try_from(
                     block_proposal.value.expect("No block serialization found."),
-                )
-                .expect("Could not deserialize block."),
+                )?,
                 hash: CryptoHashOf::from(CryptoHash(block_proposal.hash)),
             },
             signature: BasicSignature {
@@ -341,6 +362,7 @@ impl AsRef<Block> for BlockProposal {
     }
 }
 
+/// NotarizationContent holds the values that are signed in a notarization
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct NotarizationContent {
     version: ReplicaVersion,
@@ -349,6 +371,7 @@ pub struct NotarizationContent {
 }
 
 impl NotarizationContent {
+    /// Create a new notarization content from a height and a block hash
     pub fn new(height: Height, block: CryptoHashOf<Block>) -> Self {
         NotarizationContent {
             version: ReplicaVersion::default(),
@@ -364,6 +387,7 @@ impl SignedBytesWithoutDomainSeparator for NotarizationContent {
     }
 }
 
+/// A notarization is a multi-signature on a NotarizationContent
 pub type Notarization = Signed<NotarizationContent, MultiSignature<NotarizationContent>>;
 
 impl From<&Notarization> for pb::Notarization {
@@ -410,8 +434,12 @@ impl TryFrom<pb::Notarization> for Notarization {
     }
 }
 
+/// A notarization share is a multi-signature share on a notarization content.
+/// If sufficiently many replicas create notarization shares, the shares can be
+/// aggregated into a full notarization.
 pub type NotarizationShare = Signed<NotarizationContent, MultiSignatureShare<NotarizationContent>>;
 
+/// FinalizationContent holds the values that are signed in a finalization
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct FinalizationContent {
     version: ReplicaVersion,
@@ -435,6 +463,9 @@ impl SignedBytesWithoutDomainSeparator for FinalizationContent {
     }
 }
 
+/// A finalization is a multi-signature on a FinalizationContent. A finalization
+/// proves that the block identified by the block hash in the finalization
+/// content (and the block chain it implies) is agreed upon.
 pub type Finalization = Signed<FinalizationContent, MultiSignature<FinalizationContent>>;
 
 impl From<&Finalization> for pb::Finalization {
@@ -476,8 +507,14 @@ impl TryFrom<pb::Finalization> for Finalization {
     }
 }
 
+/// A finalization share is a multi-signature share on a finalization content.
+/// If sufficiently many replicas create finalization shares, the shares can be
+/// aggregated into a full finalization.
 pub type FinalizationShare = Signed<FinalizationContent, MultiSignatureShare<FinalizationContent>>;
 
+/// RandomBeaconContent holds the content that is signed in the random beacon,
+/// which is the previous random beacon, the height, and the replica version
+/// used to create the random beacon.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct RandomBeaconContent {
     version: ReplicaVersion,
@@ -485,9 +522,12 @@ pub struct RandomBeaconContent {
     pub parent: CryptoHashOf<RandomBeacon>,
 }
 
+/// HashedRandomBeacon holds a RandomBeacon and its hash
 pub type HashedRandomBeacon = Hashed<CryptoHashOf<RandomBeacon>, RandomBeacon>;
 
 impl RandomBeaconContent {
+    /// Create a new RandomBeaconContent with a given height and parent
+    /// RandomBeacon
     pub fn new(height: Height, parent: CryptoHashOf<RandomBeacon>) -> Self {
         RandomBeaconContent {
             version: ReplicaVersion::default(),
@@ -503,6 +543,10 @@ impl SignedBytesWithoutDomainSeparator for RandomBeaconContent {
     }
 }
 
+/// A RandomBeacon is a RandomBeaconContent signed using a threshold signature.
+/// The RandomBeacon provides pseudo-randomness to the consensus protocol that
+/// is used to assign ranks to block makers and determine which replicas are
+/// notaries.
 pub type RandomBeacon = Signed<RandomBeaconContent, ThresholdSignature<RandomBeaconContent>>;
 
 impl From<&RandomBeacon> for pb::RandomBeacon {
@@ -540,9 +584,15 @@ impl TryFrom<pb::RandomBeacon> for RandomBeacon {
     }
 }
 
+/// RandomBeaconShare is a threshold signature share on a RandomBeaconContent.
+/// If sufficiently many replicas create random beacon shares, the shares can be
+/// aggregated into a RandomBeacon.
 pub type RandomBeaconShare =
     Signed<RandomBeaconContent, ThresholdSignatureShare<RandomBeaconContent>>;
 
+/// RandomTapeContent holds the content that is signed in the random tape,
+/// which is the height and the replica version used to create the random
+/// tape.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct RandomTapeContent {
     version: ReplicaVersion,
@@ -556,6 +606,7 @@ impl SignedBytesWithoutDomainSeparator for RandomTapeContent {
 }
 
 impl RandomTapeContent {
+    /// Create a new RandomTapeContent from a given height
     pub fn new(height: Height) -> Self {
         RandomTapeContent {
             version: ReplicaVersion::default(),
@@ -564,6 +615,9 @@ impl RandomTapeContent {
     }
 }
 
+/// A RandomTape is a RandomTapeContent signed using a threshold signature.
+/// The RandomTape provides pseudo-randomness for executing the messages ordered
+/// by consensus.
 pub type RandomTape = Signed<RandomTapeContent, ThresholdSignature<RandomTapeContent>>;
 
 impl From<&RandomTape> for pb::RandomTape {
@@ -598,11 +652,13 @@ impl TryFrom<pb::RandomTape> for RandomTape {
     }
 }
 
+/// RandomTapeShare is a threshold signature share on a RandomTapeContent. If
+/// sufficiently many replicas create random tape shares, the shares can be
+/// aggregated into a RandomTape.
 pub type RandomTapeShare = Signed<RandomTapeContent, ThresholdSignatureShare<RandomTapeContent>>;
 
-// TODO(CON-272): Remove this clippy exception
 /// The enum encompassing all of the consensus artifacts exchanged between
-/// nodes.
+/// replicas.
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub enum ConsensusMessage {
@@ -839,7 +895,8 @@ impl<'a> TryFrom<&'a ConsensusMessage> for &'a CatchUpPackageShare {
     }
 }
 
-/// Message hash. Enum order should be consistent with ConsensusMessage.
+/// ConsensusMessageHash has the same variants as [ConsensusMessage], but
+/// contains only a hash instead of the full message in each variant.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ConsensusMessageHash {
     RandomBeacon(CryptoHashOf<RandomBeacon>),
@@ -855,7 +912,10 @@ pub enum ConsensusMessageHash {
     CatchUpPackageShare(CryptoHashOf<CatchUpPackageShare>),
 }
 
-/// Message Attribute. Enum order should be consistent with ConsensusMessage.
+/// ConsensusMessageAttribute has the same variants as [ConsensusMessage], but
+/// contains only the attributes for each variant. The attributes are the values
+/// that are used in the p2p layer to determine whether an artifact is
+/// interesting to a replica before fetching the full artifact.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ConsensusMessageAttribute {
     RandomBeacon(Height),
@@ -870,11 +930,14 @@ pub enum ConsensusMessageAttribute {
     CatchUpPackage(Height),
     CatchUpPackageShare(Height),
 }
-// end::types[]
 
 /// Useful to compare equality by content, for example Signed<C,S> can be
 /// compared by equality on C.
 pub trait ContentEq {
+    /// content_eq compares two values and returns true if their content is
+    /// equal. We implement this for signed artifacts, and say that they are
+    /// content_eq if the value they sign is equal, even if the signature is
+    /// different.
     fn content_eq(&self, other: &Self) -> bool;
 }
 
@@ -1090,11 +1153,21 @@ impl From<&ConsensusMessage> for ConsensusMessageAttribute {
 /// signature shares on various types of artifacts
 #[derive(Debug, PartialEq)]
 pub enum Committee {
+    /// LowThreshold indicates the committee that creates threshold signatures
+    /// with a low threshold. That is, f+1 out the 3f+1 committee members can
+    /// collaboratively create a threshold signature.
     LowThreshold,
+    /// HighThreshold indicates the committee that creates threshold signatures
+    /// with a high threshold. That is, 2f+1 out the 3f+1 committee members can
+    /// collaboratively create a threshold signature.
     HighThreshold,
+    /// Notarization indicates the committee that creates notarization and
+    /// finalization artifacts by using multi-signatures.
     Notarization,
 }
 
+/// Threshold indicates how many replicas of a committee need to create a
+/// signature share in order to create a signature on behalf of the committee
 pub type Threshold = usize;
 
 /// Compute the size of the committee given the total amount of nodes on the
@@ -1189,5 +1262,17 @@ impl TryFrom<pb::Block> for Block {
                 payload,
             ),
         })
+    }
+}
+
+impl CountBytes for NiDkgId {
+    fn count_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+    }
+}
+
+impl<T> CountBytes for ThresholdSignature<T> {
+    fn count_bytes(&self) -> usize {
+        self.signature.get_ref().0.len() + self.signer.count_bytes()
     }
 }

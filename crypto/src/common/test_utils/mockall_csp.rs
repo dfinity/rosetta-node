@@ -14,6 +14,7 @@ use ic_crypto_internal_csp::api::{
     DistributedKeyGenerationCspClient, NiDkgCspClient, NodePublicKeyData,
     ThresholdSignatureCspClient,
 };
+use ic_crypto_internal_csp::tls_stub::cert_chain::CspCertificateChain;
 use ic_crypto_internal_csp::types::{
     CspDealing, CspDkgTranscript, CspPop, CspPublicCoefficients, CspPublicKey, CspResponse,
     CspSecretKey, CspSignature,
@@ -27,7 +28,7 @@ use ic_crypto_internal_threshold_sig_bls12381::api::ni_dkg_errors::{
 };
 use ic_crypto_internal_types::sign::threshold_sig::dkg::encryption_public_key::CspEncryptionPublicKey;
 use ic_crypto_internal_types::sign::threshold_sig::ni_dkg::{
-    CspFsEncryptionPok, CspFsEncryptionPublicKey, CspNiDkgDealing, CspNiDkgTranscript, Epoch,
+    CspFsEncryptionPop, CspFsEncryptionPublicKey, CspNiDkgDealing, CspNiDkgTranscript, Epoch,
 };
 use ic_crypto_internal_types::sign::threshold_sig::public_key::CspThresholdSigPublicKey;
 use ic_crypto_tls_interfaces::TlsStream;
@@ -150,14 +151,16 @@ mock! {
     fn create_forward_secure_key_pair(
         &mut self,
         _algorithm_id: AlgorithmId,
-    ) -> Result<(CspFsEncryptionPublicKey, CspFsEncryptionPok), CspDkgCreateFsKeyError>;
+        _node_id: NodeId,
+    ) -> Result<(CspFsEncryptionPublicKey, CspFsEncryptionPop), CspDkgCreateFsKeyError>;
 
-    /// Verifies that a forward secure public key and PoK is valid.
+    /// Verifies that a forward secure public key and PoP is valid.
     fn verify_forward_secure_key(
         &self,
         _algorithm_id: AlgorithmId,
         _public_key: CspFsEncryptionPublicKey,
-        _pok: CspFsEncryptionPok,
+        _pop: CspFsEncryptionPop,
+        _node_id: NodeId,
     ) -> Result<(), CspDkgVerifyFsKeyError>;
 
     /// Erases forward secure secret keys at and before a given epoch
@@ -171,6 +174,7 @@ mock! {
             &self,
             algorithm_id: AlgorithmId,
             dkg_id: NiDkgId,
+            dealer_index: NodeIndex,
             threshold: NumberOfNodes,
             epoch: Epoch,
             receiver_keys: BTreeMap<u32, CspFsEncryptionPublicKey>,
@@ -180,6 +184,7 @@ mock! {
             &self,
             algorithm_id: AlgorithmId,
             dkg_id: NiDkgId,
+            dealer_resharing_index: NodeIndex,
             threshold: NumberOfNodes,
             epoch: Epoch,
             receiver_keys: BTreeMap<u32, CspFsEncryptionPublicKey>,
@@ -190,6 +195,7 @@ mock! {
             &self,
             algorithm_id: AlgorithmId,
             dkg_id: NiDkgId,
+            dealer_index: NodeIndex,
             threshold: NumberOfNodes,
             epoch: Epoch,
             receiver_keys: BTreeMap<u32, CspFsEncryptionPublicKey>,
@@ -200,12 +206,12 @@ mock! {
             &self,
             algorithm_id: AlgorithmId,
             dkg_id: NiDkgId,
+            dealer_resharing_index: u32,
             threshold: NumberOfNodes,
             epoch: Epoch,
             receiver_keys: BTreeMap<u32, CspFsEncryptionPublicKey>,
             dealing: CspNiDkgDealing,
             resharing_public_coefficients: CspPublicCoefficients,
-            resharing_dealer_index: u32,
         ) -> Result<(), CspDkgVerifyReshareDealingError>;
 
         fn create_transcript(
@@ -339,7 +345,7 @@ mock! {
             tcp_stream: TcpStream,
             self_cert: X509PublicKeyCert,
             trusted_client_certs: Vec<X509PublicKeyCert>,
-        ) -> Result<(TlsStream, Option<X509>), CspTlsServerHandshakeError>;
+        ) -> Result<(TlsStream, Option<CspCertificateChain>), CspTlsServerHandshakeError>;
     }
 
     #[async_trait]

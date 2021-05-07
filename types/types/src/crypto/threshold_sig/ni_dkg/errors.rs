@@ -1,6 +1,6 @@
+//! Errors for non-interactive DKG.
 use crate::{NodeId, RegistryVersion};
 use ic_crypto_internal_types::encrypt::forward_secure as ifs;
-use std::collections::BTreeSet;
 use std::fmt;
 
 pub mod create_dealing_error;
@@ -10,6 +10,7 @@ pub mod load_transcript_error;
 pub mod transcripts_to_retain_validation_error;
 pub mod verify_dealing_error;
 
+/// Occurs if a node ID that should be a dealer is not a dealer.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct NotADealerError {
     pub node_id: NodeId,
@@ -25,17 +26,8 @@ impl fmt::Display for NotADealerError {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct DealingNodeIdsNotInDealersError {
-    pub node_ids: BTreeSet<NodeId>,
-}
-
-impl fmt::Display for DealingNodeIdsNotInDealersError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Missing node ids in dealers: {:?}.", self.node_ids)
-    }
-}
-
+/// Occurs if the forward-secure encryption public key cannot be found in the
+/// registry.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FsEncryptionPublicKeyNotInRegistryError {
     pub registry_version: RegistryVersion,
@@ -52,6 +44,7 @@ impl fmt::Display for FsEncryptionPublicKeyNotInRegistryError {
     }
 }
 
+/// Occurs if the forward-secure encryption public key is malformed.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct MalformedFsEncryptionPublicKeyError {
     pub internal_error: String,

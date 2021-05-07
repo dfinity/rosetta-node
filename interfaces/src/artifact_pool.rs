@@ -1,7 +1,9 @@
+//! The artifact pool public interface.
+use derive_more::From;
 use ic_types::{replica_version::ReplicaVersion, NodeId, Time};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug)]
+#[derive(Debug, From)]
 pub enum ArtifactPoolError {
     /// Error if not enough quota for a peer in the unvalidated pool for an
     /// artifact.
@@ -12,6 +14,8 @@ pub enum ArtifactPoolError {
     MessageExpiryTooLong,
     /// Error when artifact version is not accepted.
     ArtifactReplicaVersionError(ReplicaVersionMismatch),
+    /// Error when artifact acceptance goes wrong.
+    ArtifactRejected(Box<dyn std::error::Error>),
 }
 
 /// Describe expected version and artifact version when there is a mismatch.

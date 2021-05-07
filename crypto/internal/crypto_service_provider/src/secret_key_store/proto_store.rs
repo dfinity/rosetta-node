@@ -1,6 +1,9 @@
+#![allow(clippy::unwrap_used)]
 use crate::secret_key_store::{Scope, SecretKeyStore, SecretKeyStoreError};
 use crate::threshold::ni_dkg::{NIDKG_FS_SCOPE, NIDKG_THRESHOLD_SCOPE};
 use crate::types::CspSecretKey;
+use ic_crypto_internal_threshold_sig_bls12381::ni_dkg::groth20_bls12_381::types::convert_keyset_to_keyset_with_pop;
+use ic_crypto_internal_threshold_sig_bls12381::ni_dkg::types::CspFsEncryptionKeySet;
 use ic_logger::{replica_logger::no_op_logger, warn, ReplicaLogger};
 use ic_types::crypto::KeyId;
 use parking_lot::RwLock;
@@ -17,7 +20,7 @@ use std::sync::Arc;
 
 const SKS_DATA_FILENAME: &str = "sks_data.pb";
 const TEMP_SKS_DATA_FILENAME: &str = "sks_data.pb.temp";
-const CURRENT_SKS_VERSION: u32 = 1;
+const CURRENT_SKS_VERSION: u32 = 2;
 
 // TODO(CRP-523): turn this to FromStr-trait once KeyId is not public.
 const KEY_ID_PREFIX: &str = "KeyId(0x";
@@ -53,6 +56,8 @@ pub mod pb;
 
 type SecretKeys = HashMap<KeyId, (CspSecretKey, Option<Scope>)>;
 
+/// A secret key store that persists data to the filesystem, using protobufs for
+/// serialization
 pub struct ProtoSecretKeyStore {
     proto_file: PathBuf,
     keys: Arc<RwLock<SecretKeys>>,
@@ -95,28 +100,70 @@ impl ProtoSecretKeyStore {
     // TODO(CRP-532): remove support for the legacy format in a few weeks after
     // merging.
     fn migrate_to_current_version(sks_proto: pb::SecretKeyStore) -> SecretKeys {
-        if sks_proto.version == CURRENT_SKS_VERSION {
-            return ProtoSecretKeyStore::sks_proto_to_secret_keys(&sks_proto);
-        }
-        if sks_proto.version != 0 {
-            panic!(
+        match sks_proto.version {
+            CURRENT_SKS_VERSION => ProtoSecretKeyStore::sks_proto_to_secret_keys(&sks_proto),
+            0 => {
+                let mut secret_keys = SecretKeys::new();
+                for (key_id_string, key_bytes) in sks_proto.key_id_to_csp_secret_key.iter() {
+                    let key_id = key_id_from_display_string(&key_id_string);
+                    let mut csp_key: CspSecretKey = serde_cbor::from_slice(&key_bytes)
+                        .unwrap_or_else(|e| {
+                            panic!("Error deserializing key with ID {}: {}", key_id, e)
+                        });
+                    if let CspSecretKey::FsEncryption(CspFsEncryptionKeySet::Groth20_Bls12_381(
+                        key_set,
+                    )) = csp_key
+                    {
+                        let key_set_with_pop = convert_keyset_to_keyset_with_pop(key_set);
+                        csp_key = CspSecretKey::FsEncryption(
+                            CspFsEncryptionKeySet::Groth20WithPop_Bls12_381(key_set_with_pop),
+                        );
+                    }
+                    let maybe_scope: Option<Scope> = match csp_key {
+                        CspSecretKey::FsEncryption(_) => Some(NIDKG_FS_SCOPE),
+                        CspSecretKey::ThresBls12_381(_) => Some(NIDKG_THRESHOLD_SCOPE),
+                        _ => None,
+                    };
+                    secret_keys.insert(key_id, (csp_key, maybe_scope));
+                }
+                secret_keys
+            }
+
+            1 => {
+                let mut secret_keys = SecretKeys::new();
+                for (key_id_hex, sk_proto) in sks_proto.key_id_to_secret_key_v1.iter() {
+                    let key_id = key_id_from_hex(&key_id_hex);
+                    let mut csp_key = serde_cbor::from_slice(&sk_proto.csp_secret_key)
+                        .unwrap_or_else(|e| {
+                            panic!("Error deserializing key with ID {}: {}", key_id, e)
+                        });
+
+                    if let CspSecretKey::FsEncryption(CspFsEncryptionKeySet::Groth20_Bls12_381(
+                        key_set,
+                    )) = csp_key
+                    {
+                        let key_set_with_pop = convert_keyset_to_keyset_with_pop(key_set);
+                        csp_key = CspSecretKey::FsEncryption(
+                            CspFsEncryptionKeySet::Groth20WithPop_Bls12_381(key_set_with_pop),
+                        );
+                    }
+                    let maybe_scope = if sk_proto.scope.is_empty() {
+                        None
+                    } else {
+                        Some(
+                            Scope::from_str(&sk_proto.scope)
+                                .unwrap_or_else(|_| panic!("Unknown scope: {}", sk_proto.scope)),
+                        )
+                    };
+                    secret_keys.insert(key_id, (csp_key, maybe_scope));
+                }
+                secret_keys
+            }
+            _ => panic!(
                 "Unsupported SecretKeyStore-proto version: {}",
                 sks_proto.version
-            )
+            ),
         }
-        let mut secret_keys = SecretKeys::new();
-        for (key_id_string, key_bytes) in sks_proto.key_id_to_csp_secret_key {
-            let key_id = key_id_from_display_string(&key_id_string);
-            let csp_key: CspSecretKey = serde_cbor::from_slice(&key_bytes)
-                .unwrap_or_else(|e| panic!("Error deserializing key with ID {}: {}", key_id, e));
-            let maybe_scope: Option<Scope> = match csp_key {
-                CspSecretKey::FsEncryption(_) => Some(NIDKG_FS_SCOPE),
-                CspSecretKey::ThresBls12_381(_) => Some(NIDKG_THRESHOLD_SCOPE),
-                _ => None,
-            };
-            secret_keys.insert(key_id, (csp_key, maybe_scope));
-        }
-        secret_keys
     }
 
     fn sks_proto_to_secret_keys(sks_proto: &pb::SecretKeyStore) -> SecretKeys {
@@ -254,7 +301,7 @@ impl SecretKeyStore for ProtoSecretKeyStore {
             }
             None => Ok(false),
         });
-        result.unwrap()
+        result.expect("lambda unexpectedly returned Err")
     }
 
     fn retain<F>(&mut self, filter: F, scope: Scope)

@@ -25,6 +25,10 @@
       "exchanges": {
           "providers": ["https://exchanges.dfinity.network"],
           "type": "persistent"
+      },
+      "mainnet-rosetta": {
+          "providers": ["https://rosetta.dfinity.network"],
+          "type": "persistent"
       }
   }
 }

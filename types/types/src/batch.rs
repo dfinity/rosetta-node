@@ -1,5 +1,5 @@
-/// Contains Batch, Payload, and specific Payload types that are passed between
-/// Consensus and Messaging.
+//! Contains Batch, Payload, and specific Payload types that are passed between
+//! Consensus and Message Routing.
 use super::{
     artifact::IngressMessageId,
     messages::{MessageId, Response, SignedIngress, EXPECTED_MESSAGE_ID_LENGTH},
@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use std::convert::{TryFrom, TryInto};
 use std::io::Cursor;
 
-/// The Batch provided to MessageRouter for deterministic processing.
+/// The `Batch` provided to Message Routing for deterministic processing.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Batch {
     /// The sequence number attached to the batch.
@@ -48,8 +48,8 @@ pub struct ValidationContext {
 
 /// The derived PartialOrd trait implementation uses a lexicographic ordering
 /// over its fields, which is not what we want in the case of ValidationContext.
-/// We need every field to have the same order (or equal) to provide any
-/// non-None answer. If we get any contradictory result, we return None.
+/// We need every field to have the same order (or equal) to provide a
+/// Some(_) answer. If we get any contradictory result, we return None.
 impl PartialOrd for ValidationContext {
     fn partial_cmp(&self, other: &ValidationContext) -> Option<Ordering> {
         let registry_order = self.registry_version.partial_cmp(&other.registry_version)?;
@@ -66,6 +66,9 @@ impl PartialOrd for ValidationContext {
     }
 }
 
+/// The payload of a batch.
+///
+/// Contains ingress and XNet messages.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct BatchPayload {
     pub ingress: IngressPayload,
@@ -92,6 +95,7 @@ impl BatchPayload {
     }
 }
 
+/// Payload that contains XNet messages.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct XNetPayload {
     pub stream_slices: BTreeMap<SubnetId, CertifiedStreamSlice>,
@@ -147,8 +151,9 @@ impl CountBytes for XNetPayload {
     fn count_bytes(&self) -> usize {
         self.stream_slices
             .values()
-            // TODO(roman): account for certification size as well
-            .map(|slice| slice.payload.len() + slice.merkle_proof.len())
+            .map(|slice| {
+                slice.payload.len() + slice.merkle_proof.len() + slice.certification.count_bytes()
+            })
             .sum()
     }
 }
@@ -213,7 +218,7 @@ type IngressIndex = usize;
 type BufferPosition = u64;
 
 #[derive(Debug)]
-/// Possible errors when accessing messages in a IngressPayload.
+/// Possible errors when accessing messages in an [`IngressPayload`].
 pub enum IngressPayloadError {
     IndexOutOfBound(IngressIndex),
     IngressPositionOutOfBound(IngressIndex, BufferPosition),
@@ -298,6 +303,8 @@ impl From<Vec<SignedIngress>> for IngressPayload {
     }
 }
 
+/// Possible errors when converting from an [`IngressPayload`] to a
+/// `Vec<SignedIngress>`.
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum InvalidIngressPayload {
@@ -332,8 +339,8 @@ mod tests {
     use super::*;
     use crate::{
         messages::{
-            Blob, Delegation, HttpCanisterUpdate, HttpRequest, HttpRequestEnvelope,
-            HttpSubmitContent, SignedDelegation, SignedIngress,
+            Blob, Delegation, HttpCanisterUpdate, HttpRequestEnvelope, HttpSubmitContent,
+            SignedDelegation, SignedIngress,
         },
         time::current_time_and_expiry_time,
     };
@@ -378,10 +385,50 @@ mod tests {
         ];
         let signed_ingresses: Vec<SignedIngress> = update_messages
             .into_iter()
-            .map(|msg| HttpRequest::try_from(msg).unwrap())
+            .map(|msg| SignedIngress::try_from(msg).unwrap())
             .collect();
         let ingress_payload = IngressPayload::from(signed_ingresses.clone());
         let signed_ingresses1 = Vec::<SignedIngress>::try_from(ingress_payload).unwrap();
         assert_eq!(signed_ingresses, signed_ingresses1);
+    }
+
+    #[test]
+    fn test_validation_context_ordering() {
+        let context1 = ValidationContext {
+            registry_version: RegistryVersion::new(1),
+            certified_height: Height::new(1),
+            time: Time::from_nanos_since_unix_epoch(1),
+        };
+        let context2 = ValidationContext {
+            registry_version: RegistryVersion::new(2),
+            certified_height: Height::new(1),
+            time: Time::from_nanos_since_unix_epoch(1),
+        };
+        assert_eq!(context1.partial_cmp(&context2), Some(Ordering::Less));
+        assert_eq!(context2.partial_cmp(&context1), Some(Ordering::Greater));
+
+        let context3 = ValidationContext {
+            registry_version: RegistryVersion::new(1),
+            certified_height: Height::new(2),
+            time: Time::from_nanos_since_unix_epoch(1),
+        };
+        assert_eq!(context1.partial_cmp(&context3), Some(Ordering::Less));
+        assert_eq!(context3.partial_cmp(&context1), Some(Ordering::Greater));
+
+        let context4 = ValidationContext {
+            registry_version: RegistryVersion::new(1),
+            certified_height: Height::new(1),
+            time: Time::from_nanos_since_unix_epoch(2),
+        };
+        assert_eq!(context1.partial_cmp(&context4), Some(Ordering::Less));
+        assert_eq!(context4.partial_cmp(&context1), Some(Ordering::Greater));
+
+        let context5 = ValidationContext {
+            registry_version: RegistryVersion::new(0),
+            certified_height: Height::new(2),
+            time: Time::from_nanos_since_unix_epoch(1),
+        };
+        assert_eq!(context1.partial_cmp(&context5), None);
+        assert_eq!(context5.partial_cmp(&context1), None);
     }
 }

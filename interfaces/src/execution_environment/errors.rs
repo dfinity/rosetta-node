@@ -6,6 +6,7 @@ use ic_types::{
 use ic_wasm_types::{WasmInstrumentationError, WasmValidationError};
 use serde::{Deserialize, Serialize};
 
+/// Various traps that a canister can create.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum TrapCode {
     StackOverflow,
@@ -74,6 +75,7 @@ pub enum MessageAcceptanceError {
     CanisterExecutionFailed(HypervisorError),
 }
 
+/// Errors returned by the Hypervisor.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum HypervisorError {
     /// The message sent to the canister refers a function not found in the
@@ -115,19 +117,26 @@ pub enum HypervisorError {
     CanisterExec(Vec<u8>, Vec<u8>),
     /// An attempt was made to use more cycles than was available in a call
     /// context.
-    InsufficientCycles {
+    InsufficientCyclesInCall {
         available: Cycles,
         requested: Cycles,
     },
-    /// An attempt was made to use more ICP than was available in a call
-    /// context.
-    InsufficientICP { available: u64, requested: u64 },
     /// The principal ID specified by the canister is invalid.
     InvalidPrincipalId(PrincipalIdBlobParseError),
     /// The canister ID specified by the canister is invalid.
     InvalidCanisterId(CanisterIdError),
     /// The canister rejected the message.
     MessageRejected,
+    /// An attempt was made to add more cycles to an outgoing call than
+    /// available in the canister's balance.
+    InsufficientCyclesBalance {
+        available: Cycles,
+        requested: Cycles,
+    },
+    Cleanup {
+        callback_err: Box<HypervisorError>,
+        cleanup_err: Box<HypervisorError>,
+    },
 }
 
 impl From<WasmInstrumentationError> for HypervisorError {
@@ -236,23 +245,13 @@ impl HypervisorError {
                 E::CanisterContractViolation,
                 "Calling exec is only allowed in the update call".to_string(),
             ),
-            Self::InsufficientCycles {
+            Self::InsufficientCyclesInCall {
                 available,
                 requested,
             } => UserError::new(
-                E::CanisterTrapped,
+                E::InsufficientCyclesInCall,
                 format!(
                     "Canister {} attempted to keep {} cycles from a call when only {} was available",
-                    canister_id, requested, available
-                ),
-            ),
-            Self::InsufficientICP {
-                available,
-                requested,
-            } => UserError::new(
-                E::CanisterTrapped,
-                format!(
-                    "Canister {} attempted to keep {} ICP tokens from a call when only {} was available",
                     canister_id, requested, available
                 ),
             ),
@@ -264,6 +263,31 @@ impl HypervisorError {
                 E::CanisterTrapped,
                 format!("Canister {} provided invalid canister id", canister_id),
             ),
+            Self::InsufficientCyclesBalance {
+                available,
+                requested,
+            } => UserError::new(
+                E::CanisterOutOfCycles,
+                format!(
+                    "Canister {} attempted to send {} cycles when only {} were available in its balance",
+                    canister_id, requested, available
+                ),
+            ),
+            Self::Cleanup {
+                callback_err,
+                cleanup_err,
+            } => {
+                let callback_user_error = callback_err.into_user_error(canister_id);
+                let cleanup_user_error = cleanup_err.into_user_error(canister_id);
+
+                UserError::new(
+                    callback_user_error.code(), // Use the same error code as the original callback error.
+                    format!("{}\n\ncall_on_cleanup also failed:\n\n{}",
+                        callback_user_error.description(),
+                        cleanup_user_error.description()
+                    )
+                )
+            }
         }
     }
 }

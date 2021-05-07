@@ -19,18 +19,18 @@ pub const CHALLENGE_BITS: usize = (SECURITY_LEVEL + NUM_ZK_REPETITIONS - 1) / NU
 /// Instance for a chunking relation.
 ///
 /// From Section 6.5 of the NIDKG paper.
-///   instance = ([y_1..y_n], [chunk_{1,1}..chunk_{n,m}], R)
+///   instance = (y=[y_1..y_n], C=[chunk_{1,1}..chunk_{n,m}], R=[R_1,..R_m])
 /// We rename:
 ///   y -> public_keys.
 ///   C_{i,j} -> ciphertext_chunks.
-///   R -> point_r
+///   R -> randomizers_r
 pub struct ChunkingInstance {
     pub g1_gen: ECP,
     pub public_keys: Vec<ECP>,
     //This should be Vec<[ECP; NUM_CHUNKS]>
     pub ciphertext_chunks: Vec<Vec<ECP>>,
     //This should have size NUM_CHUNKS
-    pub points_r: Vec<ECP>,
+    pub randomizers_r: Vec<ECP>,
 }
 
 /// Witness for the validity of a chunking instance.
@@ -80,7 +80,7 @@ impl ChunkingInstance {
     pub fn check_instance(&self) -> Result<(), ZkProofChunkingError> {
         if self.public_keys.is_empty()
             || self.ciphertext_chunks.is_empty()
-            || self.points_r.is_empty()
+            || self.randomizers_r.is_empty()
         {
             return Err(ZkProofChunkingError::InvalidInstance);
         };
@@ -117,7 +117,7 @@ impl UniqueHash for ChunkingInstance {
         map.insert_hashed("g1-generator", &self.g1_gen);
         map.insert_hashed("public-keys", &self.public_keys);
         map.insert_hashed("ciphertext-chunks", &self.ciphertext_chunks);
-        map.insert_hashed("randomizers-r", &self.points_r);
+        map.insert_hashed("randomizers-r", &self.randomizers_r);
         map.unique_hash()
     }
 }
@@ -154,7 +154,7 @@ pub fn prove_chunking(
     let spec_p = BIG::new_ints(&rom::CURVE_ORDER);
     // y0 <- getRandomG1
     let y0 = g1.mul(&BIG::randomnum(&spec_p, rng));
-    let spec_m = instance.points_r.len();
+    let spec_m = instance.randomizers_r.len();
     let spec_n = instance.public_keys.len();
     // Rename `B` to `bb_constant` to distinguish it from `B_i`.
     let bb_constant = CHUNK_SIZE as usize;
@@ -302,7 +302,7 @@ pub fn verify_chunking(
     require_eq("z_s", nizk.z_s.len(), NUM_ZK_REPETITIONS)?;
 
     let spec_p = BIG::new_ints(&rom::CURVE_ORDER);
-    let spec_m = instance.points_r.len();
+    let spec_m = instance.randomizers_r.len();
     let spec_n = instance.public_keys.len();
     let bb_constant = CHUNK_SIZE as usize;
     let ee = 1 << CHALLENGE_BITS;
@@ -339,7 +339,7 @@ pub fn verify_chunking(
         let mut lhs = nizk.dd[delta_idx].clone();
         delta_idx += 1;
         instance
-            .points_r
+            .randomizers_r
             .iter()
             .zip(e_i.iter())
             .for_each(|(rr_j, e_ij)| {

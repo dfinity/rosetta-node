@@ -1,3 +1,4 @@
+//! Defines types used by the P2P component.
 use crate::artifact::{ArtifactAttribute, ArtifactId};
 use crate::crypto::CryptoHash;
 use bincode::{deserialize, serialize};
@@ -11,9 +12,8 @@ use std::convert::TryFrom;
 /// in its artifact pool. The adverts of different artifact types may differ
 /// in their attributes. Upon the reception of an advert, a node can decide
 /// if and when to request the corresponding artifact from the sender.
-///
-/// XXX: FRZ GossipAdvert should not be exposed to clients as its
-/// internal to gossip module
+// TODO(P2P-481): `GossipAdvert` should not be exposed to clients as it is
+// internal to the gossip module.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct GossipAdvert {
     pub attribute: ArtifactAttribute,
@@ -23,41 +23,46 @@ pub struct GossipAdvert {
     pub integrity_hash: CryptoHash,
 }
 
-// TODO: Move all the constants in a more reasonable shared location in the code
-// https://dfinity.atlassian.net/browse/P2P-380
-/// Gossip subnet constants
-// Maximum number of artifact chunks that can be downloaded
-// simultaneously from one peer
+// TODO(P2P-380): Move all the constants in a more reasonable shared location in
+// the code.
+
+/////////////////////////////
+// Gossip subnet constants //
+/////////////////////////////
+
+/// Maximum number of artifact chunks that can be downloaded
+/// simultaneously from one peer
 pub const MAX_ARTIFACT_STREAMS_PER_PEER: u32 = 20;
 
-// timeout interval (in millis) within which a chunk request must
-// succeed
+/// Timeout interval (in milliseconds) within which a chunk request must
+/// succeed
 pub const MAX_CHUNK_WAIT_MS: u32 = 15_000;
 
-//maximum number of peers that one artifact chunk can be
-// downloaded from in parallel (MAX_DUPLICITY=1 means no parallel
-// downloads)
+/// Maximum number of peers that one artifact chunk can be
+/// downloaded from in parallel (`MAX_DUPLICITY=1` means no parallel
+/// downloads)
 pub const MAX_DUPLICITY: u32 = 1;
 
-// maximum size in bytes of an artifact chunk (used to compute the
-// chunk timeout interval, once universal chunking is implemented
-// (https://dfinity.atlassian.net/browse/P2P-292), chunks larger
-// than this size will not be requested)
+/// Maximum size in bytes of an artifact chunk. Used to compute the chunk
+/// timeout interval.
+//
+// Once universal chunking is implemented (P2P-292), chunks larger than this
+// size will not be requested.
 pub const MAX_CHUNK_SIZE: u32 = 4096;
 
-// Size of each receive check hash set for each peer
+/// Size of each receive check hash set for each peer
 pub const RECEIVE_CHECK_PEER_SET_SIZE: u32 = 5000;
 
-// Period for priority function evaluation
+/// Period for priority function evaluation in milliseconds
 pub const PFN_EVALUATION_PERIOD_MS: u32 = 3_000;
 
-// Period for polling the registry for changes
+/// Period for polling the registry for changes in milliseconds
 pub const REGISTRY_POLL_PERIOD_MS: u32 = 3_000;
 
-// Period for sending a retransmission request
+/// Period for sending a retransmission request in milliseconds
 pub const RETRANSMISSION_REQUEST_MS: u32 = 60_000;
 
-// helper function
+/// Helper function to build a gossip config using default values.
 pub fn build_default_gossip_config() -> GossipConfig {
     GossipConfig {
         max_artifact_streams_per_peer: MAX_ARTIFACT_STREAMS_PER_PEER,
@@ -82,7 +87,7 @@ impl From<GossipAdvert> for pb::GossipAdvert {
     }
 }
 
-// TODO: protos all the way down.
+// TODO(P2P-480)
 impl TryFrom<pb::GossipAdvert> for GossipAdvert {
     type Error = ProxyDecodeError;
     fn try_from(advert: pb::GossipAdvert) -> Result<Self, Self::Error> {

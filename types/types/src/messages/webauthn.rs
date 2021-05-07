@@ -11,6 +11,11 @@ struct ClientData {
     origin: String,
 }
 
+/// Verification of a signature that was generated with web authentication
+/// requires as auxiliary information the AuthenticatorData and the
+/// ClientDataJSON objects returned by the call to the authenticator. A
+/// WebAuthnSignature contains both the actual cryptographic signature
+/// and this auxiliary information.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct WebAuthnSignature {
     authenticator_data: Blob,
@@ -40,7 +45,6 @@ impl WebAuthnSignature {
     }
 }
 
-// TODO: Add optional fields if present
 impl CountBytes for WebAuthnSignature {
     fn count_bytes(&self) -> usize {
         self.authenticator_data.0.len() + self.client_data_json.0.len() + self.signature.0.len()
@@ -57,6 +61,10 @@ impl TryFrom<&[u8]> for WebAuthnSignature {
     }
 }
 
+/// The challenge signed with web authentication is contained in ClientDataJSON.
+/// WebAuthnEnvelope parses a WebAuthenticationSignature, provides access to the
+/// challenge contained in it, and also produces the byte string that is
+/// required in the signature verification.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct WebAuthnEnvelope {
     authenticator_data: Vec<u8>,

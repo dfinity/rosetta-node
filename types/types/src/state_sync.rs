@@ -1,3 +1,5 @@
+//! State sync types.
+//!
 //! Note [Manifest Hash]
 //! ====================
 //!

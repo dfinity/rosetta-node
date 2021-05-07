@@ -28,16 +28,13 @@ use ic_crypto_internal_types::sign::threshold_sig::ni_dkg::ni_dkg_groth20_bls12_
 use ic_crypto_internal_types::sign::threshold_sig::ni_dkg::Epoch;
 
 /// Creates a new dealing: Generates threshold keys.
-///
-/// Note: This is a functional but insecure placeholder;  it does not encrypt
-/// shares, or rather it applies a trivial encryption with no security
-/// whatsoever.
 pub fn create_dealing(
     keygen_seed: Randomness,
     encryption_seed: Randomness,
     threshold: NumberOfNodes,
     receiver_keys: &BTreeMap<NodeIndex, FsEncryptionPublicKey>,
     epoch: Epoch,
+    dealer_index: NodeIndex,
     resharing_secret: Option<ThresholdSecretKeyBytes>,
 ) -> Result<Dealing, CspDkgCreateReshareDealingError> {
     // Check parameters
@@ -108,6 +105,7 @@ pub fn create_dealing(
             &key_message_pairs,
             epoch,
             &public_coefficients,
+            &dealer_index.to_be_bytes(),
         )
     }?;
 
@@ -122,6 +120,7 @@ pub fn create_dealing(
 
 pub fn verify_dealing(
     _dkg_id: NiDkgId,
+    dealer_index: NodeIndex,
     threshold: NumberOfNodes,
     epoch: Epoch,
     receiver_keys: &BTreeMap<NodeIndex, FsEncryptionPublicKey>,
@@ -143,20 +142,28 @@ pub fn verify_dealing(
         &dealing.ciphertexts,
         &dealing.zk_proof_decryptability,
         &dealing.zk_proof_correct_sharing,
+        &dealer_index.to_be_bytes(),
     )?;
     Ok(())
 }
 
 pub fn verify_resharing_dealing(
     dkg_id: NiDkgId,
+    dealer_resharing_index: NodeIndex,
     threshold: NumberOfNodes,
     epoch: Epoch,
     receiver_keys: &BTreeMap<NodeIndex, FsEncryptionPublicKey>,
     dealing: &Dealing,
     resharing_public_coefficients: &PublicCoefficientsBytes,
-    resharing_index: NodeIndex,
 ) -> Result<(), CspDkgVerifyDealingError> {
-    verify_dealing(dkg_id, threshold, epoch, receiver_keys, dealing)?;
+    verify_dealing(
+        dkg_id,
+        dealer_resharing_index,
+        threshold,
+        epoch,
+        receiver_keys,
+        dealing,
+    )?;
 
     // Check the constant term in the public coefficient corresponds to the
     // individual public key of the dealer in the resharing instance
@@ -165,13 +172,15 @@ pub fn verify_resharing_dealing(
         .coefficients
         .get(0)
         .expect("verify_dealing guarantees that public_coefficients.len() == threshold > 0");
-    let reshared_public_key = individual_public_key(resharing_public_coefficients, resharing_index)
-        .map_err(|error| {
-            let error = InvalidArgumentError {
-                message: format!("{}", error),
-            };
-            CspDkgVerifyDealingError::InvalidDealingError(error)
-        })?;
+    let reshared_public_key =
+        individual_public_key(resharing_public_coefficients, dealer_resharing_index).map_err(
+            |error| {
+                let error = InvalidArgumentError {
+                    message: format!("{}", error),
+                };
+                CspDkgVerifyDealingError::InvalidDealingError(error)
+            },
+        )?;
     if *dealt_public_key != reshared_public_key {
         let error = InvalidDealingError::ReshareMismatch {
             old: reshared_public_key,

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use distributed_key_generation::run_dkg;
 use ic_crypto::utils::{combined_threshold_signature_and_public_key, TempCryptoComponent};
 use ic_interfaces::crypto::{DkgAlgorithm, Signable, SignableMock, ThresholdSigVerifier};

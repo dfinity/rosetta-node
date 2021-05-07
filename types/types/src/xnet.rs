@@ -1,13 +1,16 @@
-use crate::{consensus::certification::Certification, messages::RequestOrResponse, CanisterId};
+//! Types used by the Xnet component.
+use crate::{
+    consensus::certification::Certification, messages::RequestOrResponse, CanisterId, CountBytes,
+};
 use phantom_newtype::{AmountOf, Id};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
 pub mod proto;
 
+pub struct StreamIndexTag;
 /// Index into a subnet-to-subnet message stream; used in the context of a
 /// `Stream` to define message order.
-pub struct StreamIndexTag;
 pub type StreamIndex = AmountOf<StreamIndexTag, u64>;
 
 /// A gap-free `StreamIndex`-ed queue for the messages and signals of a stream.
@@ -25,6 +28,7 @@ impl<T> StreamIndexedQueue<T> {
             queue: VecDeque::new(),
         }
     }
+
     /// Extracts a slice of the given queue beginning at `slice_begin` and
     /// containing at most `max` items.
     pub fn slice(&self, slice_begin: StreamIndex, max: Option<usize>) -> StreamIndexedQueue<T>
@@ -233,6 +237,12 @@ pub struct CertifiedStreamSlice {
 
     /// The certification of the root hash.
     pub certification: Certification,
+}
+
+impl CountBytes for CertifiedStreamSlice {
+    fn count_bytes(&self) -> usize {
+        self.payload.len() + self.merkle_proof.len() + self.certification.count_bytes()
+    }
 }
 
 pub struct SessionTag {}

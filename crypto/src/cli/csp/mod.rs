@@ -1,4 +1,5 @@
-//! Command line for csp.
+//! Command line interface for the crypto service provider (CSP) layer.
+//!
 //! Subcommands are used to direct work to subcomponents.
 use std::str::FromStr;
 use std::string::ToString;
@@ -21,6 +22,7 @@ fn help_str() -> String {
     })
 }
 
+/// Processes a command from the command line.
 pub fn main(args: &[String]) -> Result<(), (String, i32)> {
     match args {
         [] => Err((help_str(), 1)),

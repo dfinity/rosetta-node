@@ -4,7 +4,7 @@ use candid::Decode;
 use ic_base_types::{CanisterId, PrincipalId, SubnetId};
 use ic_ic00_types::{
     CanisterIdRecord, InstallCodeArgs, Method as Ic00Method, Payload, ProvisionalTopUpCanisterArgs,
-    SetControllerArgs,
+    SetControllerArgs, UpdateSettingsArgs,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, convert::TryFrom, str::FromStr, sync::Arc};
@@ -42,6 +42,14 @@ pub fn resolve_destination(
         // It might be cleaner to pipe in the actual NNS subnet id to this
         // function and return that instead.
         Ok(Ic00Method::SetupInitialDKG) => Ok(own_subnet),
+        Ok(Ic00Method::UpdateSettings) => {
+            // Find the destination canister from the payload.
+            let args = Decode!(payload, UpdateSettingsArgs)?;
+            let canister_id = args.get_canister_id();
+            routing_table.route(canister_id.get()).ok_or({
+                ResolveDestinationError::SubnetNotFound(canister_id, Ic00Method::UpdateSettings)
+            })
+        }
         Ok(Ic00Method::InstallCode) => {
             // Find the destination canister from the payload.
             let args = Decode!(payload, InstallCodeArgs)?;
@@ -62,6 +70,7 @@ pub fn resolve_destination(
         | Ok(Ic00Method::StopCanister)
         | Ok(Ic00Method::DeleteCanister)
         | Ok(Ic00Method::DepositFunds)
+        | Ok(Ic00Method::UninstallCode)
         | Ok(Ic00Method::DepositCycles) => {
             let args = Decode!(payload, CanisterIdRecord)?;
             let canister_id = args.get_canister_id();
@@ -174,8 +183,6 @@ impl CanisterIdRanges {
             }
         }
 
-        // TODO: we could (and probably should) also require that the
-        // sequence is gap free.
         Ok(())
     }
 
@@ -241,7 +248,6 @@ pub struct RoutingTable(pub BTreeMap<CanisterIdRange, SubnetId>);
 impl RoutingTable {
     pub fn new(map: BTreeMap<CanisterIdRange, SubnetId>) -> Self {
         let ret = Self(map);
-        // TODO(akhi): return error instead of panicking.
         assert_eq!(ret.well_formed(), Ok(()));
         ret
     }
@@ -267,7 +273,7 @@ impl RoutingTable {
     }
 
     /// Returns true if the routing table is well-formed.
-    fn well_formed(&self) -> Result<(), WellFormedError> {
+    pub fn well_formed(&self) -> Result<(), WellFormedError> {
         use WellFormedError::*;
 
         // Used to track the end of the previous end used to check that the
@@ -309,17 +315,13 @@ impl RoutingTable {
             previous_end = Some(range.end);
         }
 
-        // TODO: we could (and probably should) also require that
-        // adjacent ranges don't specify the same subnet ID, as the
-        // ranges ought to be merged in this case.
         Ok(())
     }
 
     /// Returns the `SubnetId` that the given `principal_id` is assigned to or
     /// `None` if an assignment cannot be found.
     pub fn route(&self, principal_id: PrincipalId) -> Option<SubnetId> {
-        // TODO(dsarlis): The below search can be optimized if we keep a set of subnet
-        // ids.
+        // TODO(EXC-274): Optimize the below search by keeping a set of subnet ids.
         // Check if the given `principal_id` is a subnet.
         // Note that the following assumes that all known subnets are in the routing
         // table, even if they're empty (i.e. no canister exists on them). In the

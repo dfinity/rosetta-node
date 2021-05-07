@@ -5,8 +5,6 @@
 //! here:
 //! * Converts the arguments into the type accepted by the crypto lib.
 //! * Inserts or retrieves secret keys from the secret key store.
-//!
-//! Spec: https://docs.dfinity.systems/dfinity/spec/replica/ancillary/crypto/index.html#_csp_interface_for_distributed_key_generation
 
 use crate::api::DistributedKeyGenerationCspClient;
 use crate::secret_key_store::SecretKeyStore;
@@ -445,6 +443,8 @@ impl<R: Rng + CryptoRng, S: SecretKeyStore> Csp<R, S> {
     }
 }
 
+/// Compute a key identifier from public coefficients
+// TODO (CRP-821): Remove the duplication with key_id_from_csp_pub_coeffs
 pub fn public_coefficients_key_id(csp_public_coefficients: &CspPublicCoefficients) -> KeyId {
     let mut hash = Sha256::new();
     hash.update(
@@ -458,7 +458,7 @@ pub fn public_coefficients_key_id(csp_public_coefficients: &CspPublicCoefficient
 }
 
 // The Clib API takes responses paired with the corresponding public key
-pub fn pair_responses_with_receivers(
+fn pair_responses_with_receivers(
     clib_responses: Vec<Option<CLibResponseBytes>>,
     receiver_keys: &[Option<(EphemeralPublicKeyBytes, EphemeralPopBytes)>],
 ) -> Result<Vec<Option<CLibVerifiedResponseBytes>>, dkg_errors::DkgCreateTranscriptError> {

@@ -1,6 +1,7 @@
 // We disable clippy warnings for the whole module because they apply to
 // generated code, meaning we can't locally disable the warnings (the code is
-// defined in another module). https://dfinity.atlassian.net/browse/DFN-467
+// defined in another module).
+// (cf. DFN-467).
 #![allow(clippy::unit_arg)]
 
 pub use conversions::CspSecretKeyConversionError;
@@ -45,6 +46,9 @@ use test_utils::{
 
 pub use ic_crypto_internal_types::sign::threshold_sig::public_coefficients::CspPublicCoefficients;
 
+/// The secret part of a public/private key pair.
+///
+/// This enum can be persisted in a `SecretKeyStore`.
 #[derive(Clone, Eq, IntoStaticStr, PartialEq, Zeroize, Serialize, Deserialize)]
 #[zeroize(drop)]
 #[cfg_attr(test, derive(Arbitrary))]
@@ -76,36 +80,39 @@ impl CspSecretKey {
 impl std::fmt::Debug for CspSecretKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CspSecretKey::Ed25519(sk) => write!(f, "CspSecretKey: {}", hex::encode(&sk.0[..])),
-            CspSecretKey::MultiBls12_381(sk) => {
-                write!(f, "CspSecretKey: {}", hex::encode(&sk.0[..]))
-            }
-            CspSecretKey::ThresBls12_381(sk) => {
-                write!(f, "CspSecretKey: {}", hex::encode(&sk.0[..]))
-            }
+            CspSecretKey::Ed25519(_) => write!(f, "CspSecretKey::Ed25519 - REDACTED"),
+            CspSecretKey::MultiBls12_381(_) => write!(f, "CspSecretKey::MultiBls12_381 - REDACTED"),
+            CspSecretKey::ThresBls12_381(_) => write!(f, "CspSecretKey::ThresBls12_381 - REDACTED"),
             CspSecretKey::Secp256k1WithPublicKey(sk) => write!(
                 f,
-                "CspSecretKey: secret_key: {} public_key: {} pop: {}",
-                hex::encode(&sk.secret_key_bytes.0[..]),
+                "CspSecretKey::Secp256k1WithPublicKey secret_key: REDACTED public_key: {} pop: {}",
                 hex::encode(&sk.public_key_bytes.0[..]),
                 hex::encode(&sk.pop_bytes.0[..])
             ),
-            CspSecretKey::TlsEd25519(sk) => {
-                write!(f, "CspSecretKey: {}", hex::encode(&sk.bytes[..]))
-            }
-            CspSecretKey::FsEncryption(sk) => {
-                write!(f, "CspSecretKey: ")?;
-                sk.fmt(f)
+            CspSecretKey::TlsEd25519(_) => write!(f, "CspSecretKey::TlsEd25519 - REDACTED"),
+            CspSecretKey::FsEncryption(_) => write!(f, "CspSecretKey::FsEncryption - REDACTED"),
+        }
+    }
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub enum CspEncryptedSecretKey {
+    ThresBls12_381(EncryptedShareBytes),
+}
+
+impl std::fmt::Debug for CspEncryptedSecretKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CspEncryptedSecretKey::ThresBls12_381(bytes) => {
+                // this prints no secret key parts
+                // since Debug for EncryptedShareBytes is redacted:
+                write!(f, "CspEncryptedSecretKey::ThresBls12_381: {:?}", bytes)
             }
         }
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum CspEncryptedSecretKey {
-    ThresBls12_381(EncryptedShareBytes),
-}
-
+/// The public part of a public/private key pair.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(Arbitrary))]
 pub enum CspPublicKey {
@@ -120,6 +127,7 @@ pub enum CspPublicKey {
 }
 
 impl CspPublicKey {
+    /// Return the ECDSA P-256 public key, or else None if the wrong type
     pub fn ecdsa_p256_bytes(&self) -> Option<&[u8]> {
         match self {
             CspPublicKey::EcdsaP256(bytes) => Some(&bytes.0),
@@ -127,6 +135,7 @@ impl CspPublicKey {
         }
     }
 
+    /// Return the Ed25519 public key, or else None if the wrong type
     pub fn ed25519_bytes(&self) -> Option<&[u8; 32]> {
         match self {
             CspPublicKey::Ed25519(bytes) => Some(&bytes.0),
@@ -134,6 +143,7 @@ impl CspPublicKey {
         }
     }
 
+    /// Return the BLS12-381 public key, or else None if the wrong type
     pub fn multi_bls12_381_bytes(&self) -> Option<&[u8]> {
         match self {
             CspPublicKey::MultiBls12_381(bytes) => Some(&bytes.0),
@@ -141,6 +151,7 @@ impl CspPublicKey {
         }
     }
 
+    /// Return the algorithm identifier of this public key
     pub fn algorithm_id(&self) -> AlgorithmId {
         match self {
             CspPublicKey::EcdsaSecp256k1(_) => AlgorithmId::EcdsaSecp256k1,
@@ -150,6 +161,7 @@ impl CspPublicKey {
         }
     }
 
+    /// Return the binary encoding of this public key
     pub fn pk_bytes(&self) -> &[u8] {
         match self {
             CspPublicKey::EcdsaSecp256k1(pk_bytes) => &pk_bytes.0,
@@ -160,12 +172,14 @@ impl CspPublicKey {
     }
 }
 
+/// A Proof of Possession (PoP)
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum CspPop {
     MultiBls12_381(multi_types::PopBytes),
     Secp256k1(EphemeralPopBytes),
 }
 
+/// A cryptographic signature generated by a private key
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(Arbitrary))]
 pub enum CspSignature {
@@ -179,6 +193,7 @@ pub enum CspSignature {
     ThresBls12_381(ThresBls12_381_Signature),
 }
 
+/// A cryptographic signature generated by a BLS12-381 multisig key
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(Arbitrary))]
 #[allow(non_camel_case_types)]
@@ -189,6 +204,7 @@ pub enum MultiBls12_381_Signature {
     Combined(multi_types::CombinedSignatureBytes),
 }
 
+/// A threshold BLS12-381 signature
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[allow(non_camel_case_types)]
 #[cfg_attr(test, derive(Arbitrary))]
@@ -202,12 +218,14 @@ pub enum ThresBls12_381_Signature {
     Combined(threshold_types::CombinedSignatureBytes),
 }
 
+/// Data associated with a dealing of the interactive DKG
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CspDealing {
     pub common_data: CspPublicCoefficients,
     pub receiver_data: Vec<Option<CspEncryptedSecretKey>>,
 }
 
+/// A response to a interactive DKG dealing
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CspResponse {
     Secp256k1(CLibResponseBytes),
@@ -221,19 +239,14 @@ impl CspResponse {
     }
 }
 
+/// The transcript of a interactive DKG dealing
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CspDkgTranscript {
     Secp256k1(CLibTranscriptBytes),
 }
 
 impl CspSignature {
-    pub fn ecdsa_p256_bytes(&self) -> Option<&[u8]> {
-        match self {
-            CspSignature::EcdsaP256(bytes) => Some(&bytes.0),
-            _ => None,
-        }
-    }
-
+    #[cfg(test)]
     pub fn ed25519_bytes(&self) -> Option<&[u8; 64]> {
         match self {
             CspSignature::Ed25519(bytes) => Some(&bytes.0),
@@ -241,6 +254,7 @@ impl CspSignature {
         }
     }
 
+    /// Return what algorithm was used to generate this signature
     pub fn algorithm(&self) -> AlgorithmId {
         match self {
             CspSignature::EcdsaP256(_) => AlgorithmId::EcdsaP256,
@@ -252,6 +266,9 @@ impl CspSignature {
     }
 }
 
+/// A struct for converting signatures
+/// Use SigConverter::for_target(alg).try_from_basic(signature) to convert
+/// from the bytes of a signature to a CspSignature
 pub struct SigConverter {
     target_algorithm: AlgorithmId,
 }

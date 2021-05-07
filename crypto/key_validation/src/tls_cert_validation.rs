@@ -1,28 +1,15 @@
 use super::*;
 use chrono::{DateTime, Duration, Utc};
+use ic_crypto_internal_basic_sig_ed25519::types::PublicKeyBytes as BasicSigEd25519PublicKeyBytes;
+use ic_crypto_internal_basic_sig_ed25519::types::SignatureBytes as BasicSigEd25519SignatureBytes;
 use ic_types::crypto::CryptoResult;
 use x509_parser::certificate::X509Certificate;
 use x509_parser::time::ASN1Time;
 use x509_parser::x509::{X509Name, X509Version};
 
-// TODO (CRP-884): ensure that key is a point on the curve and in right subgroup
 /// Validates a node's TLS certificate.
 ///
-/// This includes verifying that
-/// * the certificate is present and well-formed, i.e., formatted in X.509
-///   version 3 and DER-encoded
-/// * the certificate has a single subject common name (CN) that matches the
-///   node ID
-/// * the certificate has a single issuer common name (CN) that matches the
-///   subject CN, i.e., that it is self-signed
-/// * the certificate's notBefore date is latest in two minutes from now. This
-///   is to ensure that the certificate is already valid or becomes valid
-///   shortly. The grace period is to account for potential clock differences.
-/// * the certificate's notAfter date indicates according to RFC5280 (section
-///   4.1.2.5; see https://tools.ietf.org/html/rfc5280#section-4.1.2.5) that the
-///   certificate has no well-defined expiration date.
-/// * the certificate's signature algorithm is Ed25519 (OID 1.3.101.112)
-/// * the certificate's signature is valid
+/// See the crate documentation for the exact checks that are performed.
 pub fn validate_tls_certificate(
     tls_certificate: &Option<X509PublicKeyCert>,
     node_id: NodeId,
@@ -35,12 +22,17 @@ pub fn validate_tls_certificate(
     let subject_cn = single_subject_cn_as_str(&x509_cert)?;
     ensure_subject_cn_equals_node_id(subject_cn, node_id)?;
     ensure_single_issuer_cn_equals_subject_cn(&x509_cert, subject_cn)?;
+    ensure_not_ca(&x509_cert)?;
     ensure_notbefore_date_is_latest_in_two_minutes_from_now(&x509_cert)?;
     ensure_notafter_date_equals_99991231235959z(&x509_cert)?;
     ensure_signature_algorithm_is_ed25519(&x509_cert)?;
 
-    verify_tls_certificate_ed25519_signature(&x509_cert)
-        .map_err(|e| invalid_tls_certificate_error(format!("signature verification failed: {}", e)))
+    let public_key = ed25519_pubkey_from_x509_cert(&x509_cert)?;
+    verify_ed25519_public_key(&public_key)?;
+    verify_ed25519_signature(&x509_cert, &public_key).map_err(|e| {
+        invalid_tls_certificate_error(format!("signature verification failed: {}", e))
+    })?;
+    Ok(())
 }
 
 fn single_subject_cn_as_str<'a>(
@@ -95,6 +87,14 @@ fn ensure_single_issuer_cn_equals_subject_cn(
     Ok(())
 }
 
+fn ensure_not_ca(x509_cert: &X509Certificate) -> Result<(), KeyValidationError> {
+    if x509_cert.tbs_certificate.is_ca() {
+        Err(invalid_tls_certificate_error("BasicConstraints:CA is True"))
+    } else {
+        Ok(())
+    }
+}
+
 fn ensure_notbefore_date_is_latest_in_two_minutes_from_now(
     x509_cert: &X509Certificate,
 ) -> Result<(), KeyValidationError> {
@@ -147,7 +147,35 @@ fn single_cn_as_str<'a>(name: &'a X509Name<'_>) -> Result<&'a str, String> {
     Ok(first_cn_str)
 }
 
-/// Verifies the signature of the given X509 certificate.
+fn ed25519_pubkey_from_x509_cert(
+    x509_cert: &X509Certificate,
+) -> Result<BasicSigEd25519PublicKeyBytes, KeyValidationError> {
+    BasicSigEd25519PublicKeyBytes::try_from(
+        &x509_cert
+            .tbs_certificate
+            .subject_pki
+            .subject_public_key
+            .data
+            .to_vec(),
+    )
+    .map_err(|e| {
+        invalid_tls_certificate_error(format!("conversion to Ed25519 public key failed: {}", e))
+    })
+}
+
+fn verify_ed25519_public_key(
+    public_key: &BasicSigEd25519PublicKeyBytes,
+) -> Result<(), KeyValidationError> {
+    if !ic_crypto_internal_basic_sig_ed25519::verify_public_key(&public_key) {
+        return Err(invalid_tls_certificate_error(
+            "public key verification failed",
+        ));
+    }
+    Ok(())
+}
+
+/// Verifies the signature of the given X509 certificate w.r.t. the
+/// given `public_key`.
 ///
 /// We use our own crypto library rather than
 /// `x509_parser::certificate::X509Certificate::verify_signature` because the
@@ -158,20 +186,13 @@ fn single_cn_as_str<'a>(name: &'a X509Name<'_>) -> Result<&'a str, String> {
 /// for verifying the signature.
 /// Additionally, see https://tools.ietf.org/html/rfc3280#section-4.1.1.3 for the
 /// specification on how to verify the signature.
-fn verify_tls_certificate_ed25519_signature(x509_cert: &X509Certificate) -> CryptoResult<()> {
-    use ic_crypto_internal_basic_sig_ed25519::types::{PublicKeyBytes, SignatureBytes};
-    use ic_crypto_internal_basic_sig_ed25519::verify;
-
-    let signature = SignatureBytes::try_from(&x509_cert.signature_value.data.to_vec())?;
-    let pubkey = PublicKeyBytes::try_from(
-        &x509_cert
-            .tbs_certificate
-            .subject_pki
-            .subject_public_key
-            .data
-            .to_vec(),
-    )?;
-    verify(&signature, x509_cert.tbs_certificate.as_ref(), &pubkey)
+fn verify_ed25519_signature(
+    x509_cert: &X509Certificate,
+    public_key: &BasicSigEd25519PublicKeyBytes,
+) -> CryptoResult<()> {
+    let sig = BasicSigEd25519SignatureBytes::try_from(&x509_cert.signature_value.data.to_vec())?;
+    let msg = x509_cert.tbs_certificate.as_ref();
+    ic_crypto_internal_basic_sig_ed25519::verify(&sig, msg, &public_key)
 }
 
 fn invalid_tls_certificate_error<S: Into<String>>(internal_error: S) -> KeyValidationError {

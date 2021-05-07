@@ -21,6 +21,11 @@ impl ProvisionalWhitelist {
             Self::Set(set) => set.contains(id),
         }
     }
+
+    /// Returns a new empty whitelist
+    pub fn new_empty() -> Self {
+        Self::Set(BTreeSet::new())
+    }
 }
 
 impl From<ProvisionalWhitelist> for pb::ProvisionalWhitelist {

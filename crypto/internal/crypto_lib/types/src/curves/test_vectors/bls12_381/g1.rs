@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Test vectors for the serial representation of BLS12-381 G1
 //!
 //! Spec:

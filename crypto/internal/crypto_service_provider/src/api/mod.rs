@@ -1,3 +1,5 @@
+//! Top level traits for interacting with the crypto service provider
+
 mod keygen;
 mod sign;
 mod threshold;

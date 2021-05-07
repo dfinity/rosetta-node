@@ -55,6 +55,8 @@ impl ErrorReplication for CryptoError {
             },
             // true, as the registry is guaranteed to be consistent across replicas
             CryptoError::DkgTranscriptNotFound { .. } => true,
+            // true, as the registry is guaranteed to be consistent across replicas
+            CryptoError::RootSubnetPublicKeyNotFound { .. } => true,
         }
     }
 }

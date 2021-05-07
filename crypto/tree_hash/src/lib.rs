@@ -1,3 +1,6 @@
+#![forbid(unsafe_code)]
+#![deny(clippy::unwrap_used)]
+
 use serde::{ser::SerializeSeq, Deserialize, Serialize, Serializer};
 use serde_bytes::Bytes;
 use std::convert::{TryFrom, TryInto};
@@ -21,15 +24,15 @@ mod encoding_tests;
 pub use flat_map::FlatMap;
 pub use tree_hash::*;
 
-/// Represents a path (a collection of `Label`) in a hash tree.
+/// Represents a path (a collection of [`Label`]) in a hash tree.
 ///
 /// Initialisation options include:
 ///
 /// - If you have a `Vec<Label>` use `Path::new`.
 ///
-/// - If you have a single `Label`, use `Path::from(Label)`.
+/// - If you have a single [`Label`], use `Path::from(Label)`.
 ///
-/// - If you have an iterator that contains `Label` or `&Label` use
+/// - If you have an iterator that contains [`Label`] or `&Label` use
 /// `Path::from_iter(iterator)`.
 // Implemented as a newtype to allow implementation of traits like
 // `fmt::Display`.
@@ -108,7 +111,7 @@ pub struct Label(LabelRepr);
 /// bytes (as we will have many labels that are SHA256 hashes).
 const SMALL_LABEL_SIZE: usize = 32;
 
-/// This type hides the implementation of Label.
+/// This type hides the implementation of [`Label`].
 #[derive(Clone)]
 enum LabelRepr {
     /// A label small enough to fit into this representation "by value". The
@@ -159,7 +162,11 @@ impl fmt::Debug for Label {
         }
         let bytes = self.as_bytes();
         if bytes.iter().all(|b| printable(*b)) {
-            write!(f, "{}", std::str::from_utf8(bytes).unwrap())
+            write!(
+                f,
+                "{}",
+                std::str::from_utf8(bytes).expect("Failed to convert to utf8")
+            )
         } else {
             write!(f, "0x")?;
             bytes.iter().try_for_each(|b| write!(f, "{:02X}", b))
@@ -261,7 +268,25 @@ pub enum LabeledTree<T> {
     SubTree(FlatMap<Label, LabeledTree<T>>),
 }
 
-/// A binary tree representation of a `LabeledTree`, with `Digest` leaves.
+/// Descends into the subtree of `t` following the given `path`.
+/// Returns the reference to the corresponding subtree.
+pub fn lookup_path<'a>(
+    t: &'a LabeledTree<Vec<u8>>,
+    path: &[&[u8]],
+) -> Option<&'a LabeledTree<Vec<u8>>> {
+    let mut tref = t;
+    for l in path.iter() {
+        match tref {
+            LabeledTree::Leaf(_) => return None,
+            LabeledTree::SubTree(children) => {
+                tref = children.get(&Label::from(l))?;
+            }
+        }
+    }
+    Some(tref)
+}
+
+/// A binary tree representation of a [`LabeledTree`], with [`Digest`] leaves.
 ///
 /// A `LabeledTree::SubTree` is converted into a binary tree of zero or more
 /// `HashTree::Forks` terminating in labeled `HashTree::Nodes`, with the left
@@ -362,7 +387,8 @@ impl MixedHashTree {
     }
 }
 
-/// An error indicating that a hash tree doesn't correspond to any LabeledTree.
+/// An error indicating that a hash tree doesn't correspond to a valid
+/// [`LabeledTree`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InvalidHashTreeError {
     /// The hash tree contains a non-root leaf that is not a direct child of a
@@ -428,7 +454,7 @@ impl TryFrom<MixedHashTree> for LabeledTree<Vec<u8>> {
 
 impl Serialize for MixedHashTree {
     // Serialize a `MixedHashTree` per the CDDL of the public spec.
-    // See https://docs.dfinity.systems/public/certificates.cddl
+    // See https://sdk.dfinity.org/docs/interface-spec/index.html#_encoding_of_certificates
     fn serialize<S>(&self, serializer: S) -> Result<<S as Serializer>::Ok, <S as Serializer>::Error>
     where
         S: Serializer,
@@ -577,10 +603,10 @@ pub enum TreeHashError {
     InvalidArgument { info: String },
 }
 
-/// A subset of a `HashTree` that is sufficient to verify whether some specific
-/// partial data is consistent with the original data (for which the `HashTree`
-/// was computed). In particular a `Witness` includes no digests for the partial
-/// data it verifies; nor for the `HashTree` root.
+/// A subset of a [`HashTree`] that is sufficient to verify whether some
+/// specific partial data is consistent with the original data (for which the
+/// [`HashTree`] was computed). In particular a [`Witness`] includes no digests
+/// for the partial data it verifies; nor for the [`HashTree`] root.
 ///
 /// A witness can also be used to update a HashTree when part of the original
 /// data is updated.
@@ -593,7 +619,7 @@ pub enum Witness {
     },
     // Represents a HashTree::Node
     Node {
-        label: Label, // TODO: remove when not needed anymore.
+        label: Label,
         sub_witness: Box<Witness>,
     },
     // Represents either a HashTree::Leaf or a pruned subtree of a HashTree
@@ -607,7 +633,8 @@ pub enum Witness {
 }
 
 fn write_witness(witness: &Witness, level: u8, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    let indent = String::from_utf8(vec![b' '; (level * 8) as usize]).unwrap();
+    let indent =
+        String::from_utf8(vec![b' '; (level * 8) as usize]).expect("String was not valid utf8");
     match witness {
         Witness::Known() => writeln!(f, "{}** KNOWN **", indent),
         Witness::Pruned { digest } => writeln!(f, "{}\\__pruned:{:?}", indent, digest),
@@ -656,14 +683,14 @@ pub trait WitnessGenerator {
     ) -> Result<MixedHashTree, TreeHashError>;
 }
 
-/// HashTreeBuilder enables an iterative construction of a LabeledTree,
-/// which can also be accessed in form of a HashTree.
-/// The constructed LabeledTree is a part of the state of the Builder,
-/// and is build successively by adding leafs and subtrees.
+/// `HashTreeBuilder` enables an iterative construction of a [`LabeledTree`],
+/// which can also be accessed in form of a [`HashTree`].
+/// The constructed [`LabeledTree`] is a part of the state of the Builder,
+/// and is build successively by adding leaves and subtrees.
 /// During the construction, the builder maintains an auxiliary state
-/// that describes the current position in the LabeledTree under construction.
-/// The auxiliary state is a list of nodes that corresponds to the path
-/// in the tree from the root to the current node being constructed.
+/// that describes the current position in the [`LabeledTree`] under
+/// construction. The auxiliary state is a list of nodes that corresponds to the
+/// path in the tree from the root to the current node being constructed.
 /// An example code to build the following labeled tree with a sub-tree and
 /// three leaves:
 ///

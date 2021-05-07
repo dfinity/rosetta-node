@@ -10,46 +10,45 @@ use miracl_core::hmac;
 use miracl_core::rand::RAND;
 use rand_chacha::rand_core::{RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
-use std::convert::TryFrom;
 
 #[cfg(test)]
 mod tests;
 
-/// Order of the curve BLS12_381
+/// Order of the prime order subgroup of curve BLS12_381.
 pub fn curve_order() -> BIG {
     BIG::new_ints(&rom::CURVE_ORDER)
 }
 
-/// Point at infinity on G1
+/// Point at infinity on G1 of curve BLS12_381.
 pub fn ecp_inf() -> ECP {
     let mut new = ECP::new();
     new.inf();
     new
 }
 
-/// Point at infinity on G2
+/// Point at infinity on G2 of curve BLS12_381.
 pub fn ecp2_inf() -> ECP2 {
     let mut new = ECP2::new();
     new.inf();
     new
 }
 
-/// Zero element in the scalar field
+/// Zero element in the scalar field of curve BLS12_381.
 pub fn big_zero() -> BIG {
     BIG::new_int(0)
 }
 
-/// Identity element in the scalar field
+/// Identity element in the scalar field of curve BLS12_381.
 pub fn big_one() -> BIG {
     BIG::new_int(1)
 }
 
-/// Addition of two field element in the scalar field
+/// Addition of two field elements modulo the prime order of the group.
 pub fn field_add(left: &BIG, right: &BIG) -> BIG {
     BIG::modadd(&left, &right, &curve_order())
 }
 
-/// Multiplication of two field elements in the scalar field
+/// Multiplication of two field elements modulo the prime order of the group.
 pub fn field_mul(left: &BIG, right: &BIG) -> BIG {
     BIG::modmul(&left, &right, &curve_order())
 }
@@ -184,7 +183,11 @@ impl RAND_ChaCha20 {
 
 impl RAND for RAND_ChaCha20 {
     fn seed(&mut self, _rawlen: usize, raw: &[u8]) {
-        self.chacha20 = ChaCha20Rng::from_seed(<[u8; 32]>::try_from(raw).unwrap());
+        // Copy first 32 bytes from raw to raw32
+        let mut raw32 = [0u8; 32];
+        let copying = std::cmp::min(raw.len(), raw32.len());
+        raw32[0..copying].copy_from_slice(&raw[0..copying]);
+        self.chacha20 = ChaCha20Rng::from_seed(raw32);
     }
 
     fn getbyte(&mut self) -> u8 {

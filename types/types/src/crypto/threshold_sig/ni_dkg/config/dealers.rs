@@ -1,9 +1,12 @@
+//! Types related to dealers for non-interactive DKG.
 use super::*;
 use crate::crypto::threshold_sig::ni_dkg::config::errors::NiDkgConfigValidationError;
 
 #[cfg(test)]
 mod tests;
 
+/// A set of dealers for non-interactive DKG. Satisfies invariants, see
+/// `NiDkgDealers::new`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NiDkgDealers {
     dealers: BTreeSet<NodeId>,
@@ -44,6 +47,8 @@ impl NiDkgDealers {
         Ok(())
     }
 
+    /// Returns the position of the given `node_id` in the dealers. Returns
+    /// `None` if the `node_id` is not a dealer.
     pub fn position(&self, node_id: NodeId) -> Option<NodeIndex> {
         self.iter().find_map(|(node_index, this_node_id)| {
             if node_id == this_node_id {

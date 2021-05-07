@@ -21,7 +21,7 @@ pub struct SharingInstance {
     pub g2_gen: ECP2,
     pub public_keys: Vec<ECP>,
     pub public_coefficients: Vec<ECP2>,
-    pub combined_rand: ECP,
+    pub combined_randomizer: ECP,
     pub combined_ciphertexts: Vec<ECP>,
 }
 
@@ -29,8 +29,8 @@ pub struct SharingInstance {
 ///
 ///   Witness = (r, s= [s_1..s_n])
 pub struct SharingWitness {
-    pub rand_r: BIG,
-    pub rand_s: Vec<BIG>,
+    pub scalar_r: BIG,
+    pub scalars_s: Vec<BIG>,
 }
 
 /// Zero-knowledge proof of sharing.
@@ -62,7 +62,7 @@ impl UniqueHash for SharingInstance {
         map.insert_hashed("g2-enerator", &self.g2_gen);
         map.insert_hashed("public-keys", &self.public_keys);
         map.insert_hashed("public-coefficients", &self.public_coefficients);
-        map.insert_hashed("combined-randomness", &self.combined_rand);
+        map.insert_hashed("combined-randomizers", &self.combined_randomizer);
         map.insert_hashed("combined-ciphertext", &self.combined_ciphertexts);
         map.unique_hash()
     }
@@ -157,11 +157,11 @@ pub fn prove_sharing(
     // Third move (prover)
     // z_r = r * x' + rho mod p
     // z_alpha = x' * sum [s_i*x^i | i <- [1..n]] + alpha mod p
-    let mut z_r: BIG = field_mul(&witness.rand_r, &x_challenge);
+    let mut z_r: BIG = field_mul(&witness.scalar_r, &x_challenge);
     z_r = field_add(&z_r, &rho);
 
     let mut z_alpha: BIG = witness
-        .rand_s
+        .scalars_s
         .iter()
         .rev()
         .fold(big_zero(), |mut acc, scalar| {
@@ -196,7 +196,7 @@ pub fn verify_sharing(
 
     // First verification equation
     // R^x' * F == g_1^z_r
-    let mut lhs: ECP = instance.combined_rand.mul(&x_challenge);
+    let mut lhs: ECP = instance.combined_randomizer.mul(&x_challenge);
     lhs.add(&first_move.blinder_g1);
     let rhs = instance.g1_gen.mul(&nizk.z_r);
     if !lhs.equals(&rhs) {

@@ -1,3 +1,4 @@
+//! Utilities for testing TLS code.
 use openssl::ssl::SslContextBuilder;
 use openssl::x509::store::{X509Store, X509StoreBuilder};
 use openssl::x509::X509;
@@ -6,6 +7,11 @@ pub mod custom_client;
 pub mod custom_server;
 pub mod x509_certificates;
 
+/// Sets the peer verification cert store for the `SslContext` to a store
+/// containing `certs`.
+///
+/// # Panics
+/// * if the store cannot be set for the `SSLContext`.
 pub fn set_peer_verification_cert_store(certs: Vec<X509>, builder: &mut SslContextBuilder) {
     // `SslConnector::builder` calls `set_default_verify_paths`, automatically
     // adding many CA certificates to the context's `cert_store`. Thus, we overwrite

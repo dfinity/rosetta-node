@@ -1,10 +1,11 @@
 [package]
 name = "ic-crypto-internal-multi-sig-bls12381"
-version = "0.0.0"
+version = "0.8.0"
 edition = "2018"
 
 [dependencies]
 base64 = "0.11.0"
+ff = "0.5.0"
 group = "0.2.0"
 hex = "0.4.2"
 ic-crypto-internal-bls12381-common = { path = "../../bls12_381/common"}

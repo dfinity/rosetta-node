@@ -1,26 +1,20 @@
+use candid::CandidType;
 use ic_types::{CanisterId, Cycles, PrincipalId, SubnetId};
 use ledger_canister::{
     AccountIdentifier, BlockHeight, ICPTs, Memo, SendArgs, Subaccount, TRANSACTION_FEE,
 };
+use serde::{Deserialize, Serialize};
 
-pub const CREATE_CANISTER_REFUND_FEE: ICPTs = ICPTs::from_doms(10_000);
-pub const TOP_UP_CANISTER_REFUND_FEE: ICPTs = ICPTs::from_doms(1_000);
+pub const DEFAULT_CYCLES_PER_XDR: u128 = 1_000_000_000_000u128; // 1T cycles = 1 XDR
 
-#[derive(Clone, Debug)]
+pub const CREATE_CANISTER_REFUND_FEE: ICPTs = ICPTs::from_e8s(TRANSACTION_FEE.get_e8s() * 4);
+pub const TOP_UP_CANISTER_REFUND_FEE: ICPTs = ICPTs::from_e8s(TRANSACTION_FEE.get_e8s() * 2);
+
+#[derive(Serialize, Deserialize, CandidType, Clone, Debug, PartialEq, Eq)]
 pub struct CyclesCanisterInitPayload {
     pub ledger_canister_id: CanisterId,
+    pub governance_canister_id: CanisterId,
     pub minting_account_id: Option<AccountIdentifier>,
-    pub nns_subnet_id: SubnetId,
-}
-
-impl on_wire::IntoWire for CyclesCanisterInitPayload {
-    fn into_bytes(self) -> Result<Vec<u8>, String> {
-        on_wire::IntoWire::into_bytes(dfn_candid::Candid((
-            self.ledger_canister_id,
-            self.minting_account_id,
-            self.nns_subnet_id,
-        )))
-    }
 }
 
 pub const MEMO_CREATE_CANISTER: Memo = Memo(0x41455243); // == 'CREA'
@@ -39,7 +33,7 @@ pub fn create_canister_txn(
         fee: TRANSACTION_FEE,
         from_subaccount,
         to: AccountIdentifier::new(*cycles_canister_id.get_ref(), Some(sub_account)),
-        block_height: None,
+        created_at_time: None,
     };
     (send_args, sub_account)
 }
@@ -57,7 +51,7 @@ pub fn top_up_canister_txn(
         fee: TRANSACTION_FEE,
         from_subaccount,
         to: AccountIdentifier::new(*cycles_canister_id.get_ref(), Some(sub_account)),
-        block_height: None,
+        created_at_time: None,
     };
     (send_args, sub_account)
 }
@@ -80,7 +74,7 @@ pub struct IcptsToCycles {
 impl IcptsToCycles {
     pub fn to_cycles(&self, icpts: ICPTs) -> Cycles {
         Cycles::new(
-            icpts.get_doms() as u128
+            icpts.get_e8s() as u128
                 * self.xdr_permyriad_per_icp as u128
                 * self.cycles_per_xdr.get() as u128
                 / (ledger_canister::ICP_SUBDIVIDABLE_BY as u128 * 10_000),
@@ -88,10 +82,16 @@ impl IcptsToCycles {
     }
 }
 
+/// Argument taken by the set_authorized_subnetwork_list endpoint
+#[derive(Serialize, Deserialize, CandidType, Clone, Hash, Debug, PartialEq, Eq)]
+pub struct SetAuthorizedSubnetworkListArgs {
+    pub who: Option<PrincipalId>,
+    pub subnets: Vec<SubnetId>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ledger_canister::TransactionNotificationResult;
 
     #[test]
     fn icpts_to_cycles() {
@@ -112,14 +112,5 @@ mod tests {
             .to_cycles(ICPTs::new(123, 0).unwrap()),
             31952666407731u128.into()
         );
-    }
-
-    #[test]
-    fn notify() {
-        let res: CreateCanisterResult =
-            Ok(CanisterId::new(PrincipalId::new_user_test_id(1)).unwrap());
-        let x = TransactionNotificationResult::encode(res.clone()).unwrap();
-        let y: CreateCanisterResult = x.decode().unwrap();
-        assert_eq!(y, res);
     }
 }

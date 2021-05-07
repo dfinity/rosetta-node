@@ -9,10 +9,17 @@ use structopt::StructOpt;
 fn main() {
     let opt = Opt::from_args();
     for s in opt.convert.into_iter() {
-        let bytes: Vec<u8> = hex::decode(s.clone()).unwrap();
-        if let Ok(pid) = PrincipalId::from_str(&s).or_else(|_| PrincipalId::try_from(&bytes)) {
-            let aid: AccountIdentifier = pid.into();
-            println!("{} → {}", s, aid)
+        match PrincipalId::from_str(&s)
+            .map_err(|e| e.to_string())
+            .or_else(|_| {
+                PrincipalId::try_from(hex::decode(s.clone()).map_err(|e| e.to_string())?)
+                    .map_err(|e| e.to_string())
+            }) {
+            Ok(pid) => {
+                let aid: AccountIdentifier = pid.into();
+                println!("{} → {}", s, aid)
+            }
+            Err(err) => println!("Failed to decode {}, {}", s, err),
         }
     }
 }

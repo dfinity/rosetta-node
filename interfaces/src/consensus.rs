@@ -1,3 +1,4 @@
+//! The consensus public interface.
 use crate::{
     consensus_pool::{ChangeSet, ConsensusPool},
     ingress_manager::{

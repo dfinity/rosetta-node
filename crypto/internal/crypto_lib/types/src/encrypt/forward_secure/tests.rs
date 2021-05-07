@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use super::*;
 
 mod proto_to_csp_fs_enc_pubkey_conversions_tests {
@@ -72,23 +73,23 @@ mod proto_to_csp_fs_enc_pubkey_conversions_tests {
     }
 }
 
-mod proto_to_csp_fs_enc_pok_conversions_tests {
+mod proto_to_csp_fs_enc_pop_conversions_tests {
     use super::*;
     use crate::curves::bls12_381::{Fr, G1};
 
     #[test]
-    fn should_convert_proto_to_pok() {
-        let csp_pok = dummy_csp_pok();
+    fn should_convert_proto_to_pop() {
+        let csp_pop = dummy_csp_pop();
         let pk_proto = PublicKeyProto {
             algorithm: AlgorithmIdProto::Groth20Bls12381 as i32,
             key_value: [42; groth20_bls12_381::FsEncryptionPublicKey::SIZE].to_vec(),
             version: 0,
-            proof_data: Some(serde_cbor::to_vec(&csp_pok).unwrap()),
+            proof_data: Some(serde_cbor::to_vec(&csp_pop).unwrap()),
         };
 
-        let deserialized_pok = CspFsEncryptionPok::try_from(&pk_proto).unwrap();
+        let deserialized_pop = CspFsEncryptionPop::try_from(&pk_proto).unwrap();
 
-        assert_eq!(deserialized_pok, csp_pok);
+        assert_eq!(deserialized_pop, csp_pop);
     }
 
     #[test]
@@ -100,11 +101,11 @@ mod proto_to_csp_fs_enc_pok_conversions_tests {
             proof_data: None,
         };
 
-        let error = CspFsEncryptionPok::try_from(&pk_proto).unwrap_err();
+        let error = CspFsEncryptionPop::try_from(&pk_proto).unwrap_err();
 
         assert_eq!(
             error,
-            CspFsEncryptionPokFromPublicKeyProtoError::MissingProofData
+            CspFsEncryptionPopFromPublicKeyProtoError::MissingProofData
         );
     }
 
@@ -115,14 +116,14 @@ mod proto_to_csp_fs_enc_pok_conversions_tests {
             algorithm: unknown_algorithm,
             key_value: [42; groth20_bls12_381::FsEncryptionPublicKey::SIZE].to_vec(),
             version: 0,
-            proof_data: Some(serde_cbor::to_vec(&dummy_csp_pok()).unwrap()),
+            proof_data: Some(serde_cbor::to_vec(&dummy_csp_pop()).unwrap()),
         };
 
-        let error = CspFsEncryptionPok::try_from(&pk_proto).unwrap_err();
+        let error = CspFsEncryptionPop::try_from(&pk_proto).unwrap_err();
 
         assert_eq!(
             error,
-            CspFsEncryptionPokFromPublicKeyProtoError::UnknownAlgorithm {
+            CspFsEncryptionPopFromPublicKeyProtoError::UnknownAlgorithm {
                 algorithm: unknown_algorithm
             }
         );
@@ -138,21 +139,22 @@ mod proto_to_csp_fs_enc_pok_conversions_tests {
             proof_data: Some(malformed_proof_data.clone()),
         };
 
-        let error = CspFsEncryptionPok::try_from(&pk_proto).unwrap_err();
+        let error = CspFsEncryptionPop::try_from(&pk_proto).unwrap_err();
 
         assert_eq!(
             error,
-            CspFsEncryptionPokFromPublicKeyProtoError::MalformedPok {
-                pok_bytes: malformed_proof_data,
+            CspFsEncryptionPopFromPublicKeyProtoError::MalformedPop {
+                pop_bytes: malformed_proof_data,
                 internal_error: "invalid type: integer `-11`, expected variant identifier"
                     .to_string()
             }
         );
     }
 
-    fn dummy_csp_pok() -> FsEncryptionPok {
-        CspFsEncryptionPok::Groth20_Bls12_381(groth20_bls12_381::FsEncryptionPok {
-            blinder: G1([42; G1::SIZE]),
+    fn dummy_csp_pop() -> CspFsEncryptionPop {
+        CspFsEncryptionPop::Groth20WithPop_Bls12_381(groth20_bls12_381::FsEncryptionPop {
+            pop_key: G1([42; G1::SIZE]),
+            challenge: Fr([42; Fr::SIZE]),
             response: Fr([42; Fr::SIZE]),
         })
     }

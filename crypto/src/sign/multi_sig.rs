@@ -120,7 +120,10 @@ fn node_ids_to_pubkeys(
                 registry_version,
             });
         }
-        *algorithm_set.iter().next().unwrap()
+        *algorithm_set
+            .iter()
+            .next()
+            .expect("Set was unexpectedly empty")
     };
 
     Ok((csp_pubkeys, algorithm))
@@ -182,7 +185,10 @@ where
                 registry_version,
             });
         }
-        *algorithm_set.iter().next().unwrap()
+        *algorithm_set
+            .iter()
+            .next()
+            .expect("Set was unexpectedly empty")
     };
 
     Ok((pubkey_sig_pairs, algorithm))

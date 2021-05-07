@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 mod keygen {
 
     use crate::{keypair_from_rng, public_key_from_der};

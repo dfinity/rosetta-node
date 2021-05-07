@@ -8,12 +8,7 @@ mod tests;
 // Proptest strategies
 // These are for generating data types
 pub fn key_pair() -> impl Strategy<Value = (SecretKey, PublicKey)> {
-    any::<[u64; 4]>()
-        .prop_map(keypair_from_seed)
-        .prop_filter("Keys must be valid".to_owned(), |key_maybe| {
-            key_maybe.is_some()
-        })
-        .prop_map(|key_maybe| key_maybe.unwrap())
+    any::<[u64; 4]>().prop_map(keypair_from_seed)
 }
 pub fn secret_key() -> impl Strategy<Value = SecretKey> {
     key_pair().prop_map(|keypair| keypair.0)
@@ -24,20 +19,16 @@ pub fn public_key() -> impl Strategy<Value = PublicKey> {
 pub fn individual_signature() -> impl Strategy<Value = IndividualSignature> {
     any::<([u64; 4], [u8; 8])>()
         .prop_map(|(seed, message)| (keypair_from_seed(seed), message))
-        .prop_filter("Keys must be valid".to_owned(), |(keypair, _message)| {
-            keypair.is_some()
-        })
         .prop_map(|(keypair, message)| {
-            let (secret_key, _public_key) = keypair.unwrap();
+            let (secret_key, _public_key) = keypair;
             sign_message(&message, secret_key)
         })
 }
 pub fn pop() -> impl Strategy<Value = Pop> {
     any::<[u64; 4]>()
         .prop_map(keypair_from_seed)
-        .prop_filter("Keys must be valid".to_owned(), |keypair| keypair.is_some())
         .prop_map(|keypair| {
-            let (secret_key, public_key) = keypair.unwrap();
+            let (secret_key, public_key) = keypair;
             create_pop(public_key, secret_key)
         })
 }

@@ -240,7 +240,7 @@ pub fn verify_combined_signature(
 
 /// Converts public key bytes into its DER-encoded form.
 /// See:
-/// * https://docs.dfinity.systems/public/#_certificate
+/// * https://sdk.dfinity.org/docs/interface-spec/index.html#_certificate
 /// * https://tools.ietf.org/html/rfc5480
 pub fn public_key_to_der(key: PublicKeyBytes) -> CryptoResult<Vec<u8>> {
     use simple_asn1::to_der;
@@ -271,7 +271,7 @@ fn bls_curve_id() -> ASN1Block {
 /// Parses a public key bytes from its DER-encoded form.
 ///
 /// See:
-/// * https://docs.dfinity.systems/public/#_certificate
+/// * https://sdk.dfinity.org/docs/interface-spec/index.html#_certificate
 /// * https://tools.ietf.org/html/rfc5480
 pub fn public_key_from_der(bytes: &[u8]) -> CryptoResult<PublicKeyBytes> {
     use simple_asn1::{
@@ -345,7 +345,9 @@ pub fn combined_signature_and_public_key(
     let signatures: Vec<Option<IndividualSignatureBytes>> = secret_keys
         .iter()
         .map(|secret_key| {
-            Some(sign_message(message, &secret_key.unwrap()).expect("Failed to sign"))
+            Some(
+                sign_message(message, &secret_key.expect("Keygen failed")).expect("Failed to sign"),
+            )
         })
         .collect();
     let signature =

@@ -1,3 +1,4 @@
+//! The state manager public interface.
 use ic_crypto_tree_hash::{LabeledTree, MixedHashTree};
 use ic_types::{
     consensus::certification::Certification, CryptoHashOfPartialState, CryptoHashOfState, Height,
@@ -31,6 +32,7 @@ impl std::error::Error for StateManagerError {}
 
 pub type StateManagerResult<T> = Result<T, StateManagerError>;
 
+/// Indicates the subset of the state that needs to be certified.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CertificationScope {
     /// Only certify the system metadata.
@@ -40,6 +42,8 @@ pub enum CertificationScope {
 }
 
 pub enum CertificationTag {}
+
+/// A bit mask for accepting certified/uncertified states.
 pub type CertificationMask = BitMask<CertificationTag, u32>;
 
 /// The mask that only accepts certified states.
@@ -79,6 +83,7 @@ impl<State> Labeled<State> {
     }
 }
 
+/// APIs related to fetching and certifying the state.
 // tag::state-manager-interface[]
 pub trait StateManager: StateReader {
     /// Returns a snapshot of the list of state hashes that need to be

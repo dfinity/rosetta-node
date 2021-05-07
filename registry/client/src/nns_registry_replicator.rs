@@ -33,6 +33,7 @@ use crate::helper::{
     routing_table::RoutingTableRegistry,
     subnet::{SubnetRegistry, SubnetTransportRegistry},
 };
+use ic_base_thread::spawn_and_wait;
 use ic_interfaces::registry::{RegistryClient, ZERO_REGISTRY_VERSION};
 use ic_logger::{warn, ReplicaLogger};
 use ic_protobuf::registry::subnet::v1::SubnetType;
@@ -54,10 +55,11 @@ use ic_types::crypto::threshold_sig::ThresholdSigPublicKey;
 use ic_types::{NodeId, RegistryVersion, SubnetId};
 use std::collections::BTreeMap;
 use std::fmt::Debug;
+use std::io::{Error, ErrorKind};
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use url::Url;
 
@@ -66,8 +68,8 @@ pub struct NnsRegistryReplicator {
     node_id: NodeId,
     registry: Arc<dyn RegistryClient>,
     local_store: Arc<dyn LocalStore>,
-    should_poll: Arc<AtomicBool>,
-    poll_lock: Arc<Mutex<()>>,
+    started: Arc<AtomicBool>,
+    cancelled: Arc<AtomicBool>,
     poll_delay: Duration,
 }
 
@@ -84,47 +86,82 @@ impl NnsRegistryReplicator {
             node_id,
             registry,
             local_store,
-            should_poll: Arc::new(AtomicBool::new(false)),
-            poll_lock: Default::default(),
+            started: Arc::new(AtomicBool::new(false)),
+            cancelled: Arc::new(AtomicBool::new(false)),
             poll_delay,
         }
     }
 
-    /// Start a polling thread in the background. At any point in time, at most
-    /// one polling thread is running.
-    pub fn start_polling(&self) {
-        let poll_lock = self.poll_lock.clone();
-        let should_poll = self.should_poll.clone();
+    /// Calls `poll()` synchronously and spawns a background task that
+    /// continuously polls for updates. Returns the result of the first poll.
+    /// The background task is stopped when the object is dropped.
+    pub fn fetch_and_start_polling(&self) -> Result<(), Error> {
+        if self
+            .started
+            .compare_and_swap(false, true, Ordering::Relaxed)
+        {
+            return Err(Error::new(
+                ErrorKind::AlreadyExists,
+                "'start_polling' was already called",
+            ));
+        }
+
+        let mut internal_state = InternalState::new(
+            self.log.clone(),
+            self.node_id,
+            self.registry.clone(),
+            self.local_store.clone(),
+        );
+        let res = internal_state
+            .poll()
+            .map_err(|err| Error::new(ErrorKind::Other, err));
+
         let log = self.log.clone();
-        let node_id = self.node_id;
-        let registry = self.registry.clone();
-        let local_store = self.local_store.clone();
+        let cancelled = Arc::clone(&self.cancelled);
         let poll_delay = self.poll_delay;
-
-        should_poll.fetch_or(true, Ordering::Relaxed);
-        std::thread::spawn(move || {
-            let _lock_guard = match poll_lock.try_lock() {
-                Ok(v) => v,
-                Err(e) => {
-                    warn!(log, "Could not acquire poll_lock: {:?}", e);
-                    return;
-                }
-            };
-
-            let mut internal_state =
-                InternalState::new(log.clone(), node_id, registry, local_store);
-            while should_poll.load(Ordering::Relaxed) {
+        tokio::spawn(async move {
+            while !cancelled.load(Ordering::Relaxed) {
+                tokio::time::delay_for(poll_delay).await;
                 if let Err(msg) = internal_state.poll() {
                     warn!(log, "Polling the NNS registry failed: {}", msg);
                 }
-                std::thread::sleep(poll_delay);
             }
         });
+        res
     }
 
-    /// Stop the polling thread, after finishing the current poll cycle.
+    /// Set the local registry data to what is contained in the provided local
+    /// store.
+    pub fn set_local_registry_data(&self, source_registry: &dyn LocalStore) {
+        // Read the registry data.
+        let changelog = source_registry
+            .get_changelog_since_version(RegistryVersion::from(0))
+            .expect("Could not read changelog from source registry.");
+
+        // Reset the local store and fill it with the read registry data.
+        self.local_store
+            .clear()
+            .expect("Could not clear registry local store");
+        for (v, cle) in changelog.into_iter().enumerate() {
+            self.local_store
+                .store(RegistryVersion::from((v + 1) as u64), cle)
+                .expect("Could not store change log entry");
+        }
+    }
+
+    pub fn stop_polling_and_set_local_registry_data(&self, source_registry: &dyn LocalStore) {
+        self.stop_polling();
+        self.set_local_registry_data(source_registry);
+    }
+
     pub fn stop_polling(&self) {
-        self.should_poll.fetch_and(false, Ordering::Relaxed);
+        self.cancelled.fetch_or(true, Ordering::Relaxed);
+    }
+}
+
+impl Drop for NnsRegistryReplicator {
+    fn drop(&mut self) {
+        self.stop_polling();
     }
 }
 
@@ -133,11 +170,10 @@ struct InternalState {
     node_id: NodeId,
     registry: Arc<dyn RegistryClient>,
     local_store: Arc<dyn LocalStore>,
-    rt: tokio::runtime::Runtime,
     latest_version: RegistryVersion,
     nns_pub_key: Option<ThresholdSigPublicKey>,
     nns_urls: Vec<Url>,
-    registry_canister: Option<RegistryCanister>,
+    registry_canister: Option<Arc<RegistryCanister>>,
 }
 
 impl InternalState {
@@ -152,7 +188,6 @@ impl InternalState {
             node_id,
             registry,
             local_store,
-            rt: tokio::runtime::Runtime::new().unwrap(),
             latest_version: ZERO_REGISTRY_VERSION,
             nns_pub_key: None,
             nns_urls: vec![],
@@ -160,7 +195,7 @@ impl InternalState {
         }
     }
 
-    pub fn poll(&mut self) -> Result<(), String> {
+    fn poll(&mut self) -> Result<(), String> {
         let latest_version = self.registry.get_latest_version();
         if latest_version != self.latest_version {
             // latest version has changed
@@ -175,15 +210,16 @@ impl InternalState {
             }
         }
 
-        if let Some(registry_canister) = self.registry_canister.as_ref() {
-            let (mut resp, t) = match self.rt.block_on(
-                registry_canister.get_certified_changes_since(
-                    latest_version.get(),
-                    &self
-                        .nns_pub_key
-                        .expect("registry canister is set => pub key is set"),
-                ),
-            ) {
+        if let Some(registry_canister_ref) = self.registry_canister.as_ref() {
+            let registry_canister = Arc::clone(registry_canister_ref);
+            let nns_pub_key = self
+                .nns_pub_key
+                .expect("registry canister is set => pub key is set");
+            let (mut resp, t) = match spawn_and_wait(async move {
+                registry_canister
+                    .get_certified_changes_since(latest_version.get(), &nns_pub_key)
+                    .await
+            }) {
                 Ok((records, _, t)) => (records, t),
                 Err(e) => {
                     return Err(format!(
@@ -420,7 +456,7 @@ impl InternalState {
             self.nns_urls = urls.clone();
 
             // reinitialize client
-            self.registry_canister = Some(RegistryCanister::new(urls));
+            self.registry_canister = Some(Arc::new(RegistryCanister::new(urls)));
         }
         Ok(())
     }
@@ -518,9 +554,4 @@ impl InternalState {
             }
         }
     }
-}
-
-#[cfg(test)]
-mod tests {
-    // left as an exercise for the reader.
 }
