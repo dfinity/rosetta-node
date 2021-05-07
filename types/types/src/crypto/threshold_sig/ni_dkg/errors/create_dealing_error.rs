@@ -1,8 +1,10 @@
+//! Errors related to dealing creation.
 use super::*;
 
 use crate::crypto::error::{InvalidArgumentError, KeyNotFoundError};
 use crate::registry::RegistryClientError;
 
+/// Occurs if creating a dealing using `NiDkgAlgorithm::create_dealing` fails.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum DkgCreateDealingError {
     NotADealer(NotADealerError),

@@ -9,16 +9,16 @@ use phantom_newtype::Id;
 use serde::{Deserialize, Serialize};
 use std::convert::{From, TryFrom, TryInto};
 
+pub struct CallbackIdTag;
 /// A value used as an opaque nonce to couple outgoing calls with their
 /// callbacks.
-pub struct CallbackIdTag;
 pub type CallbackId = Id<CallbackIdTag, u64>;
 
-/// Identifies an incoming call.
 pub enum CallContextIdTag {}
+/// Identifies an incoming call.
 pub type CallContextId = Id<CallContextIdTag, u64>;
 
-// Canister-to-canister request message.
+/// Canister-to-canister request message.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Request {
     pub receiver: CanisterId,
@@ -54,6 +54,7 @@ impl Request {
     }
 }
 
+/// The context attached when an inter-canister message is rejected.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RejectContext {
     pub code: RejectCode,
@@ -131,7 +132,7 @@ impl From<Result<Option<WasmResult>, UserError>> for Payload {
     }
 }
 
-// Canister-to-canister response message.
+/// Canister-to-canister response message.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Response {
     pub originator: CanisterId,
@@ -141,7 +142,7 @@ pub struct Response {
     pub response_payload: Payload,
 }
 
-// Canister to Canister messages
+/// Canister-to-canister message.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum RequestOrResponse {
     Request(Request),

@@ -3,6 +3,7 @@ use ic_crypto_tls_interfaces::{
     MalformedPeerCertificateError, TlsClientHandshakeError, TlsServerHandshakeError,
 };
 
+/// Errors occurring during a TLS handshake
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CspTlsClientHandshakeError {
     MalformedSelfCertificate {
@@ -19,9 +20,7 @@ pub enum CspTlsClientHandshakeError {
         internal_error: String,
     },
     SecretKeyNotFound,
-    MalformedSecretKey {
-        internal_error: String,
-    },
+    MalformedSecretKey,
     WrongSecretKeyType,
 }
 
@@ -60,12 +59,9 @@ impl From<CspTlsClientHandshakeError> for TlsClientHandshakeError {
                 // This would be a problem in the node's setup, so we panic:
                 panic!("{}The secret key was not found", panic_prefix);
             }
-            CspTlsClientHandshakeError::MalformedSecretKey { internal_error } => {
+            CspTlsClientHandshakeError::MalformedSecretKey => {
                 // This would be a problem in the node's setup, so we panic:
-                panic!(
-                    "{}The secret key is malformed: {}",
-                    panic_prefix, internal_error
-                );
+                panic!("{}The secret key is malformed", panic_prefix);
             }
             CspTlsClientHandshakeError::WrongSecretKeyType => {
                 // This would be a problem in the node's setup, so we panic:
@@ -101,9 +97,7 @@ pub enum CspTlsServerHandshakeError {
         internal_error: String,
     },
     SecretKeyNotFound,
-    MalformedSecretKey {
-        internal_error: String,
-    },
+    MalformedSecretKey,
     WrongSecretKeyType,
 }
 
@@ -135,12 +129,9 @@ impl From<CspTlsServerHandshakeError> for TlsServerHandshakeError {
                 // This would be a problem in the node's setup, so we panic:
                 panic!("{}The secret key was not found", panic_prefix);
             }
-            CspTlsServerHandshakeError::MalformedSecretKey { internal_error } => {
+            CspTlsServerHandshakeError::MalformedSecretKey => {
                 // This would be a problem in the node's setup, so we panic:
-                panic!(
-                    "{}The secret key is malformed: {}",
-                    panic_prefix, internal_error
-                );
+                panic!("{}The secret key is malformed", panic_prefix);
             }
             CspTlsServerHandshakeError::WrongSecretKeyType => {
                 // This would be a problem in the node's setup, so we panic:

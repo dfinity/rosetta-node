@@ -1,4 +1,5 @@
 use crate::utils::{curve_order, RAND_ChaCha20};
+use ic_crypto_internal_bls12381_common::{hash_to_miracl_g1, MiraclG1};
 use ic_crypto_internal_bls12381_serde_miracl::{
     miracl_fr_to_bytes, miracl_g1_to_bytes, miracl_g2_to_bytes,
 };
@@ -229,11 +230,22 @@ pub fn random_oracle(domain: &str, data: &dyn UniqueHash) -> [u8; 32] {
 }
 
 /// Computes the hash of a struct using an hash function that can be modelled as
-/// a random oracle. returns an element in the scalar field of curve BLS12_381.
+/// a random oracle. Returns an element in the scalar field of curve BLS12_381.
 ///
 /// A distinct `domain` should be used for each purpose of the random oracle.
 pub fn random_oracle_to_scalar(domain: &str, data: &dyn UniqueHash) -> BIG {
     let hash = random_oracle(domain, data);
     let rng = &mut RAND_ChaCha20::new(hash);
     BIG::randomnum(&curve_order(), rng)
+}
+
+/// Computes the hash of a struct using an hash function that can be modelled as
+/// a random oracle. Returns a group element of G1 in BLS12_381.
+///
+/// A distinct `domain` should be used for each purpose of the random oracle.
+pub fn random_oracle_to_miracl_g1(domain: &str, data: &dyn UniqueHash) -> MiraclG1 {
+    hash_to_miracl_g1(
+        &DomainSeparationContext::new(domain).as_bytes(),
+        &data.unique_hash(),
+    )
 }

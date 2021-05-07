@@ -1,3 +1,5 @@
+#![deny(clippy::unwrap_used)]
+
 //! Threshold signatures
 
 pub mod api;

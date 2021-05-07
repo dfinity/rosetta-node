@@ -20,8 +20,14 @@ const CURVE_NAME: Nid = Nid::SECP256K1;
 // involved as Rust OpenSSL API doesn't seem to provide a way for
 // "de-randomization" of signing operation).
 
-//#[cfg(test)] // TODO (CRP-708): Add tests or otherwise make clear this is test
-//#[cfg(test)] code.
+/// Create a new secp256k1 keypair. This function should only be used for
+/// testing.
+///
+/// # Errors
+/// * `AlgorithmNotSupported` if an error occurs while generating the key
+/// # Returns
+/// A tuple of the secret key bytes and public key bytes
+#[cfg(test)]
 pub fn new_keypair() -> CryptoResult<(types::SecretKeyBytes, types::PublicKeyBytes)> {
     let group = EcGroup::from_curve_name(CURVE_NAME)
         .map_err(|e| wrap_openssl_err(e, "unable to create EC group"))?;
@@ -48,6 +54,58 @@ pub fn new_keypair() -> CryptoResult<(types::SecretKeyBytes, types::PublicKeyByt
     Ok((sk, pk))
 }
 
+/// Create a secp256k1 secret key from raw bytes
+///
+/// # Arguments
+/// * `sk_raw_bytes` is the big-endian encoding of unsigned integer
+/// * `pk` is the public key associated with this secret key
+/// # Errors
+/// * `AlgorithmNotSupported` if an error occured while invoking OpenSSL
+/// * `MalformedPublicKey` if the public key could not be parsed
+/// * `MalformedSecretKey` if the secret key does not coorespond with the public
+///   key
+pub fn secret_key_from_components(
+    sk_raw_bytes: &[u8],
+    pk: &types::PublicKeyBytes,
+) -> CryptoResult<types::SecretKeyBytes> {
+    let group = EcGroup::from_curve_name(CURVE_NAME)
+        .map_err(|e| wrap_openssl_err(e, "unable to create EC group"))?;
+    let private_number = BigNum::from_slice(sk_raw_bytes)
+        .map_err(|e| wrap_openssl_err(e, "unable to parse big integer"))?;
+    let mut ctx =
+        BigNumContext::new().map_err(|e| wrap_openssl_err(e, "unable to create BigNumContext"))?;
+    let public_point = EcPoint::from_bytes(&group, &pk.0, &mut ctx).map_err(|e| {
+        CryptoError::MalformedPublicKey {
+            algorithm: AlgorithmId::EcdsaSecp256k1,
+            key_bytes: Some(pk.0.to_vec()),
+            internal_error: e.to_string(),
+        }
+    })?;
+    let ec_key =
+        EcKey::from_private_components(&group, &private_number, &public_point).map_err(|_| {
+            CryptoError::MalformedSecretKey {
+                algorithm: AlgorithmId::EcdsaSecp256k1,
+                internal_error: "OpenSSL error".to_string(), // don't leak sensitive information
+            }
+        })?;
+    let sk_der = ec_key
+        .private_key_to_der()
+        .map_err(|e| CryptoError::AlgorithmNotSupported {
+            algorithm: AlgorithmId::EcdsaSecp256k1,
+            reason: format!("OpenSSL failed with error {}", e.to_string()),
+        })?;
+    Ok(types::SecretKeyBytes::from(sk_der))
+}
+
+/// Parse a secp256k1 public key from the DER enncoding
+///
+/// # Arguments
+/// * `pk_der` is the binary DER encoding of the public key
+/// # Errors
+/// * `AlgorithmNotSupported` if an error occured while invoking OpenSSL
+/// * `MalformedPublicKey` if the public key could not be parsed
+/// # Returns
+/// The decoded public key
 pub fn public_key_from_der(pk_der: &[u8]) -> CryptoResult<types::PublicKeyBytes> {
     let pkey = PKey::public_key_from_der(pk_der).map_err(|e| CryptoError::MalformedPublicKey {
         algorithm: AlgorithmId::EcdsaSecp256k1,
@@ -78,6 +136,42 @@ pub fn public_key_from_der(pk_der: &[u8]) -> CryptoResult<types::PublicKeyBytes>
     Ok(types::PublicKeyBytes::from(pk_bytes))
 }
 
+/// Encode a secp256k1 public key to the DER encoding
+///
+/// # Arguments
+/// * `pk` is the public key
+/// # Errors
+/// * `AlgorithmNotSupported` if an error occured while invoking OpenSSL
+/// * `MalformedPublicKey` if the public key seems to be invalid
+/// # Returns
+/// The encoded public key
+pub fn public_key_to_der(pk: &types::PublicKeyBytes) -> CryptoResult<Vec<u8>> {
+    let group = EcGroup::from_curve_name(CURVE_NAME)
+        .map_err(|e| wrap_openssl_err(e, "unable to create EC group"))?;
+    let mut ctx =
+        BigNumContext::new().map_err(|e| wrap_openssl_err(e, "unable to create BigNumContext"))?;
+    let point = EcPoint::from_bytes(&group, &pk.0, &mut ctx).map_err(|e| {
+        CryptoError::MalformedPublicKey {
+            algorithm: AlgorithmId::EcdsaSecp256k1,
+            key_bytes: Some(pk.0.to_vec()),
+            internal_error: e.to_string(),
+        }
+    })?;
+    let ec_pk =
+        EcKey::from_public_key(&group, &point).map_err(|e| CryptoError::MalformedPublicKey {
+            algorithm: AlgorithmId::EcdsaSecp256k1,
+            key_bytes: Some(pk.0.to_vec()),
+            internal_error: e.to_string(),
+        })?;
+    ec_pk
+        .public_key_to_der()
+        .map_err(|e| CryptoError::MalformedPublicKey {
+            algorithm: AlgorithmId::EcdsaSecp256k1,
+            key_bytes: Some(pk.0.to_vec()),
+            internal_error: e.to_string(),
+        })
+}
+
 // Returns `secp256k1_sig` as an array of exactly types::SignatureBytes::SIZE
 // bytes.
 fn secp256k1_sig_to_bytes(
@@ -103,12 +197,22 @@ fn secp256k1_sig_to_bytes(
     Ok(bytes)
 }
 
-//#[cfg(test)]
+/// Sign a message using a secp256k1 private key
+///
+/// # Arguments
+/// * `msg` is the message to be signed
+/// * `sk` is the private key
+/// # Errors
+/// * `InvalidArgument` if signature generation failed
+/// * `MalformedSecretKey` if the private key seems to be invalid
+/// * `MalformedSignature` if OpenSSL generated an invalid ECDSA signature
+/// # Returns
+/// The generated signature
 pub fn sign(msg: &[u8], sk: &types::SecretKeyBytes) -> CryptoResult<types::SignatureBytes> {
     let signing_key =
-        EcKey::private_key_from_der(&sk.0).map_err(|e| CryptoError::MalformedSecretKey {
+        EcKey::private_key_from_der(&sk.0).map_err(|_| CryptoError::MalformedSecretKey {
             algorithm: AlgorithmId::EcdsaSecp256k1,
-            internal_error: e.to_string(),
+            internal_error: "OpenSSL error".to_string(), // don't leak sensitive information
         })?;
     let secp256k1_sig =
         EcdsaSig::sign(msg, &signing_key).map_err(|e| CryptoError::InvalidArgument {
@@ -148,6 +252,19 @@ fn r_s_from_sig_bytes(sig_bytes: &types::SignatureBytes) -> CryptoResult<(BigNum
     Ok((r, s))
 }
 
+/// Verify a signature using a secp256k1 public key
+///
+/// # Arguments
+/// * `sig` is the signature to be verified
+/// * `msg` is the message
+/// * `pk` is the public key
+/// # Errors
+/// * `MalformedSignature` if the signature could not be parsed
+/// * `AlgorithmNotSupported` if an error occurred while invoking OpenSSL
+/// * `MalformedPublicKey` if the public key could not be parsed
+/// * `SignatureVerification` if the signature could not be verified
+/// # Returns
+/// `Ok(())` if the signature validated, or an error otherwise
 pub fn verify(
     sig: &types::SignatureBytes,
     msg: &[u8],

@@ -1,3 +1,54 @@
+//! Library crate for verifying the validity of a node's public key material.
+//!
+//! Such verification is used, for example, to ensure that only valid node key
+//! material is stored in the registry or to check registry invariants.
+//!
+//! Use `ValidNodePublicKeys::try_from(keys, node_id)` to perform the validation
+//! checks.
+//!
+//! Validation of a *node's signing key* includes verifying that
+//! * the key is present and well-formed
+//! * the node ID derived from the key matches the `node_id`
+//! * the public key is valid, which includes checking that the key is a point
+//!   on the curve and in the right subgroup
+//!
+//! Validation of a *node's committee signing key* includes verifying that
+//! * the key is present and well-formed
+//! * the public key's proof of possession (PoP) is valid
+//! * the public key is a point on the curve and in the right subgroup
+//!
+//! Validation of a *node's DKG dealing encryption key* includes verifying
+//! that
+//! * the key is present and well-formed
+//! * the public key's proof of possession (PoP) is valid
+//! * the public key is a point on the curve and in the right subgroup
+//!
+//! Validation of a *node's TLS certificate* includes verifying that
+//! * the certificate is present and well-formed, i.e., formatted in X.509
+//!   version 3 and DER-encoded
+//! * the certificate has a single subject common name (CN) that matches the
+//!   `node_id`
+//! * the certificate has a single issuer common name (CN) that matches the
+//!   subject CN (indicating that the certificate is self-signed)
+//! * the certificate is NOT for a certificate authority. This means either 1)
+//!   there are no BasicConstraints extensions, or 2) if there are
+//!   BasicConstraints then one is `CA` and it's set to `False`.
+//! * the certificate's notBefore date is latest in two minutes from now. This
+//!   is to ensure that the certificate is already valid or becomes valid
+//!   shortly. The grace period is to account for potential clock differences.
+//! * the certificate's notAfter date indicates according to [RFC 5280 (section
+//!   4.1.2.5)] that the certificate has no well-defined expiration date.
+//! * the certificate's signature algorithm is Ed25519 (OID 1.3.101.112)
+//! * the certificate's public key is valid, which includes checking that the
+//!   key is a point on the curve and in the right subgroup
+//! * the certificate's signature is valid w.r.t. the certificate's public key,
+//!   that is, the certificate is correctly self-signed
+//!
+//! [RFC 5280 (section 4.1.2.5)]: https://tools.ietf.org/html/rfc5280#section-4.1.2.5
+
+#![forbid(unsafe_code)]
+#![deny(clippy::unwrap_used)]
+
 use crate::proto_conversions::fs_ni_dkg::fs_ni_dkg_pubkey_from_proto;
 use ic_base_types::{NodeId, PrincipalId};
 use ic_crypto_internal_basic_sig_ed25519::types::PublicKeyBytes as BasicSigEd25519PublicKeyBytes;
@@ -16,6 +67,13 @@ mod tests;
 mod proto_conversions;
 mod tls_cert_validation;
 
+/// Validated public key material of a node.
+///
+/// Instances of this struct have successfully passed the validity checks and
+/// are immutable, i.e., the contained public key material is guaranteed to be
+/// valid.
+///
+/// Use `try_from` to create an instance from unvalidated `NodePublicKeys`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ValidNodePublicKeys {
     node_id: NodeId,
@@ -37,39 +95,67 @@ impl ValidNodePublicKeys {
     pub fn try_from(keys: &NodePublicKeys, node_id: NodeId) -> Result<Self, KeyValidationError> {
         validate_node_signing_key(&keys.node_signing_pk, node_id)?;
         validate_committee_signing_key(&keys.committee_signing_pk)?;
-        validate_dkg_dealing_encryption_key(&keys.dkg_dealing_encryption_pk)?;
+        validate_dkg_dealing_encryption_key(&keys.dkg_dealing_encryption_pk, node_id)?;
         validate_tls_certificate(&keys.tls_certificate, node_id)?;
+
+        let node_signing_pubkey = keys
+            .node_signing_pk
+            .as_ref()
+            .expect("Value missing")
+            .clone();
+        let committee_signing_pubkey = keys
+            .committee_signing_pk
+            .as_ref()
+            .expect("Value missing")
+            .clone();
+        let dkg_dealing_encryption_pubkey = keys
+            .dkg_dealing_encryption_pk
+            .as_ref()
+            .expect("Value missing")
+            .clone();
+        let tls_certificate = keys
+            .tls_certificate
+            .as_ref()
+            .expect("Value missing")
+            .clone();
 
         Ok(ValidNodePublicKeys {
             node_id,
-            node_signing_pubkey: keys.node_signing_pk.as_ref().unwrap().clone(),
-            committee_signing_pubkey: keys.committee_signing_pk.as_ref().unwrap().clone(),
-            dkg_dealing_encryption_pubkey: keys.dkg_dealing_encryption_pk.as_ref().unwrap().clone(),
-            tls_certificate: keys.tls_certificate.as_ref().unwrap().clone(),
+            node_signing_pubkey,
+            committee_signing_pubkey,
+            dkg_dealing_encryption_pubkey,
+            tls_certificate,
         })
     }
 
+    /// Returns the node ID for which the public key material's validity was
+    /// successfully verified.
     pub fn node_id(&self) -> NodeId {
         self.node_id
     }
 
+    /// Returns the validated node signing key.
     pub fn node_signing_key(&self) -> &PublicKey {
         &self.node_signing_pubkey
     }
 
+    /// Returns the validated committee signing key.
     pub fn committee_signing_key(&self) -> &PublicKey {
         &self.committee_signing_pubkey
     }
 
+    /// Returns the validated DKG dealing encryption key.
     pub fn dkg_dealing_encryption_key(&self) -> &PublicKey {
         &self.dkg_dealing_encryption_pubkey
     }
 
+    /// Returns the validated TLS certificate.
     pub fn tls_certificate(&self) -> &X509PublicKeyCert {
         &self.tls_certificate
     }
 }
 
+/// A key validation error.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeyValidationError {
     pub error: String,
@@ -83,11 +169,7 @@ impl fmt::Display for KeyValidationError {
 
 /// Validates a node's signing key.
 ///
-/// This includes verifying that
-/// * the key is present and well-formed
-/// * the node ID derived from the key matches the `node_id`
-/// * the public key is valid, which includes checking that the key is a point
-///   on the curve and in the right subgroup
+/// See the crate documentation for the exact checks that are performed.
 fn validate_node_signing_key(
     node_signing_key: &Option<PublicKey>,
     node_id: NodeId,
@@ -113,11 +195,7 @@ fn validate_node_signing_key(
 
 /// Validates a node's committee signing key.
 ///
-/// This includes
-/// * verifying that the key is present and well-formed
-/// * verifying the public key's proof of possession (PoP) is valid
-/// * verifying that the public key is a point on the curve and in the right
-///   subgroup
+/// See the crate documentation for the exact checks that are performed.
 fn validate_committee_signing_key(
     committee_signing_key: &Option<PublicKey>,
 ) -> Result<(), KeyValidationError> {
@@ -138,13 +216,10 @@ fn validate_committee_signing_key(
 
 /// Validates a node's DKG dealing encryption key
 ///
-/// This includes
-/// * verifying that the key is present and well-formed
-/// * verifying the public key's proof of knowledge (PoK) is valid
-/// * verifying that the public key is a point on the curve and in the right
-///   subgroup
+/// See the crate documentation for the exact checks that are performed.
 fn validate_dkg_dealing_encryption_key(
     dkg_dealing_encryption_key: &Option<PublicKey>,
+    node_id: NodeId,
 ) -> Result<(), KeyValidationError> {
     let pubkey_proto = dkg_dealing_encryption_key
         .as_ref()
@@ -154,7 +229,7 @@ fn validate_dkg_dealing_encryption_key(
     // public key is a point on the curve and in the right subgroup.
     let fs_ni_dkg_pubkey = fs_ni_dkg_pubkey_from_proto(pubkey_proto)
         .map_err(|e| invalid_dkg_dealing_enc_pubkey_error(format!("{}", e)))?;
-    if !fs_ni_dkg_pubkey.verify() {
+    if !fs_ni_dkg_pubkey.verify(node_id.get().as_slice()) {
         return Err(invalid_dkg_dealing_enc_pubkey_error("verification failed"));
     }
     Ok(())

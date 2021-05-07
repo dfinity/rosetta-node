@@ -29,8 +29,8 @@ use crate::crypto::hash::{
 };
 use ic_types::crypto::threshold_sig::ni_dkg::DkgId;
 use ic_types::crypto::{
-    BasicSigOf, CombinedMultiSigOf, CombinedThresholdSigOf, CryptoResult, IndividualMultiSigOf,
-    SignedBytesWithoutDomainSeparator, ThresholdSigShareOf, UserPublicKey,
+    BasicSigOf, CanisterSigOf, CombinedMultiSigOf, CombinedThresholdSigOf, CryptoResult,
+    IndividualMultiSigOf, SignedBytesWithoutDomainSeparator, ThresholdSigShareOf, UserPublicKey,
 };
 use ic_types::messages::{Delegation, MessageId, WebAuthnEnvelope};
 use ic_types::{
@@ -195,12 +195,15 @@ fn domain_with_prepended_length(domain: &str) -> Vec<u8> {
     ret
 }
 
-// `SignableMock` is needed for testing interfaces that use `Signable`-trait.
-// It is defined here because `SignatureDomain` is _sealed_ and must only be
-// implemented here in this crate.
-// Ideally, this struct would be annotated with `#[cfg(test)]` so that it is
-// only available in test code, however, then it would not be visible outside
-// of this crate where it is needed.
+/// A helper struct for testing that implements `Signable`.
+///
+/// `SignableMock` is needed for testing interfaces that use `Signable`-trait.
+/// It is defined here because `SignatureDomain` is _sealed_ and must only be
+/// implemented here in this crate.
+///
+/// Ideally, this struct would be annotated with `#[cfg(test)]` so that it is
+/// only available in test code, however, then it would not be visible outside
+/// of this crate where it is needed.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SignableMock {
     pub domain: Vec<u8>,
@@ -228,7 +231,24 @@ impl SignedBytesWithoutDomainSeparator for SignableMock {
     }
 }
 
+/// A Crypto Component interface to create basic signatures.
 pub trait BasicSigner<T: Signable> {
+    /// Creates a basic signature.
+    ///
+    /// # Errors
+    /// * `CryptoError::RegistryClient`: if the registry cannot be accessed at
+    ///   `registry_version`.
+    /// * `CryptoError::PublicKeyNotFound`: if the `signer`'s public key cannot
+    ///   be found at the given `registry_version`.
+    /// * `CryptoError::MalformedPublicKey`: if the `signer`'s public key
+    ///   obtained from the registry is malformed.
+    /// * `CryptoError::AlgorithmNotSupported`: if the `signer`'s public key
+    ///   obtained from the registry is for an unsupported algorithm.
+    /// * `CryptoError::SecretKeyNotFound`: if the `signer`'s secret key cannot
+    ///   be found in the secret key store.
+    /// * `CryptoError::MalformedSecretKey`: if the secret key is malformed.
+    /// * `CryptoError::InvalidArgument`: if the signature algorithm is not
+    ///   supported.
     fn sign_basic(
         &self,
         message: &T,
@@ -237,7 +257,23 @@ pub trait BasicSigner<T: Signable> {
     ) -> CryptoResult<BasicSigOf<T>>;
 }
 
+/// A Crypto Component interface to verify basic signatures.
 pub trait BasicSigVerifier<T: Signable> {
+    /// Verifies a basic signature.
+    ///
+    /// # Errors
+    /// * `CryptoError::RegistryClient`: if the registry cannot be accessed at
+    ///   `registry_version`.
+    /// * `CryptoError::PublicKeyNotFound`: if the `signer`'s public key cannot
+    ///   be found at the given `registry_version`.
+    /// * `CryptoError::MalformedSignature`: if the signature is malformed.
+    /// * `CryptoError::AlgorithmNotSupported`: if the signature algorithm is
+    ///   not supported, or if the `signer`'s public key obtained from the
+    ///   registry is for an unsupported algorithm.
+    /// * `CryptoError::MalformedPublicKey`: if the `signer`'s public key
+    ///   obtained from the registry is malformed.
+    /// * `CryptoError::SignatureVerification`: if the `signature` could not be
+    ///   verified.
     fn verify_basic_sig(
         &self,
         signature: &BasicSigOf<T>,
@@ -247,7 +283,17 @@ pub trait BasicSigVerifier<T: Signable> {
     ) -> CryptoResult<()>;
 }
 
+/// A Crypto Component interface to verify basic signatures by public key.
 pub trait BasicSigVerifierByPublicKey<T: Signable> {
+    /// Verifies a basic signature using the given `public_key`.
+    ///
+    /// # Errors
+    /// * `CryptoError::MalformedPublicKey`: if the `public_key` is malformed.
+    /// * `CryptoError::MalformedSignature`: if the `signature` is malformed.
+    /// * `CryptoError::AlgorithmNotSupported`: if the signature algorithm is
+    ///   not supported, or if the `public_key` is for an unsupported algorithm.
+    /// * `CryptoError::SignatureVerification`: if the `signature` could not be
+    ///   verified.
     fn verify_basic_sig_by_public_key(
         &self,
         signature: &BasicSigOf<T>,
@@ -256,10 +302,39 @@ pub trait BasicSigVerifierByPublicKey<T: Signable> {
     ) -> CryptoResult<()>;
 }
 
+/// A Crypto Component interface to verify (ICCSA) canister signatures.
+pub trait CanisterSigVerifier<T: Signable> {
+    /// Verifies an ICCSA canister signature.
+    ///
+    /// # Errors
+    /// * `CryptoError::AlgorithmNotSupported`: if the signature algorithm is
+    ///   not supported for canister signatures.
+    /// * `CryptoError::RegistryClient`: if the registry cannot be accessed at
+    ///   `registry_version`.
+    /// * `CryptoError::RootSubnetPublicKeyNotFound`: if the root subnet id or
+    ///   the root subnet threshold signing public key cannot be found in the
+    ///   registry at `registry_version`.
+    /// * `CryptoError::MalformedPublicKey`: if the root subnet's threshold
+    ///   signing public key is malformed.
+    /// * `CryptoError::MalformedSignature`: if the `signature` is malformed.
+    /// * `CryptoError::SignatureVerification`: if the `signature` could not be
+    ///   verified.
+    fn verify_canister_sig(
+        &self,
+        signature: &CanisterSigOf<T>,
+        signed_bytes: &T,
+        public_key: &UserPublicKey,
+        registry_version: RegistryVersion,
+    ) -> CryptoResult<()>;
+}
+
+/// A Crypto Component interface to verify ingress messages.
 pub trait IngressSigVerifier:
     BasicSigVerifierByPublicKey<WebAuthnEnvelope>
     + BasicSigVerifierByPublicKey<MessageId>
     + BasicSigVerifierByPublicKey<Delegation>
+    + CanisterSigVerifier<Delegation>
+    + CanisterSigVerifier<MessageId>
 {
 }
 
@@ -267,10 +342,27 @@ impl<T> IngressSigVerifier for T where
     T: BasicSigVerifierByPublicKey<WebAuthnEnvelope>
         + BasicSigVerifierByPublicKey<MessageId>
         + BasicSigVerifierByPublicKey<Delegation>
+        + CanisterSigVerifier<Delegation>
+        + CanisterSigVerifier<MessageId>
 {
 }
 
+/// A Crypto Component interface to create multi-signatures.
 pub trait MultiSigner<T: Signable> {
+    /// Creates an individual multi-signature.
+    ///
+    /// # Errors
+    /// * `CryptoError::RegistryClient`: if the registry cannot be accessed at
+    ///   `registry_version`.
+    /// * `CryptoError::PublicKeyNotFound`: if the public key cannot be found at
+    ///   the given `registry_version`.
+    /// * `CryptoError::MalformedPublicKey`: if the public key obtained from the
+    ///   registry is malformed.
+    /// * `CryptoError::AlgorithmNotSupported`: if the public key obtained from
+    ///   the registry is for an unsupported algorithm.
+    /// * `CryptoError::SecretKeyNotFound`: if the signing key cannot be found
+    ///   in the secret key store.
+    /// * `CryptoError::MalformedSecretKey`: if the secret key is malformed.
     fn sign_multi(
         &self,
         message: &T,
@@ -279,7 +371,23 @@ pub trait MultiSigner<T: Signable> {
     ) -> CryptoResult<IndividualMultiSigOf<T>>;
 }
 
+/// A Crypto Component interface to verify and combine multi-signatures.
 pub trait MultiSigVerifier<T: Signable> {
+    /// Verifies an individual multi-signature.
+    ///
+    /// # Errors
+    /// * `CryptoError::RegistryClient`: if the registry cannot be accessed at
+    ///   `registry_version`.
+    /// * `CryptoError::PublicKeyNotFound`: if the public key cannot be found at
+    ///   the given `registry_version`.
+    /// * `CryptoError::MalformedSignature`: if the mutli-signature is
+    ///   malformed.
+    /// * `CryptoError::MalformedPublicKey`: if the public key obtained from the
+    ///   registry is malformed.
+    /// * `CryptoError::AlgorithmNotSupported`: if the public key obtained from
+    ///   the registry is for an unsupported algorithm.
+    /// * `CryptoError::SignatureVerification`: if the individual
+    ///   multi-signature could not be verified.
     fn verify_multi_sig_individual(
         &self,
         signature: &IndividualMultiSigOf<T>,
@@ -288,15 +396,60 @@ pub trait MultiSigVerifier<T: Signable> {
         registry_version: RegistryVersion,
     ) -> CryptoResult<()>;
 
-    // The registry version is not needed for the cryptographic scheme we use
-    // currently/initially. Yet it is a parameter so that we can switch to
-    // other schemes without affecting the API.
+    /// Combines individual multi-signature shares.
+    ///
+    /// The registry version is not needed for the cryptographic scheme we use
+    /// currently/initially. Yet it is a parameter so that we can switch to
+    /// other schemes without affecting the API.
+    ///
+    /// Note that the resulting combined signature will only be valid if all the
+    /// individual signatures are valid, i.e. `verify_multi_sig_individual`
+    /// returned `Ok`.
+    ///
+    /// the individual multi-signatures passed as `signatures` must have been
+    ///   verified using `verify_multi_sig_individual`.
+    ///
+    /// # Errors
+    /// * `CryptoError::RegistryClient`: if the registry cannot be accessed at
+    ///   `registry_version`.
+    /// * `CryptoError::PublicKeyNotFound`: if any of the public keys for the
+    ///   signatures cannot be found at the given `registry_version`.
+    /// * `CryptoError::MalformedSignature`: if any of the mutli-signatures is
+    ///   malformed.
+    /// * `CryptoError::MalformedPublicKey`: if any of the public keys obtained
+    ///   from the registry is malformed.
+    /// * `CryptoError::AlgorithmNotSupported`: if any of the public keys
+    ///   obtained from the registry or a signature is for an unsupported
+    ///   algorithm.
+    ///
+    /// # Panics
+    /// * if `signatures` is empty.
     fn combine_multi_sig_individuals(
         &self,
         signatures: BTreeMap<NodeId, IndividualMultiSigOf<T>>,
         registry_version: RegistryVersion,
     ) -> CryptoResult<CombinedMultiSigOf<T>>;
 
+    /// Verifies a combined multi-signature.
+    ///
+    /// # Errors
+    /// * `CryptoError::RegistryClient`: if the registry cannot be accessed at
+    ///   `registry_version`.
+    /// * `CryptoError::PublicKeyNotFound`: if any of the public keys for the
+    ///   'signers' cannot be found at the given `registry_version`.
+    /// * `CryptoError::MalformedPublicKey`: if any of the public keys obtained
+    ///   from the registry is malformed.
+    /// * `CryptoError::MalformedSignature`: if the combined `signature` is
+    ///   malformed.
+    /// * `CryptoError::AlgorithmNotSupported`: if any of the public keys
+    ///   obtained from the registry or the combined signature is for an
+    ///   unsupported algorithm. obtained from the registry or the combined
+    ///   signature is for an unsupported algorithm.
+    /// * `CryptoError::SignatureVerification`: if the combined multi-signature
+    ///   could not be verified.
+    ///
+    /// # Panics
+    /// * if `signers` are empty.
     fn verify_multi_sig_combined(
         &self,
         signature: &CombinedMultiSigOf<T>,
@@ -306,7 +459,10 @@ pub trait MultiSigVerifier<T: Signable> {
     ) -> CryptoResult<()>;
 }
 
+/// A Crypto Component interface to create threshold signature shares.
 pub trait ThresholdSigner<T: Signable> {
+    /// Creates a threshold signature share.
+    ///
     /// This method depends on key material for the respective DKG ID to be
     /// present in the secret key store (SKS) of the crypto component. To
     /// initialize this key material, the DKG transcript for the respective
@@ -326,12 +482,16 @@ pub trait ThresholdSigner<T: Signable> {
     fn sign_threshold(&self, message: &T, dkg_id: DkgId) -> CryptoResult<ThresholdSigShareOf<T>>;
 }
 
+/// A Crypto Component interface to verify threshold signatures.
+///
 /// The methods in this trait depend on key material for the respective DKG ID
 /// to be present in the cache of the crypto component. To initialize this key
 /// material, the DKG transcript for the respective DKG ID must be loaded by
 /// using the `load_transcript` method of the `DkgAlgorithm` trait (which is
 /// implemented by the crypto component).
 pub trait ThresholdSigVerifier<T: Signable> {
+    /// Verifies a threshold signature share.
+    ///
     /// See the trait's doc comment for applicable preconditions.
     ///
     /// # Errors
@@ -362,6 +522,8 @@ pub trait ThresholdSigVerifier<T: Signable> {
         signer: NodeId,
     ) -> CryptoResult<()>;
 
+    /// Combines the given threshold signature `shares`.
+    ///
     /// See the trait's doc comment for applicable preconditions.
     ///
     /// # Errors
@@ -382,6 +544,8 @@ pub trait ThresholdSigVerifier<T: Signable> {
         dkg_id: DkgId,
     ) -> CryptoResult<CombinedThresholdSigOf<T>>;
 
+    /// Verifies a combined threshold signature.
+    ///
     /// See the trait's doc comment for applicable preconditions.
     ///
     /// # Errors
@@ -400,6 +564,8 @@ pub trait ThresholdSigVerifier<T: Signable> {
     ) -> CryptoResult<()>;
 }
 
+/// A Crypto Component interface to verify threshold signatures by a subnet's
+/// public key.
 pub trait ThresholdSigVerifierByPublicKey<T: Signable> {
     /// Verifies a combined threshold signature using a subnet's public key.
     ///

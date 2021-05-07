@@ -1,3 +1,5 @@
+//! Types related to transcripts that should be retained during NI-DKG key
+//! deletion. See `NiDkgAlgorithm::retain_only_active_keys`.
 use super::*;
 use crate::crypto::threshold_sig::ni_dkg::errors::transcripts_to_retain_validation_error::TranscriptsToRetainValidationError;
 use std::collections::HashSet;
@@ -5,6 +7,9 @@ use std::collections::HashSet;
 #[cfg(test)]
 mod tests;
 
+/// Transcripts that should be retained when using
+/// `NiDkgAlgorithm::retain_only_active_keys`. See the invariants in
+/// `TranscriptsToRetain::new`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TranscriptsToRetain {
     // fields must be private to avoid invariant violations
@@ -12,6 +17,14 @@ pub struct TranscriptsToRetain {
 }
 
 impl TranscriptsToRetain {
+    /// Creates `TranscriptsToRetain`. See the errors listed below describing
+    /// invariants that are checked upon creation.
+    ///
+    /// # Errors
+    /// * `TranscriptsToRetainValidationError::NoLowTranscripts`: if there are
+    ///   no low transcripts.
+    /// * `TranscriptsToRetainValidationError::NoHighTranscripts`: if there are
+    ///   no high transcripts.
     pub fn new(
         transcripts: HashSet<NiDkgTranscript>,
     ) -> Result<Self, TranscriptsToRetainValidationError> {
@@ -21,6 +34,7 @@ impl TranscriptsToRetain {
         Ok(result)
     }
 
+    /// Returns the public keys corresponding to the transcripts.
     pub fn public_keys(&self) -> BTreeSet<CspPublicCoefficients> {
         self.transcripts.iter().map(|t| pub_coeffs(t)).collect()
     }
@@ -35,6 +49,8 @@ impl TranscriptsToRetain {
                       // there are at least two elements in `transcripts`.
     }
 
+    /// Returns a string representation of `TranscriptsToRetain`. Can be used
+    /// for logging.
     pub fn display_dkg_ids_and_registry_versions(&self) -> String {
         let mut display_msg = "TranscriptsToRetain: [ ".to_string();
         for transcript in &self.transcripts {

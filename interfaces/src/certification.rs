@@ -1,3 +1,4 @@
+//! The certification public interface.
 use crate::{
     consensus_pool::ConsensusPoolCache,
     validation::{ValidationError, ValidationResult},
@@ -36,8 +37,10 @@ use std::sync::{Arc, RwLock};
 /// purged.
 ///
 /// 4. For every (height, hash) pair with a full Certification, submit
-/// the pair (height, Certification) to the StateManager. (TODO: figure out,
-/// when the full shares should be purged from the certification pool)
+/// the pair (height, Certification) to the StateManager.
+///
+/// 5. Whenever the catch-up package height increases, remove all certification
+/// artifacts below this height.
 pub trait Certifier: Send {
     /// Should be called on every change of the certification pool and timeouts.
     fn on_state_change(
@@ -47,6 +50,7 @@ pub trait Certifier: Send {
     ) -> ChangeSet;
 }
 
+/// Trait containing methods related to gossiping.
 pub trait CertifierGossip: Send + Sync {
     /// Return the priority function for the Gossip protocol to optimize the
     /// artifact exchange.
@@ -60,7 +64,6 @@ pub trait CertifierGossip: Send + Sync {
     fn get_filter(&self) -> CertificationMessageFilter;
 }
 
-///
 /// Contains all possible change actions applicable to the certification pool.
 pub type ChangeSet = Vec<ChangeAction>;
 
@@ -71,6 +74,8 @@ pub enum ChangeAction {
     AddToValidated(CertificationMessage),
     /// Moves an artifact from the unvalidated to the validated section.
     MoveToValidated(CertificationMessage),
+    /// Removes an artifact from the unvalidated pool section.
+    RemoveFromUnvalidated(CertificationMessage),
     /// Removes all artifacts below the given height.
     RemoveAllBelow(Height),
     /// This action marks an invalid artifact, e.g. if the signature check

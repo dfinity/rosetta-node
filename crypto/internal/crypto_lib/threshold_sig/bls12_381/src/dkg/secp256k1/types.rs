@@ -3,8 +3,6 @@
 //! The types in this file correspond to the types used in the spec, including
 //! ephemeral (secp256k1) keys, dealings, complaints and transcripts.  Please
 //! see the specification for more details.
-//!
-//! Spec: https://docs.dfinity.systems/dfinity/spec/replica/ancillary/crypto/index.html#_csp_interface_for_distributed_key_generation
 
 mod advanced_ops;
 #[cfg(test)]
@@ -23,10 +21,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::btree_map::BTreeMap;
 use zeroize::Zeroize;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct EphemeralSecretKey(secp256k1::curve::Scalar);
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Zeroize)]
+#[derive(Copy, Clone, Eq, PartialEq, Zeroize)]
 pub struct EphemeralSecretKeyBytes(pub [u8; EphemeralSecretKeyBytes::SIZE]);
 ic_crypto_internal_types::derive_serde!(EphemeralSecretKeyBytes, EphemeralSecretKeyBytes::SIZE);
 impl EphemeralSecretKeyBytes {
@@ -92,7 +90,7 @@ pub struct CLibVerifiedDealingBytes {
 }
 
 pub type EncryptedShare = threshold::SecretKey;
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub struct EncryptedShareBytes(pub [u8; EncryptedShareBytes::SIZE]);
 ic_crypto_internal_types::derive_serde!(EncryptedShareBytes, EncryptedShareBytes::SIZE);
 impl EncryptedShareBytes {

@@ -1,5 +1,4 @@
 //! Implements the response methods of `DkgAlgorithm`.
-//! Spec: https://docs.dfinity.systems/dfinity/spec/replica/ancillary/crypto/index.html#_dkg
 
 use super::*;
 use crate::sign::threshold_sig::dkg::dealings_to_csp_dealings::DealingsToCspDealings;

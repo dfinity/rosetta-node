@@ -67,12 +67,12 @@ fn sharing_nizk_should_verify() {
         g2_gen: ECP2::generator(),
         public_keys: pk,
         public_coefficients: aa,
-        combined_rand: rr,
+        combined_randomizer: rr,
         combined_ciphertexts: cc,
     };
     let witness = SharingWitness {
-        rand_r: r,
-        rand_s: s,
+        scalar_r: r,
+        scalars_s: s,
     };
     let sharing_proof = prove_sharing(&instance, &witness, rng);
     assert_eq!(
@@ -93,13 +93,13 @@ fn sharing_prover_should_panic_on_empty_coefficients() {
         g2_gen: ECP2::generator(),
         public_keys: pk,
         public_coefficients: vec![],
-        combined_rand: rr,
+        combined_randomizer: rr,
         combined_ciphertexts: cc,
     };
 
     let witness = SharingWitness {
-        rand_r: r,
-        rand_s: s,
+        scalar_r: r,
+        scalars_s: s,
     };
     let _panic_one = prove_sharing(&instance, &witness, rng);
 }
@@ -115,13 +115,13 @@ fn sharing_prover_should_panic_on_invalid_instance() {
         g2_gen: ECP2::generator(),
         public_keys: pk,
         public_coefficients: aa,
-        combined_rand: rr,
+        combined_randomizer: rr,
         combined_ciphertexts: cc,
     };
 
     let witness = SharingWitness {
-        rand_r: r,
-        rand_s: s,
+        scalar_r: r,
+        scalars_s: s,
     };
     let _panic_one = prove_sharing(&instance, &witness, rng);
 }
@@ -136,7 +136,7 @@ fn sharing_nizk_should_fail_on_invalid_instance() {
         g2_gen: ECP2::generator(),
         public_keys: pk.clone(),
         public_coefficients: aa.clone(),
-        combined_rand: rr.clone(),
+        combined_randomizer: rr.clone(),
         combined_ciphertexts: cc.clone(),
     };
     pk.push(ECP::generator());
@@ -145,13 +145,13 @@ fn sharing_nizk_should_fail_on_invalid_instance() {
         g2_gen: ECP2::generator(),
         public_keys: pk,
         public_coefficients: aa,
-        combined_rand: rr,
+        combined_randomizer: rr,
         combined_ciphertexts: cc,
     };
 
     let witness = SharingWitness {
-        rand_r: r,
-        rand_s: s,
+        scalar_r: r,
+        scalars_s: s,
     };
     let _panic_one = prove_sharing(&instance, &witness, rng);
 
@@ -173,13 +173,13 @@ fn sharing_nizk_should_fail_on_invalid_proof() {
         g2_gen: ECP2::generator(),
         public_keys: pk,
         public_coefficients: aa,
-        combined_rand: rr,
+        combined_randomizer: rr,
         combined_ciphertexts: cc,
     };
 
     let witness = SharingWitness {
-        rand_r: r,
-        rand_s: s,
+        scalar_r: r,
+        scalars_s: s,
     };
     let _panic_one = prove_sharing(&instance, &witness, rng);
 
@@ -233,7 +233,7 @@ fn setup_chunking_instance_and_witness(rng: &mut impl RAND) -> (ChunkingInstance
         g1_gen: ECP::generator(),
         public_keys: y,
         ciphertext_chunks: chunk,
-        points_r: rr,
+        randomizers_r: rr,
     };
     let witness = ChunkingWitness {
         scalars_r: r,
@@ -265,7 +265,7 @@ fn chunking_prover_should_panic_on_empty_chunks() {
         g1_gen: instance.g1_gen,
         public_keys: instance.public_keys,
         ciphertext_chunks: vec![],
-        points_r: instance.points_r,
+        randomizers_r: instance.randomizers_r,
     };
 
     let _panic = prove_chunking(&invalid_instance, &witness, rng);
@@ -291,7 +291,7 @@ fn chunking_nizk_should_fail_on_invalid_instance() {
         g1_gen: instance.g1_gen.clone(),
         public_keys: instance.public_keys.clone(),
         ciphertext_chunks: instance.ciphertext_chunks.clone(),
-        points_r: instance.points_r.clone(),
+        randomizers_r: instance.randomizers_r.clone(),
     };
     instance.public_keys.push(ECP::generator());
     let invalid_instance = instance;

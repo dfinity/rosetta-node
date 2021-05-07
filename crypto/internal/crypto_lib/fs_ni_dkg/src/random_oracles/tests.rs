@@ -8,6 +8,7 @@ struct StructToBeHashed {
     scalar: BIG,
     bytes: Vec<u8>,
 }
+
 impl From<&StructToBeHashed> for HashableMap {
     fn from(some_struct: &StructToBeHashed) -> Self {
         let mut map = HashableMap::new();
@@ -44,32 +45,13 @@ impl UniqueHash for StructToBeHashed {
 mod unique_hashing {
     use super::*;
 
-    // UniqueHash of the string "This is a string" using domain separator
-    // "ic-random-oracle-string".
-    const STRING_HASH_HEX: &str =
-        "87f7f36651ed7a2d776576a004e1e0f172cc0680e0cb83edfec73840a2c31107";
-    // UniqueHash of the integer 42 using domain separator
-    // "ic-random-oracle-integer".
-    const INTEGER_HASH_HEX: &str =
-        "f0496c68b3a9652a454e53dc157f70567e49232df7ae2b0bc95d0e28a41abe1a";
-    // UniqueHash of the integer 1_000_000 using domain separator
-    // "ic-random-oracle-integer".
-    const BYTES_HASH_HEX: &str = "1dad75ea20c2f7f58939a1f905148f3554bf24c14528ff6cd0527dffbd10e431";
-    // UniqueHash of the generator of G1 of BLS12_381 using domain separator
-    // "ic-random-oracle-bls12381-scalar".
-    const SCALAR_HASH_HEX: &str =
-        "715a3ba63746ea8ff3d76fecad523406e29c3fdcf97c0cfe526199af1465f9ae";
-    // UniqueHash of the generator of G1 of BLS12_381 using domain separator
-    // "ic-random-oracle-bls12381-g1".
-    const ECP_POINT_HASH_HEX: &str =
-        "39335810030283da83504357ac5ef1e53d13343cc854df984f4b451934ef0f05";
-    // UniqueHash of the generator of G1 of BLS12_381 using domain separator
-    // "ic-random-oracle-bls12381-g2".
-    const ECP2_POINT_HASH_HEX: &str =
-        "9f0811beced7640b5dc6b4c08676bb4897b2d6171bf13b4738ab14a252c66057";
-
     #[test]
     fn should_hash_strings_correctly() {
+        // UniqueHash of the string "This is a string" using domain separator
+        // "ic-random-oracle-string".
+        const STRING_HASH_HEX: &str =
+            "87f7f36651ed7a2d776576a004e1e0f172cc0680e0cb83edfec73840a2c31107";
+
         let string = String::from("This is a string");
         let hash = string.unique_hash();
 
@@ -92,6 +74,11 @@ mod unique_hashing {
 
     #[test]
     fn should_hash_integers_correctly() {
+        // UniqueHash of the integer 42 using domain separator
+        // "ic-random-oracle-integer".
+        const INTEGER_HASH_HEX: &str =
+            "f0496c68b3a9652a454e53dc157f70567e49232df7ae2b0bc95d0e28a41abe1a";
+
         let int = 42usize;
         let hash = int.unique_hash();
 
@@ -114,6 +101,11 @@ mod unique_hashing {
 
     #[test]
     fn should_hash_byte_vectors_correctly() {
+        // UniqueHash of the bytes [1u8, 2u8, 3u8, 4u8] using domain separator
+        // "ic-random-oracle-byte-array".
+        const BYTES_HASH_HEX: &str =
+            "1dad75ea20c2f7f58939a1f905148f3554bf24c14528ff6cd0527dffbd10e431";
+
         let bytes = vec![1u8, 2u8, 3u8, 4u8];
         let hash = bytes.unique_hash();
 
@@ -125,6 +117,11 @@ mod unique_hashing {
 
     #[test]
     fn should_hash_scalars_correctly() {
+        // UniqueHash of the generator of the scalar 1_000_000 using domain separator
+        // "ic-random-oracle-bls12381-scalar".
+        const SCALAR_HASH_HEX: &str =
+            "715a3ba63746ea8ff3d76fecad523406e29c3fdcf97c0cfe526199af1465f9ae";
+
         let point = BIG::new_int(1_000_000);
         let hash = point.unique_hash();
 
@@ -136,6 +133,11 @@ mod unique_hashing {
 
     #[test]
     fn should_hash_ecp_points_correctly() {
+        // UniqueHash of the generator of G1 of BLS12_381 using domain separator
+        // "ic-random-oracle-bls12381-g1".
+        const ECP_POINT_HASH_HEX: &str =
+            "39335810030283da83504357ac5ef1e53d13343cc854df984f4b451934ef0f05";
+
         let point = ECP::generator();
         let hash = point.unique_hash();
 
@@ -147,6 +149,11 @@ mod unique_hashing {
 
     #[test]
     fn should_hash_ecp2_points_correctly() {
+        // UniqueHash of the generator of G2 of BLS12_381 using domain separator
+        // "ic-random-oracle-bls12381-g2".
+        const ECP2_POINT_HASH_HEX: &str =
+            "9f0811beced7640b5dc6b4c08676bb4897b2d6171bf13b4738ab14a252c66057";
+
         let point = ECP2::generator();
         let hash = point.unique_hash();
 
@@ -228,44 +235,78 @@ mod unique_hashing {
             scalar: BIG::new_int(36),
             bytes: vec![1, 2, 3, 4],
         };
-        let hash_1 = HashableMap::from(&hashable_struct).unique_hash();
-        let hash_2 = hashable_struct.unique_hash();
 
-        assert_eq!(hash_1, hash_2);
+        let hash = hashable_struct.unique_hash();
+
+        let mut map = HashableMap::new();
+        map.insert("point".to_string(), Box::new(hashable_struct.point));
+        map.insert("string".to_string(), Box::new(hashable_struct.string));
+        map.insert("integer".to_string(), Box::new(hashable_struct.integer));
+        map.insert("scalar".to_string(), Box::new(hashable_struct.scalar));
+        map.insert("bytes".to_string(), Box::new(hashable_struct.bytes));
+
+        assert_eq!(hash, map.unique_hash());
     }
 }
 
 mod random_oracles {
     use super::*;
-    const DOMAIN_RO_1: &str = "ic-random-oracle-1";
-    const DOMAIN_RO_2: &str = "ic-random-oracle-2";
+    use proptest::prelude::*;
 
-    #[test]
-    fn should_return_distinct_hashes_on_different_domains() {
-        let hashable_struct = StructToBeHashed {
-            point: ECP::generator(),
-            string: "some string".to_string(),
-            integer: 4usize,
-            scalar: BIG::new_int(36),
-            bytes: vec![1, 2, 3, 4],
-        };
-        let hash_1 = random_oracle(DOMAIN_RO_1, &hashable_struct);
-        let hash_2 = random_oracle(DOMAIN_RO_2, &hashable_struct);
-        assert_ne!(hash_1, hash_2);
-    }
+    proptest! {
+        #[test]
+        fn should_return_distinct_hashes_on_different_domains(domain_1: String, domain_2: String) {
+            prop_assume!(domain_1.len()<100);
+            prop_assume!(domain_2.len()<100);
+            prop_assume!(domain_1!=domain_2);
 
-    #[test]
-    fn should_return_distinct_scalars_on_different_domains() {
-        let hashable_struct = StructToBeHashed {
-            point: ECP::generator(),
-            string: "some string".to_string(),
-            integer: 4usize,
-            scalar: BIG::new_int(36),
-            bytes: vec![1, 2, 3, 4],
-        };
-        let hash_1 = random_oracle_to_scalar(DOMAIN_RO_1, &hashable_struct);
-        let hash_2 = random_oracle_to_scalar(DOMAIN_RO_2, &hashable_struct);
-        let result = BIG::comp(&hash_1, &hash_2);
-        assert_ne!(result, 0);
+            let hashable_struct = StructToBeHashed {
+                point: ECP::generator(),
+                string: "some string".to_string(),
+                integer: 4usize,
+                scalar: BIG::new_int(36),
+                bytes: vec![1, 2, 3, 4],
+            };
+            let hash_1 = random_oracle(&domain_1, &hashable_struct);
+            let hash_2 = random_oracle(&domain_2, &hashable_struct);
+            assert_ne!(hash_1, hash_2);
+        }
+
+        #[test]
+        fn should_return_distinct_scalars_on_different_domains(domain_1: String, domain_2: String) {
+            prop_assume!(domain_1.len()<100);
+            prop_assume!(domain_2.len()<100);
+            prop_assume!(domain_1!=domain_2);
+
+            let hashable_struct = StructToBeHashed {
+                point: ECP::generator(),
+                string: "some string".to_string(),
+                integer: 4usize,
+                scalar: BIG::new_int(36),
+                bytes: vec![1, 2, 3, 4],
+            };
+            let hash_1 = random_oracle_to_scalar(&domain_1, &hashable_struct);
+            let hash_2 = random_oracle_to_scalar(&domain_2, &hashable_struct);
+            let result = BIG::comp(&hash_1, &hash_2);
+            assert_ne!(result, 0);
+        }
+
+        #[test]
+        fn should_return_distinct_ecp_points_on_different_domains(domain_1: String, domain_2: String) {
+            prop_assume!(domain_1.len()<100);
+            prop_assume!(domain_2.len()<100);
+            prop_assume!(domain_1!=domain_2);
+
+            let hashable_struct = StructToBeHashed {
+                point: ECP::generator(),
+                string: "some string".to_string(),
+                integer: 4usize,
+                scalar: BIG::new_int(36),
+                bytes: vec![1, 2, 3, 4],
+            };
+            let hash_1 = random_oracle_to_miracl_g1(&domain_1, &hashable_struct);
+            let hash_2 = random_oracle_to_miracl_g1(&domain_2, &hashable_struct);
+            assert_eq!(hash_1.equals(&hash_2), false);
+        }
     }
 }

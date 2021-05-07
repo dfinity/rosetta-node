@@ -8,8 +8,8 @@ use ic_crypto_internal_types::sign::threshold_sig::ni_dkg::{
 use ic_types::crypto::threshold_sig::ni_dkg::config::receivers::NiDkgReceivers;
 use ic_types::crypto::AlgorithmId;
 use utils::{
-    csp_encryption_pubkey, epoch, index_in_resharing_committee_or_panic,
-    DkgEncPubkeyRegistryQueryError,
+    csp_encryption_pubkey, dealer_index_in_dealers_or_panic, epoch,
+    index_in_resharing_committee_or_panic, DkgEncPubkeyRegistryQueryError,
 };
 pub use verification::verify_dealing;
 
@@ -70,7 +70,12 @@ mod creation {
                 transcript,
             )
         } else {
-            csp_create_dealing(ni_dkg_csp_client, config, receiver_encryption_pubkeys)
+            csp_create_dealing(
+                self_node_id,
+                ni_dkg_csp_client,
+                config,
+                receiver_encryption_pubkeys,
+            )
         }
     }
 
@@ -92,6 +97,7 @@ mod creation {
         Ok(ni_dkg_csp_client.create_resharing_dealing(
             AlgorithmId::NiDkg_Groth20_Bls12_381,
             config.dkg_id(),
+            index_in_resharing_committee_or_panic(self_node_id, &transcript.committee),
             config.threshold().get(),
             epoch(config.registry_version()),
             receiver_encryption_pubkeys,
@@ -100,6 +106,7 @@ mod creation {
     }
 
     fn csp_create_dealing<C: NiDkgCspClient>(
+        self_node_id: &NodeId,
         ni_dkg_csp_client: &C,
         config: &NiDkgConfig,
         receiver_encryption_pubkeys: BTreeMap<NodeIndex, CspFsEncryptionPublicKey>,
@@ -107,6 +114,7 @@ mod creation {
         Ok(ni_dkg_csp_client.create_dealing(
             AlgorithmId::NiDkg_Groth20_Bls12_381,
             config.dkg_id(),
+            dealer_index_in_dealers_or_panic(config.dealers(), *self_node_id),
             config.threshold().get(),
             epoch(config.registry_version()),
             receiver_encryption_pubkeys,
@@ -164,17 +172,18 @@ mod verification {
             Ok(ni_dkg_csp_client.verify_resharing_dealing(
                 AlgorithmId::NiDkg_Groth20_Bls12_381,
                 config.dkg_id(),
+                index_in_resharing_committee_or_panic(dealer, &transcript.committee),
                 config.threshold().get(),
                 epoch,
                 receiver_encryption_pubkeys,
                 csp_dealing,
                 CspPublicCoefficients::from(transcript),
-                index_in_resharing_committee_or_panic(dealer, &transcript.committee),
             )?)
         } else {
             Ok(ni_dkg_csp_client.verify_dealing(
                 AlgorithmId::NiDkg_Groth20_Bls12_381,
                 config.dkg_id(),
+                dealer_index_in_dealers_or_panic(config.dealers(), *dealer),
                 config.threshold().get(),
                 epoch,
                 receiver_encryption_pubkeys,

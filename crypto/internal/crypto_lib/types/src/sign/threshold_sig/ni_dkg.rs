@@ -1,7 +1,5 @@
 //! Non-interactive DKG types.
-pub use crate::encrypt::forward_secure::{
-    CspFsEncryptionPok, CspFsEncryptionPublicKey, FsEncryptionPublicKey,
-};
+pub use crate::encrypt::forward_secure::{CspFsEncryptionPop, CspFsEncryptionPublicKey};
 use crate::sign::threshold_sig::public_coefficients::CspPublicCoefficients;
 use phantom_newtype::AmountOf;
 use serde::{Deserialize, Serialize};
@@ -115,7 +113,7 @@ pub mod ni_dkg_groth20_bls12_381 {
     pub use super::Epoch;
     pub use crate::curves::bls12_381::{Fr, G1, G2};
     pub use crate::encrypt::forward_secure::groth20_bls12_381::{
-        Chunk, FsEncryptionCiphertext, FsEncryptionPlaintext, FsEncryptionPok,
+        Chunk, FsEncryptionCiphertext, FsEncryptionPlaintext, FsEncryptionPop,
         FsEncryptionPublicKey, NUM_CHUNKS,
     };
     pub use crate::sign::eddsa::ed25519::{PublicKey, Signature};

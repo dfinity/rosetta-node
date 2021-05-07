@@ -21,7 +21,13 @@ mod tests;
 mod acceptor {
     use super::*;
 
-    /// Builds the server side TLS acceptor
+    /// Builds a TLS acceptor to establish TLS connections on the server side.
+    ///
+    /// For the exact configuration details, see the documentation of the
+    /// `TlsHandshake` trait in the `ic-crypto-tls-interfaces` crate.
+    ///
+    /// # Errors
+    /// * `CreateTlsAcceptorError` if the creation of the acceptor failed
     pub fn tls_acceptor(
         private_key: &PKey<Private>,
         server_cert: &X509,
@@ -33,7 +39,7 @@ mod acceptor {
         restrict_tls_version_and_cipher_suites_and_sig_algs(&mut builder);
         allow_but_dont_enforce_client_authentication(&mut builder);
         set_peer_verification_cert_store(trusted_client_certs, &mut builder)?;
-        set_most_restrictive_certificate_verification_depth(&mut builder);
+        set_maximum_number_of_intermediate_ca_certificates(1, &mut builder);
         set_private_key(private_key, server_cert, &mut builder)?;
         set_certificate(server_cert, &mut builder)?;
         check_private_key(server_cert, &mut builder)?;
@@ -59,6 +65,7 @@ mod acceptor {
         builder.set_verify(SslVerifyMode::PEER);
     }
 
+    /// A TLS acceptor couldn't be created.
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct CreateTlsAcceptorError {
         pub description: String,
@@ -80,7 +87,13 @@ mod acceptor {
 mod connector {
     use super::*;
 
-    /// Builds the client side TLS connector
+    /// Builds a TLS connector to establish TLS connections on the client side.
+    ///
+    /// For the exact configuration details, see the documentation of the
+    /// `TlsHandshake` trait in the `ic-crypto-tls-interfaces` crate.
+    ///
+    /// # Errors
+    /// * `CreateTlsConnectorError` if the creation of the connector failed
     pub fn tls_connector(
         private_key: &PKey<Private>,
         client_cert: &X509,
@@ -115,6 +128,7 @@ mod connector {
         })
     }
 
+    /// A TLS connector couldn't be created.
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct CreateTlsConnectorError {
         pub description: String,
@@ -196,12 +210,19 @@ mod context {
         })
     }
 
-    /// Allowing a chain of length 2 is the most restrictive setting.
-    /// Restricting as much as possible is fine because all certificates we use
-    /// are self-signed.
     pub fn set_most_restrictive_certificate_verification_depth(builder: &mut SslContextBuilder) {
-        // supplying a value of 0 actually restricts the chain length to 2, see the OpenSSL docs: https://www.openssl.org/docs/man1.1.0/man3/SSL_CTX_set_verify_depth.html
-        builder.set_verify_depth(0);
+        set_maximum_number_of_intermediate_ca_certificates(0, builder);
+    }
+
+    pub fn set_maximum_number_of_intermediate_ca_certificates(
+        max_number_of_intermediate_ca_certificates: u32,
+        builder: &mut SslContextBuilder,
+    ) {
+        // The depth supplied to `set_verify_depth` represents the number of allowed
+        // intermediate CA certificates because neither the leaf (aka end-entity) nor
+        // the root certificate (aka trust-anchor) count against the depth. See the
+        // OpenSSL docs: https://www.openssl.org/docs/man1.1.0/man3/SSL_CTX_set_verify_depth.html
+        builder.set_verify_depth(max_number_of_intermediate_ca_certificates);
     }
 
     pub fn set_peer_verification_cert_store(

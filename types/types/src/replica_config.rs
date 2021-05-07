@@ -1,9 +1,11 @@
+//! Defines the [`ReplicaConfig`].
 use crate::{NodeId, PrincipalId, SubnetId};
 use serde::{Deserialize, Serialize};
 
 pub const NODE_INDEX_DEFAULT: u64 = 0;
 pub const SUBNET_ID_DEFAULT: u64 = 0;
 
+/// The replica config.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ReplicaConfig {
     pub node_id: NodeId,

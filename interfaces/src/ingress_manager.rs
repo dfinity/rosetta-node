@@ -1,3 +1,4 @@
+//! The ingress manager public interface.
 use crate::{
     execution_environment::IngressHistoryError,
     ingress_pool::{ChangeSet, IngressPool, IngressPoolSelect},
@@ -39,7 +40,7 @@ impl IngressSetQuery for HashSet<IngressMessageId> {
     }
 }
 
-/// All possible errors returned by the Ingress Selector.
+/// Permanent errors returned by the Ingress Selector.
 #[derive(Debug)]
 pub enum IngressPermanentError {
     CryptoError(CryptoError),
@@ -48,14 +49,17 @@ pub enum IngressPermanentError {
     IngressBucketError(MessageId),
     IngressHistoryError(IngressHistoryError),
     IngressPayloadError(IngressPayloadError),
-    IngressExpiryOutOfRange(MessageId, Time, std::ops::RangeInclusive<Time>),
+    IngressExpired(MessageId, String),
     IngressMessageTooBig(usize, usize),
     IngressPayloadTooBig(usize, usize),
+    IngressPayloadTooManyMessages(usize, usize),
     DuplicatedIngressMessage(MessageId),
     InsufficientCycles(CanisterId),
     CanisterNotFound(CanisterId),
+    InvalidManagementMessage,
 }
 
+/// Transient errors returned by the Ingress Selector.
 #[derive(Debug)]
 pub enum IngressTransientError {
     CryptoError(CryptoError),
@@ -89,18 +93,12 @@ impl<P> From<IngressTransientError> for ValidationError<P, IngressTransientError
     }
 }
 
-/// IngressManager component provides two interfaces.
+/// Processes Ingress messages received from peers or HttpHandler.
 ///
-/// 1. IngressHandler which processes Ingress messages received from peers or
-/// HttpHandler. Its main role is to determine whether the message should be
-/// relayed to other nodes or not and to remove expired messages. This interface
-/// is used by ArtifactManager when a new ingress message is inserted in the
-/// unvalidated pool.
-///
-/// 2. IngressSelector which is used by Consensus to query the
-/// IngressPool in order to build the payload. It also provides a function to
-/// validate a payload.
-
+/// Its main role is to determine whether the message should be relayed to other
+/// nodes or not and to remove expired messages. This interface is used by
+/// ArtifactManager when a new ingress message is inserted in the unvalidated
+/// pool.
 pub trait IngressHandler {
     /// Inspect the input [IngressPool] to build a [ChangeSet] of
     /// actions to be executed. The caller is then expected to apply the
@@ -116,6 +114,7 @@ pub trait IngressHandler {
     fn on_state_change(&self, pool: &dyn IngressPool) -> ChangeSet;
 }
 
+/// A component used by Consensus to build and validate a payload.
 pub trait IngressSelector: Send + Sync {
     /// Returns a new ingress payload containing valid Signed Ingress Messages
     /// to Consensus.

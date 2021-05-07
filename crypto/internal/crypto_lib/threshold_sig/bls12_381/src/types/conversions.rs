@@ -12,7 +12,7 @@ use ic_crypto_internal_bls12381_common::{
     fr_from_bytes, fr_to_bytes, g1_from_bytes, g1_to_bytes, g2_from_bytes, g2_to_bytes,
 };
 use ic_crypto_internal_types::sign::threshold_sig::public_key::bls12_381::{
-    PublicKeyBytes, ThresholdSigPublicKeyError,
+    PublicKeyBytes, ThresholdSigPublicKeyBytesConversionError,
 };
 use ic_types::crypto::{AlgorithmId, CryptoError};
 use pairing::bls12_381::{Fr, FrRepr};
@@ -34,10 +34,10 @@ impl From<PublicKey> for PublicKeyBytes {
 }
 
 impl TryFrom<&PublicKeyBytes> for PublicKey {
-    type Error = ThresholdSigPublicKeyError;
+    type Error = ThresholdSigPublicKeyBytesConversionError;
     fn try_from(bytes: &PublicKeyBytes) -> Result<Self, Self::Error> {
         g2_from_bytes(&bytes.0)
-            .map_err(|_| ThresholdSigPublicKeyError::Malformed {
+            .map_err(|_| ThresholdSigPublicKeyBytesConversionError::Malformed {
                 key_bytes: Some(bytes.0.to_vec()),
                 internal_error: "Invalid public key".to_string(),
             })

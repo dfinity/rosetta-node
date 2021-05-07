@@ -6,6 +6,9 @@ pub mod ed25519 {
     use std::fmt;
     use std::hash::{Hash, Hasher};
 
+    #[cfg(test)]
+    mod tests;
+
     #[derive(Copy, Clone, Eq, PartialEq, Hash)]
     pub struct PublicKey(pub [u8; PublicKey::SIZE]);
     crate::derive_serde!(PublicKey, PublicKey::SIZE);
@@ -46,14 +49,15 @@ pub mod ed25519 {
     impl SecretKey {
         pub const SIZE: usize = 32;
 
-        /// The bytes of a public key, in raw encoding.
+        /// The bytes of a secret key, in raw encoding.
         pub fn as_bytes(&self) -> &[u8] {
             &self.0[..]
         }
     }
+
     impl fmt::Debug for SecretKey {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "SecretKey(0x{})", hex::encode(&self.0[..]))
+            write!(f, "REDACTED")
         }
     }
 

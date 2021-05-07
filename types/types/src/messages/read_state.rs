@@ -8,6 +8,7 @@ use ic_crypto_tree_hash::Path;
 use maplit::btreemap;
 use std::convert::TryFrom;
 
+/// A `read_state` request sent from the user.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReadState {
     pub source: UserId,
@@ -17,7 +18,7 @@ pub struct ReadState {
 }
 
 impl ReadState {
-    // TODO: Avoid the duplication between this method and the one in
+    // TODO(EXC-237): Avoid the duplication between this method and the one in
     // `HttpReadState`.
     pub fn id(&self) -> MessageId {
         use RawHttpRequestVal::*;

@@ -23,7 +23,7 @@ message NodeId {
 	PrincipalId principal_id = 1;
 }
 
-// Non-interactive DKG ID
+// A non-interactive distributed key generation (NI-DKG) ID.
 message NiDkgId {
 	reserved "receiver_subnet";
 	reserved 3; // this is from receiver_subnet consisting of bytes
@@ -33,7 +33,7 @@ message NiDkgId {
 	google.protobuf.BytesValue remote_target_id = 5;
 }
 
-// Non-interactive DKG tag
+// A non-interactive distributed key generation (NI-DKG) tag.
 enum NiDkgTag {
 	NI_DKG_TAG_UNSPECIFIED = 0;
 	NI_DKG_TAG_LOW_THRESHOLD = 1;

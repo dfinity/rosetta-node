@@ -14,9 +14,6 @@ use rand::{CryptoRng, Rng};
 #[cfg(test)]
 mod tests;
 
-#[cfg(test)]
-mod ecdsa_wycheproof_tests;
-
 impl<R: Rng + CryptoRng, S: SecretKeyStore> CspSigner for Csp<R, S> {
     fn sign(
         &self,
@@ -53,10 +50,7 @@ impl<R: Rng + CryptoRng, S: SecretKeyStore> CspSigner for Csp<R, S> {
                 }),
             },
             _ => Err(CryptoError::InvalidArgument {
-                message: format!(
-                    "Cannot generate key pair for unsupported algorithm: {:?}",
-                    algorithm_id
-                ),
+                message: format!("Cannot sign with unsupported algorithm: {:?}", algorithm_id),
             }),
         }
     }
@@ -187,9 +181,7 @@ impl<R: Rng + CryptoRng, S: SecretKeyStore> CspSigner for Csp<R, S> {
                             algorithm: algorithm_id,
                             public_key_bytes: signer.as_ref().to_vec(),
                             sig_bytes: signature.0.to_vec(),
-                            internal_error:
-                                "Signature not of type MultiBls12_381_Signature::Individual"
-                                    .to_string(),
+                            internal_error: "Public key not of type MultiBls12_381".to_string(),
                         }),
                     })
                     .collect();

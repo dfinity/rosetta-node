@@ -1,6 +1,6 @@
 [package]
 name = "ic-crypto-utils-basic-sig"
-version = "0.1.0"
+version = "0.8.0"
 edition = "2018"
 description = "Conversion utils for keys of basic signatures"
 

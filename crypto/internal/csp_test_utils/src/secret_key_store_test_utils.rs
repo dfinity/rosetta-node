@@ -1,3 +1,5 @@
+//! Testing utilities for the Secret Key Store
+
 // Import Note:
 // * The mock and temp secret key stores are used in the IDKM.
 // * The tests use CSP-private methods on secret keys.
@@ -13,6 +15,7 @@ use secret_key_store::{Scope, SecretKeyStore, SecretKeyStoreError};
 use tempfile::TempDir;
 
 mock! {
+    /// Mock SecretKeyStore object for testing interactions
     pub SecretKeyStore {}
 
     pub trait SecretKeyStore {
@@ -34,6 +37,7 @@ pub struct TempSecretKeyStore {
 }
 
 impl TempSecretKeyStore {
+    /// Create a new TempSecretKeyStore in a newly created temporary directory.
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         let tempdir = mk_temp_dir_with_permissions(0o700);

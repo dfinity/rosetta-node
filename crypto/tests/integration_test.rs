@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use crate::keygen_utils::{add_keys_to_registry, TestKeygenCrypto};
 use ic_config::crypto::CryptoConfig;
 use ic_crypto::utils::{
@@ -327,14 +328,14 @@ fn should_fail_check_keys_with_registry_if_committee_member_secret_key_is_missin
 
 #[test]
 fn should_fail_check_keys_with_registry_if_dkg_dealing_encryption_secret_key_is_missing() {
-    let dkg_dealing_enc_public_key_with_valid_pok_but_without_secret_part_in_store =
+    let dkg_dealing_enc_public_key_with_valid_pop_but_without_secret_part_in_store =
         well_formed_dkg_dealing_encryption_pk();
     let crypto = TestKeygenCrypto::builder()
         .with_node_keys_to_generate(NodeKeysToGenerate::all())
         .add_generated_node_signing_key_to_registry()
         .add_generated_committee_signing_key_to_registry()
         .with_dkg_dealing_enc_key_in_registry(
-            dkg_dealing_enc_public_key_with_valid_pok_but_without_secret_part_in_store,
+            dkg_dealing_enc_public_key_with_valid_pop_but_without_secret_part_in_store,
         )
         .add_generated_tls_cert_to_registry()
         .build(NODE_ID, REG_V1);
@@ -380,18 +381,18 @@ fn should_fail_check_keys_with_registry_if_dkg_dealing_encryption_pubkey_is_malf
 }
 
 #[test]
-fn should_fail_check_keys_with_registry_if_dkg_dealing_encryption_pok_is_malformed() {
-    let dkg_dealing_encryption_pubkey_with_malformed_pok = PublicKey {
+fn should_fail_check_keys_with_registry_if_dkg_dealing_encryption_pop_is_malformed() {
+    let dkg_dealing_encryption_pubkey_with_malformed_pop = PublicKey {
         version: 0,
         algorithm: AlgorithmId::Groth20_Bls12_381 as i32,
-        proof_data: Some(b"malformed pok".to_vec()),
-        key_value: b"irrelevant because pok validity is checked before pubkey validity".to_vec(),
+        proof_data: Some(b"malformed pop".to_vec()),
+        key_value: b"irrelevant because pop validity is checked before pubkey validity".to_vec(),
     };
     let crypto = TestKeygenCrypto::builder()
         .with_node_keys_to_generate(NodeKeysToGenerate::all())
         .add_generated_node_signing_key_to_registry()
         .add_generated_committee_signing_key_to_registry()
-        .with_dkg_dealing_enc_key_in_registry(dkg_dealing_encryption_pubkey_with_malformed_pok)
+        .with_dkg_dealing_enc_key_in_registry(dkg_dealing_encryption_pubkey_with_malformed_pop)
         .add_generated_tls_cert_to_registry()
         .build(NODE_ID, REG_V1);
 
@@ -402,7 +403,7 @@ fn should_fail_check_keys_with_registry_if_dkg_dealing_encryption_pok_is_malform
         CryptoError::MalformedPublicKey {
             algorithm: AlgorithmId::Groth20_Bls12_381,
             key_bytes: None,
-            internal_error: "MalformedPok { pok_bytes: [109, 97, 108, 102, 111, 114, 109, 101, 100, 32, 112, 111, 107], internal_error: \"EOF while parsing a value at offset 13\" }".to_string()
+            internal_error: "MalformedPop { pop_bytes: [109, 97, 108, 102, 111, 114, 109, 101, 100, 32, 112, 111, 112], internal_error: \"EOF while parsing a value at offset 13\" }".to_string()
         }
     );
 }

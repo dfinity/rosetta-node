@@ -20,7 +20,7 @@ pub struct UserQuery {
 }
 
 impl UserQuery {
-    // TODO: Avoid the duplication between this method and the one in
+    // TODO(EXC-235): Avoid the duplication between this method and the one in
     // `HttpUserQuery`.
     pub fn id(&self) -> MessageId {
         use RawHttpRequestVal::*;

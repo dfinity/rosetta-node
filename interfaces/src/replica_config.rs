@@ -1,3 +1,4 @@
+//! The replica config store.
 use ic_types::replica_config::ReplicaConfig;
 use ic_types::NodeId;
 use serde::{Deserialize, Serialize};
@@ -22,6 +23,7 @@ impl fmt::Display for ReplicaConfigStoreError {
 
 impl std::error::Error for ReplicaConfigStoreError {}
 
+/// An API for storing a `ReplicaConfig`.
 pub trait ReplicaConfigStore {
     /// Note: This is a write once interface.  Write twice and this will return
     /// an error.

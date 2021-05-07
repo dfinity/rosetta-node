@@ -5,10 +5,11 @@ use crate::types::{
     CombinedPublicKey, CombinedSignature, IndividualSignature, Pop, PublicKey, PublicKeyBytes,
     SecretKey,
 };
+use ff::Field;
 use group::CurveProjective;
 use ic_crypto_internal_bls12381_common as bls;
 use ic_crypto_internal_types::context::{Context, DomainSeparationContext};
-use pairing::bls12_381::{Bls12, FrRepr, G1, G2};
+use pairing::bls12_381::{Bls12, Fr, FrRepr, G1, G2};
 use pairing::Engine;
 use rand::{CryptoRng, Rng};
 
@@ -37,21 +38,30 @@ pub fn hash_public_key_to_g1(public_key: &[u8]) -> G1 {
     )
 }
 
-pub fn keypair_from_seed(seed: [u64; 4]) -> Option<(SecretKey, PublicKey)> {
-    let secret_key: FrRepr = FrRepr(seed);
-    let public_key: G2 = bls::scalar_multiply(G2::one(), secret_key);
-    if public_key.is_zero() {
-        None
-    } else {
-        Some((secret_key, public_key))
-    }
-}
-pub fn keypair_from_rng<R: Rng + CryptoRng>(rng: &mut R) -> (SecretKey, PublicKey) {
-    loop {
-        if let Some(pair) = keypair_from_seed(rng.gen::<[u64; 4]>()) {
-            return pair;
+// Once upon a time we had placed the `seed` values directly into the output
+// `FrRepr` value, but this places a large burden on the caller, who must
+// guarantee `seed` represents a number strictly less than the group order, or
+// risk generating from a non-uniform distribution. Now, we use `seed` to seed a
+// RNG, then use this to generate a uniform random element.
+#[cfg(test)]
+pub fn keypair_from_seed(seed: [u64; 4]) -> (SecretKey, PublicKey) {
+    use rand_chacha::ChaCha20Rng;
+    use rand_core::SeedableRng;
+    let mut seed_as_u8: [u8; 32] = [0; 32];
+    for i in 0..4 {
+        let bs = seed[i].to_be_bytes();
+        for j in 0..8 {
+            seed_as_u8[i * 8 + j] = bs[j];
         }
     }
+    keypair_from_rng(&mut ChaCha20Rng::from_seed(seed_as_u8))
+}
+
+pub fn keypair_from_rng<R: Rng + CryptoRng>(rng: &mut R) -> (SecretKey, PublicKey) {
+    // Fr::random() uses rejection sampling to ensure a uniform distribution.
+    let secret_key: FrRepr = FrRepr::from(Fr::random(rng));
+    let public_key: G2 = bls::scalar_multiply(G2::one(), secret_key);
+    (secret_key, public_key)
 }
 
 pub fn sign_point(point: G1, secret_key: SecretKey) -> IndividualSignature {

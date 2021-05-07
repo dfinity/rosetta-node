@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Tests for combined forward secure encryption and ZK proofs
 #![allow(clippy::many_single_char_names)]
 
@@ -8,6 +9,7 @@ use dkg::forward_secure::*;
 use dkg::nizk_chunking::*;
 use dkg::nizk_sharing::*;
 use dkg::utils::RAND_ChaCha20;
+use ic_crypto_internal_types::sign::threshold_sig::ni_dkg::Epoch;
 use miracl_core::bls12381::big::BIG;
 use miracl_core::bls12381::ecp::ECP;
 use miracl_core::bls12381::ecp2::ECP2;
@@ -17,24 +19,28 @@ use miracl_core::rand::RAND;
 #[test]
 fn potpourri() {
     let sys = &mk_sys_params();
-    let rng = &mut RAND_ChaCha20::new([42; 32]);
+    let rng = &mut RAND_ChaCha20::new([16; 32]);
+    const KEY_GEN_ASSOCIATED_DATA: &[u8] = &[2u8, 0u8, 2u8, 1u8];
 
     println!("generating key pair...");
-    let (mut pk, mut dk) = kgen(sys, rng);
+    let (mut pk, mut dk) = kgen(KEY_GEN_ASSOCIATED_DATA, sys, rng);
     let v = pk.serialize();
-    pk = PublicKey::deserialize(&v);
-    assert!(pk.verify(), "Forward secure public key failed validation");
+    pk = PublicKeyWithPop::deserialize(&v);
+    assert!(
+        pk.verify(KEY_GEN_ASSOCIATED_DATA),
+        "Forward secure public key failed validation"
+    );
     for _i in 0..10 {
         println!("upgrading private key...");
         dk.update(sys, rng);
         let v = dk.serialize();
         dk = SecretKey::deserialize(&v);
     }
-
-    let epoch10 = tau_from_u32(sys, 10);
+    let epoch10 = Epoch::from(10);
+    let tau10 = tau_from_epoch(sys, epoch10);
     let message = 123;
     println!("plaintext: {}", message);
-    let ct = enc_single(&pk.y, message, &epoch10, rng, sys);
+    let ct = enc_single(&pk.key_value, message, &tau10, rng, sys);
     println!(
         "encrypted: {} {} {} {}",
         ct.cc.tostring(),
@@ -49,16 +55,17 @@ fn potpourri() {
     let mut keys = Vec::new();
     for i in 0..3 {
         println!("generating key pair {}...", i);
-        keys.push(kgen(sys, rng));
+        keys.push(kgen(KEY_GEN_ASSOCIATED_DATA, sys, rng));
     }
-    let pks = keys.iter().map(|key| &key.0.y).collect();
+    let pks = keys.iter().map(|key| &key.0.key_value).collect();
     let sij: Vec<_> = vec![
         vec![27, 18, 28],
         vec![31415, 8192, 8224],
         vec![99, 999, 9999],
         vec![CHUNK_MIN, CHUNK_MAX, CHUNK_MIN],
     ];
-    let (crsz, _toxic) = enc_chunks(&sij, pks, &epoch10, sys, rng).unwrap();
+    let associated_data = [rng.getbyte(); 4];
+    let (crsz, _toxic) = enc_chunks(&sij, pks, &tau10, &associated_data, sys, rng).unwrap();
 
     let dk = &mut keys[1].1;
     for _i in 0..3 {
@@ -66,9 +73,11 @@ fn potpourri() {
         dk.update(sys, rng);
     }
 
-    verify_ciphertext_integrity(&crsz, &epoch10, sys).expect("ciphertext integrity check failed");
+    verify_ciphertext_integrity(&crsz, &tau10, &associated_data, sys)
+        .expect("ciphertext integrity check failed");
 
-    let out = dec_chunks(&dk, 1, &crsz, &epoch10).unwrap();
+    let out = dec_chunks(&dk, 1, &crsz, &tau10, &associated_data, sys)
+        .expect("It should be possible to decrypt");
     println!("decrypted: {:?}", out);
     let mut last3 = vec![0; 3];
     last3[0] = out[13];
@@ -81,7 +90,7 @@ fn potpourri() {
         dk.update(sys, rng);
     }
     // Should be impossible to decrypt now.
-    let out = dec_chunks(&dk, 1, &crsz, &epoch10);
+    let out = dec_chunks(&dk, 1, &crsz, &tau10, &associated_data, sys);
     match out {
         Err(DecErr::ExpiredKey) => (),
         _ => panic!("old ciphertexts should be lost forever"),
@@ -96,9 +105,11 @@ fn potpourri() {
 /// Note: This can be extended further by:
 /// * Varying the secret key epoch; this is always zero in this test.
 /// * Varying the plaintexts more; here we have only fairly noddy variation.
-fn encrypted_chunks_should_validate(epoch: u32) {
+fn encrypted_chunks_should_validate(epoch: Epoch) {
     let sys = &mk_sys_params();
-    let rng = &mut RAND_ChaCha20::new([42; 32]);
+    let rng = &mut RAND_ChaCha20::new([88; 32]);
+    const KEY_GEN_ASSOCIATED_DATA: &[u8] = &[1u8, 9u8, 8u8, 4u8];
+
     let num_receivers = 3;
     let threshold = 2;
     let g1 = ECP::generator();
@@ -109,19 +120,22 @@ fn encrypted_chunks_should_validate(epoch: u32) {
         .map(|i| {
             println!("generating key pair {}...", i);
             rng.seed(32, &[0x10 | i; 32]);
-            let key_pair = kgen(sys, rng);
+            let key_pair = kgen(KEY_GEN_ASSOCIATED_DATA, sys, rng);
             println!("{:#?}", &key_pair.0);
             key_pair
         })
         .collect();
-    let public_keys_with_zk: Vec<&PublicKey> = receiver_fs_keys.iter().map(|key| &key.0).collect();
+    let public_keys_with_zk: Vec<&PublicKeyWithPop> =
+        receiver_fs_keys.iter().map(|key| &key.0).collect();
     // Suggestion: Make the types used by fs encryption and zk proofs consistent.
     // One takes refs, one takes values:
-    let receiver_fs_public_key_refs: Vec<&ECP> =
-        public_keys_with_zk.iter().map(|key| &key.y).collect();
+    let receiver_fs_public_key_refs: Vec<&ECP> = public_keys_with_zk
+        .iter()
+        .map(|key| &key.key_value)
+        .collect();
     let receiver_fs_public_keys: Vec<ECP> = public_keys_with_zk
         .iter()
-        .map(|key| key.y.clone())
+        .map(|key| key.key_value.clone())
         .collect();
 
     let polynomial: Vec<BIG> = (0..threshold)
@@ -168,13 +182,15 @@ fn encrypted_chunks_should_validate(epoch: u32) {
     println!("Messages: {:#?}", plaintext_chunks);
 
     // Encrypt
-    let tau = tau_from_u32(sys, epoch);
+    let tau = tau_from_epoch(sys, epoch);
     let encryption_seed = [105; 32];
     rng.seed(32, &encryption_seed);
+    let associated_data = [rng.getbyte(); 4];
     let (crsz, toxic_waste) = enc_chunks(
         &plaintext_chunks[..],
         receiver_fs_public_key_refs,
         &tau,
+        &associated_data,
         sys,
         rng,
     )
@@ -186,7 +202,7 @@ fn encrypted_chunks_should_validate(epoch: u32) {
 
     // Check that decryption succeeds
     let dk = &receiver_fs_keys[1].1;
-    let out = dec_chunks(&dk, 1, &crsz, &tau);
+    let out = dec_chunks(&dk, 1, &crsz, &tau, &associated_data, sys);
     println!("decrypted: {:?}", out);
     assert!(
         out.unwrap() == plaintext_chunks[1],
@@ -207,7 +223,7 @@ fn encrypted_chunks_should_validate(epoch: u32) {
             g1_gen: ECP::generator(),
             public_keys: receiver_fs_public_keys.clone(),
             ciphertext_chunks: crsz.cc.clone(),
-            points_r: crsz.rr.clone(),
+            randomizers_r: crsz.rr.clone(),
         };
 
         let chunking_witness = ChunkingWitness {
@@ -306,12 +322,12 @@ fn encrypted_chunks_should_validate(epoch: u32) {
             g2_gen: ECP2::generator(),
             public_keys: receiver_fs_public_keys,
             public_coefficients: polynomial_exp,
-            combined_rand: combined_r_exp,
+            combined_randomizer: combined_r_exp,
             combined_ciphertexts,
         };
         let sharing_witness = SharingWitness {
-            rand_r: combined_r,
-            rand_s: combined_plaintexts,
+            scalar_r: combined_r,
+            scalars_s: combined_plaintexts,
         };
 
         let sharing_proof = prove_sharing(&sharing_instance, &sharing_witness, rng);
@@ -326,12 +342,12 @@ fn encrypted_chunks_should_validate(epoch: u32) {
 
 #[test]
 fn encrypted_chunks_should_validate_00() {
-    encrypted_chunks_should_validate(0)
+    encrypted_chunks_should_validate(Epoch::from(0))
 }
 
 #[test]
 fn encrypted_chunks_should_validate_01() {
-    encrypted_chunks_should_validate(1)
+    encrypted_chunks_should_validate(Epoch::from(1))
 }
 
-// TODO (CRP-831): Evil encryptions should not validate.
+// TODO (CRP-831): Add a test that incorrect encryptions do not validate.

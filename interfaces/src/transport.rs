@@ -77,6 +77,7 @@ pub enum SendError {
     EndpointNotFound,
 }
 
+/// API for handling transport events.
 pub trait TransportEventHandler: Send + Sync {
     /// Invoked by the transport layer when a message is received from the
     /// network. This is implemented by the transport clients to
@@ -90,7 +91,7 @@ pub trait TransportEventHandler: Send + Sync {
     fn on_state_change(&self, state_change: TransportStateChange);
 }
 
-// Async version of the transport event handler
+/// Async version of the transport event handler
 #[async_trait]
 pub trait AsyncTransportEventHandler: Send + Sync {
     async fn send_message(&self, flow: FlowId, message: TransportPayload) -> Result<(), SendError>;

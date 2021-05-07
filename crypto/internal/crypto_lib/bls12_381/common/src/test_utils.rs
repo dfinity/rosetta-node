@@ -1,3 +1,5 @@
+//! Test utilities
+
 use ff::Field;
 use group::CurveProjective;
 use pairing::bls12_381::{Fr, G2};
@@ -38,6 +40,7 @@ fn uint_to_fr_is_correct() {
     }
 }
 
+/// Convert a signed integer into the corresponding field element
 pub fn int_to_fr(num: i32) -> Fr {
     if num >= 0 {
         uint_to_fr(num as u32)
@@ -79,9 +82,9 @@ fn uint_to_fr_arithmetic_is_correct() {
 }
 
 /// Get G2 elements by primitive double and add.
-/// TODO(DFN-1240): Write our own unit tests for all the pairing library
-/// functions to make sure that their implementation is correct and that the
-/// operations are what we expect them to be.
+// TODO(DFN-1240): Write our own unit tests for all the pairing library
+// functions to make sure that their implementation is correct and that the
+// operations are what we expect them to be.
 pub fn uint_to_g2(num: u32) -> G2 {
     let mut num = num;
     let mut power = G2::one();

@@ -1,3 +1,4 @@
+//! Utilities for building X.509 certificates for tests.
 use ic_protobuf::registry::crypto::v1::X509PublicKeyCert;
 use openssl::asn1::{Asn1Integer, Asn1Time};
 use openssl::bn::BigNum;
@@ -8,16 +9,19 @@ use openssl::pkey::{PKey, PKeyRef, Private};
 use openssl::x509::extension::BasicConstraints;
 use openssl::x509::{X509Name, X509Ref, X509};
 
-pub const DEFAULT_SERIAL: [u8; 19] = [42u8; 19];
-pub const DEFAULT_X509_VERSION: i32 = 3;
-pub const DEFAULT_CN: &str = "Spock";
-pub const DEFAULT_NOT_BEFORE_DAYS_FROM_NOW: u32 = 0;
-pub const DEFAULT_VALIDITY_DAYS: u32 = 365;
+const DEFAULT_SERIAL: [u8; 19] = [42u8; 19];
+const DEFAULT_X509_VERSION: i32 = 3;
+const DEFAULT_CN: &str = "Spock";
+const DEFAULT_NOT_BEFORE_DAYS_FROM_NOW: u32 = 0;
+const DEFAULT_VALIDITY_DAYS: u32 = 365;
 
+/// Generates an ed25519 key pair.
 pub fn ed25519_key_pair() -> PKey<Private> {
     PKey::generate_ed25519().expect("failed to create Ed25519 key pair")
 }
 
+/// Generates a prime256v1 key pair.
+///
 /// Note that NIST P-256, prime256v1, secp256r1 are all the same, see https://tools.ietf.org/search/rfc4492#appendix-A
 pub fn prime256v1_key_pair() -> PKey<Private> {
     let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).expect("unable to create EC group");
@@ -25,33 +29,39 @@ pub fn prime256v1_key_pair() -> PKey<Private> {
     PKey::from_ec_key(ec_key_pair).expect("unable to create EC key pair")
 }
 
+/// Generates an X.509 certificate together with its private key.
 pub fn generate_ed25519_cert() -> (PKey<Private>, X509) {
     let key_pair = ed25519_key_pair();
     let server_cert = generate_cert(&key_pair, MessageDigest::null());
     (key_pair, server_cert)
 }
 
+/// Converts the `cert` into an `X509PublicKeyCert`.
 pub fn x509_public_key_cert(cert: &X509) -> X509PublicKeyCert {
     X509PublicKeyCert {
         certificate_der: cert_to_der(&cert),
     }
 }
 
+/// DER encodes the `cert`.
 pub fn cert_to_der(cert: &X509Ref) -> Vec<u8> {
     cert.to_der().expect("error converting cert to DER")
 }
 
+/// DER encodes the private `key`.
 pub fn private_key_to_der(key: &PKeyRef<Private>) -> Vec<u8> {
     key.private_key_to_der()
         .expect("error converting private key to DER")
 }
 
+/// Generates an X.509 certificate using the `key_pair`.
 pub fn generate_cert(key_pair: &PKey<Private>, digest: MessageDigest) -> X509 {
     CertWithPrivateKey::builder()
         .build(key_pair.clone(), digest)
         .x509()
 }
 
+/// A builder that allows to build X.509 certificates using a fluent API.
 pub struct CertBuilder {
     version: Option<i32>,
     cn: Option<String>,
@@ -235,6 +245,7 @@ impl CertBuilder {
     }
 }
 
+/// An X.509 certificate together with the corresponding private key.
 pub struct CertWithPrivateKey {
     x509: X509,
     key_pair: PKey<Private>,
@@ -257,20 +268,24 @@ impl CertWithPrivateKey {
         }
     }
 
+    /// Returns the key pair.
     pub fn key_pair(&self) -> PKey<Private> {
         self.key_pair.clone()
     }
 
+    /// Returns a PEM encoding of the key pair.
     pub fn key_pair_pem(&self) -> Vec<u8> {
         self.key_pair
             .private_key_to_pem_pkcs8()
             .expect("unable to PEM encode private key")
     }
 
+    /// Returns the X.509 certificate.
     pub fn x509(&self) -> X509 {
         self.x509.clone()
     }
 
+    /// Returns a PEM encoding of the X.509 certificate.
     pub fn cert_pem(&self) -> Vec<u8> {
         self.x509.to_pem().expect("unable to PEM encode cert")
     }

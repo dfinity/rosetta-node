@@ -1,3 +1,4 @@
+use ic_protobuf::registry::crypto::v1::X509PublicKeyCert;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::{convert::TryFrom, net::SocketAddr};
@@ -24,7 +25,7 @@ pub enum PortConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ExternalConfig {
-    // XXX: we use "flatten" in order to avoid having to write:
+    // We use "flatten" in order to avoid having to write:
     // ```
     // {
     //   http_handler: {
@@ -85,6 +86,9 @@ pub struct ExternalConfig {
     //       major security risk for the IC, but developers should not be
     //       tempted to get the IC's root key from this insecure location.
     pub show_root_key_in_status: bool,
+    // Clients X509 certificate used for establishing TLS protocol. The field
+    // is base64 encoded DER certificate.
+    pub clients_x509_cert: Option<String>,
 }
 
 impl Default for ExternalConfig {
@@ -94,6 +98,7 @@ impl Default for ExternalConfig {
             allow_ipv6_my_users_have_no_privacy: None,
             port: None,
             show_root_key_in_status: true,
+            clients_x509_cert: None,
         }
     }
 }
@@ -101,7 +106,7 @@ impl Default for ExternalConfig {
 /// The internal configuration -- any historical warts from the external
 /// configuration are removed. Anything using this struct can trust that it
 /// has been validated.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     /// IP address and port to listen on
@@ -110,6 +115,8 @@ pub struct Config {
     pub port_file_path: Option<PathBuf>,
     /// True if the replica public key is returned from the `/status` endpoint
     pub show_root_key_in_status: bool,
+    /// The digital certificate used by TLS.
+    pub clients_x509_cert: Option<X509PublicKeyCert>,
 }
 
 impl Default for Config {
@@ -121,6 +128,7 @@ impl Default for Config {
             ),
             port_file_path: None,
             show_root_key_in_status: true,
+            clients_x509_cert: None,
         }
     }
 }
@@ -155,6 +163,13 @@ impl TryFrom<ExternalConfig> for Config {
         }?;
 
         config.show_root_key_in_status = ec.show_root_key_in_status;
+        if let Some(base64_clients_x509_cert) = ec.clients_x509_cert {
+            let base64_decoded_clients_x509_cert = base64::decode(&base64_clients_x509_cert)
+                .map_err(|_err| "Could not decode x509 cert from base64 encoding.")?;
+            config.clients_x509_cert = Some(X509PublicKeyCert {
+                certificate_der: base64_decoded_clients_x509_cert,
+            });
+        }
         Ok(config)
     }
 }

@@ -31,7 +31,7 @@ use proptest::strategy::{MapInto, Strategy};
 /// }
 /// ```
 ///
-/// `Enity` doesn't have to be a struct, any type will do. It's just a
+/// `Entity` doesn't have to be a struct, any type will do. It's just a
 /// tag that differentiate incompatible ids.
 ///
 /// ```compile_fail

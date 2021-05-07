@@ -1,6 +1,6 @@
 [package]
 name = "ic-crypto-internal-threshold-sig-bls12381"
-version = "0.0.0"
+version = "0.8.0"
 edition = "2018"
 
 [dependencies]

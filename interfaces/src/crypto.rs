@@ -1,3 +1,4 @@
+//! The crypto public interface.
 mod keygen;
 
 pub use keygen::KeyManager;
@@ -22,6 +23,7 @@ mod sign;
 pub use sign::BasicSigVerifier;
 pub use sign::BasicSigVerifierByPublicKey;
 pub use sign::BasicSigner;
+pub use sign::CanisterSigVerifier;
 pub use sign::IngressSigVerifier;
 pub use sign::MultiSigVerifier;
 pub use sign::MultiSigner;

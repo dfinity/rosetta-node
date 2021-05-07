@@ -1,3 +1,4 @@
+//! Offers cryptographically secure pseudorandom number generation (CSPRNG).
 use ic_crypto_internal_types::context::{Context, DomainSeparationContext};
 use ic_crypto_sha256::Sha256;
 use ic_interfaces::crypto::CryptoHashable;
@@ -71,6 +72,7 @@ impl Csprng {
     }
 }
 
+/// The purpose the randomness is used for.
 #[derive(Clone, Debug, Eq, PartialEq, EnumCount, EnumIter)]
 pub enum RandomnessPurpose {
     CommitteeSampling,

@@ -1,11 +1,13 @@
+//! The execution environment public interface.
 mod errors;
 
 use crate::{messages::CanisterInputMessage, state_manager::StateManagerError};
 pub use errors::{CanisterHeartbeatError, MessageAcceptanceError};
 pub use errors::{HypervisorError, TrapCode};
-use ic_base_types::NumBytes;
+use ic_base_types::{NumBytes, SubnetId};
 use ic_registry_provisional_whitelist::ProvisionalWhitelist;
 use ic_registry_routing_table::RoutingTable;
+use ic_registry_subnet_type::SubnetType;
 use ic_types::{
     ingress::{IngressStatus, WasmResult},
     messages::{MessageId, SignedIngressContent, UserQuery},
@@ -14,7 +16,10 @@ use ic_types::{
 };
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, RwLock};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, RwLock},
+};
 
 /// Instance execution statistics. The stats are cumulative and
 /// contain measurements from the point in time when the instance was
@@ -31,6 +36,7 @@ pub struct InstanceStats {
     pub dirty_pages: usize,
 }
 
+/// Errors that can be returned when fetching the available memory on a subnet.
 pub enum SubnetAvailableMemoryError {
     InsufficientMemory {
         requested: NumBytes,
@@ -68,11 +74,6 @@ impl SubnetAvailableMemory {
         }
     }
 }
-
-// Note [Unit]
-// ~~~~~~~~~~
-// Units for funds are represented as blobs. 0x00 is used for cycles and 0x01
-// for ICP tokens. Other units can be added in the future.
 
 /// ExecutionEnvironment is the component responsible for executing messages
 /// on the IC.
@@ -113,6 +114,7 @@ pub trait ExecutionEnvironment: Sync + Send {
     ) -> Self::State;
 
     /// Executes a message sent to a canister.
+    #[allow(clippy::too_many_arguments)]
     fn execute_canister_message(
         &self,
         canister_state: Self::CanisterState,
@@ -120,6 +122,7 @@ pub trait ExecutionEnvironment: Sync + Send {
         msg: CanisterInputMessage,
         time: Time,
         routing_table: Arc<RoutingTable>,
+        subnet_records: Arc<BTreeMap<SubnetId, SubnetType>>,
         subnet_available_memory: SubnetAvailableMemory,
     ) -> ExecResult<ExecuteMessageResult<Self::CanisterState>>;
 
@@ -128,6 +131,7 @@ pub trait ExecutionEnvironment: Sync + Send {
     fn should_accept_ingress_message(
         &self,
         state: Arc<Self::State>,
+        provisional_whitelist: &ProvisionalWhitelist,
         ingress: &SignedIngressContent,
     ) -> Result<(), MessageAcceptanceError>;
 
@@ -137,6 +141,7 @@ pub trait ExecutionEnvironment: Sync + Send {
         canister_state: Self::CanisterState,
         instructions_limit: NumInstructions,
         routing_table: Arc<RoutingTable>,
+        subnet_records: Arc<BTreeMap<SubnetId, SubnetType>>,
         time: Time,
         subnet_available_memory: SubnetAvailableMemory,
     ) -> ExecResult<(
@@ -146,11 +151,7 @@ pub trait ExecutionEnvironment: Sync + Send {
     )>;
 
     /// Look up the current amount of memory available on the subnet.
-    ///
-    /// TODO(EXC-185): This is [hopefully] temporary scaffolding that is only
-    /// needed because the scheduler and execution_environment are in two
-    /// different crates. Once we move them into a single crate with combined
-    /// configurations, this should no longer be needed.
+    /// EXC-185 will make this method obsolete.
     fn subnet_available_memory(&self, state: &Self::State) -> NumBytes;
 }
 
@@ -165,8 +166,8 @@ pub struct ExecuteMessageResult<CanisterState> {
     pub num_instructions_left: NumInstructions,
     /// Optional status for an Ingress message if available.
     pub ingress_status: Option<(MessageId, IngressStatus)>,
-    /// The size of the state change delta the canister produced
-    pub state_change_delta: NumBytes,
+    /// The size of the heap delta the canister produced
+    pub heap_delta: NumBytes,
 }
 
 /// An underlying struct/helper for implementing select() on multiple
@@ -242,7 +243,7 @@ where
     }
 }
 
-// Generic async result of an execution.
+/// Generic async result of an execution.
 pub struct ExecResult<T> {
     result: Box<dyn AsyncResult<T>>,
 }
@@ -361,6 +362,7 @@ pub trait QueryHandler: Send + Sync {
     ) -> Result<WasmResult, UserError>;
 }
 
+/// Errors that can be returned when reading/writing from/to ingress history.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum IngressHistoryError {
     StateRemoved(Height),
@@ -419,6 +421,9 @@ pub trait SystemApi {
 
     /// Returns the amount of available instructions.
     fn get_available_num_instructions(&self) -> NumInstructions;
+
+    /// Returns the stable memory delta that the canister produced
+    fn get_stable_memory_delta_pages(&self) -> usize;
 
     /// Sets the amount of available instructions.
     fn set_available_num_instructions(&mut self, num_instructions: NumInstructions);
@@ -597,21 +602,12 @@ pub trait SystemApi {
     /// `ic0.call_new` and `ic0.call_perform`.
     fn ic0_call_data_append(&mut self, src: u32, size: u32, heap: &[u8]) -> HypervisorResult<()>;
 
-    /// Adds funds to a call by moving them from the canister's balance onto the
-    /// call under construction. The funds are deducted immediately from the
-    /// canister's balance and moved back if the call cannot be performed (e.g.
-    /// if `ic0.call_perform` signals an error or if the canister invokes
-    /// `ic0.call_new` or returns without invoking `ic0.call_perform`).
+    /// Specifies the closure to be called if the reply/reject closures trap.
+    /// Can be called at most once between `ic0.call_new` and
+    /// `ic0.call_perform`.
     ///
-    /// This traps if trying to transfer more funds than are in the current
-    /// balance of the canister.
-    fn ic0_call_funds_add(
-        &mut self,
-        unit_src: u32,
-        unit_size: u32,
-        amount: u64,
-        heap: &[u8],
-    ) -> HypervisorResult<()>;
+    /// See https://sdk.dfinity.org/docs/interface-spec/index.html#system-api-call
+    fn ic0_call_on_cleanup(&mut self, fun: u32, env: u32) -> HypervisorResult<()>;
 
     /// Adds cycles to a call by moving them from the canister's balance onto
     /// the call under construction. The cycles are deducted immediately
@@ -688,16 +684,6 @@ pub trait SystemApi {
         additional_pages: u32,
     ) -> HypervisorResult<i32>;
 
-    /// Returns the current balance of `unit`.
-    ///
-    /// Note [Unit]
-    fn ic0_canister_balance(
-        &self,
-        unit_src: u32,
-        unit_size: u32,
-        heap: &[u8],
-    ) -> HypervisorResult<u64>;
-
     /// Returns the current balance in cycles.
     fn ic0_canister_cycle_balance(&self) -> HypervisorResult<u64>;
 
@@ -728,7 +714,7 @@ pub trait SystemApi {
     fn ic0_msg_cycles_accept(&mut self, max_amount: u64) -> HypervisorResult<u64>;
 
     /// Sets the certified data for the canister.
-    /// See: https://docs.dfinity.systems/public/#system-api-certified-data)
+    /// See: https://sdk.dfinity.org/docs/interface-spec/index.html#system-api-certified-data
     fn ic0_certified_data_set(&mut self, src: u32, size: u32, heap: &[u8]) -> HypervisorResult<()>;
 
     /// If run in non-replicated execution (i.e. query),

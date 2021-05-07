@@ -48,6 +48,5 @@ pub enum PersistenceType {
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EmbedderType {
-    Lucet,
     Wasmtime,
 }

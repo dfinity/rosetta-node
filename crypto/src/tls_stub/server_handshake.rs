@@ -3,43 +3,19 @@ use crate::tls_stub::{
     TlsCertFromRegistryError,
 };
 use ic_crypto_internal_csp::api::CspTlsServerHandshake;
+use ic_crypto_internal_csp::tls_stub::cert_chain::CspCertificateChain;
 use ic_crypto_tls_interfaces::{
     AllowedClients, AuthenticatedPeer, Peer, PeerNotAllowedError, SomeOrAllNodes,
-    TlsServerHandshakeError, TlsStream, TlsStreamInsecure,
+    TlsServerHandshakeError, TlsStream,
 };
 use ic_interfaces::registry::RegistryClient;
 use ic_protobuf::registry::crypto::v1::X509PublicKeyCert;
 use ic_registry_client::helper::node::NodeRegistry;
-use ic_types::{NodeId, PrincipalId, RegistryVersion};
+use ic_types::{NodeId, RegistryVersion};
 use openssl::x509::X509;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use tokio::net::TcpStream;
-
-/// This method will be removed once the P2P team finished integrating the new
-/// TLS handshake API. Removal of this insecure method is tracked in CRP-775.
-pub async fn perform_tls_server_handshake_insecure(
-    tcp_stream: TcpStream,
-    allowed_clients: AllowedClients,
-) -> Result<(TlsStreamInsecure, AuthenticatedPeer), TlsServerHandshakeError> {
-    let peer = dummy_authenticated_peer(&allowed_clients);
-    Ok((tokio::io::split(tcp_stream), peer))
-}
-
-fn dummy_authenticated_peer(allowed_clients: &AllowedClients) -> AuthenticatedPeer {
-    if let Some(cert) = allowed_clients.certs().iter().cloned().next() {
-        AuthenticatedPeer::Cert(cert)
-    } else {
-        match allowed_clients.nodes() {
-            SomeOrAllNodes::Some(node_ids) => AuthenticatedPeer::Node(
-                node_ids.iter().copied().next().expect("invariant violated"),
-            ),
-            SomeOrAllNodes::All => {
-                AuthenticatedPeer::Node(NodeId::from(PrincipalId::new_node_test_id(0)))
-            }
-        }
-    }
-}
 
 // TODO (CRP-772): Simplify handshake code by moving cert equality check to CSP
 // TODO (CRP-773): Use X509 domain object instead of protobuf in API
@@ -85,14 +61,14 @@ pub async fn perform_tls_server_handshake_temp_with_optional_client_auth<
     let trusted_client_certs =
         combine_certs(&trusted_node_certs, allowed_authenticating_clients.certs());
 
-    let (tls_stream, peer_cert) = csp
+    let (tls_stream, peer_cert_chain) = csp
         .perform_tls_server_handshake(tcp_stream, self_tls_cert, trusted_client_certs)
         .await?;
 
-    match peer_cert {
-        Some(peer_cert) => {
+    match peer_cert_chain {
+        Some(peer_cert_chain) => {
             let peer = authenticated_peer(
-                &peer_cert,
+                &peer_cert_chain,
                 &allowed_authenticating_clients.certs(),
                 &trusted_node_certs,
             )?;
@@ -145,23 +121,51 @@ fn combine_certs(
     node_certs_and_certs
 }
 
+/// Determines the authenticated peer from the client's certificate chain.
+///
+/// To do so, the following steps are taken:
+/// 1. Determine the peer's node ID N_claimed from the _subject name_ of
+///    the certificate C_handshake that the peer presented during the
+///    handshake (and for which the peer therefore knows the private key).
+///    If N_claimed is contained in `trusted_node_certs`, determine the
+///    certificate C_registry by querying the registry for the TLS certificate
+///    of node with ID N_claimed, and if C_registry is equal to C_handshake,
+///    then the peer successfully authenticated as node N_claimed. Otherwise,
+///    step 2 is taken.
+/// 2. Compare the root of the certificate chain that the peer presented during
+///    the handshake (and for which the peer therefore knows the private key of
+///    the chain's leaf certificate) to all the certificates in
+///    `allowed_client_certs`. If there is a match, then the peer represented by
+///    the chain's leaf certificate successfully authenticated.
+///
+/// If neither an authenticated node nor an authenticated certificate can be
+/// determined, then the error produced when trying to authenticate a node is
+/// returned.
 fn authenticated_peer(
-    client_cert_from_handshake: &X509,
+    client_cert_chain_from_handshake: &CspCertificateChain,
     allowed_client_certs: &[X509PublicKeyCert],
     trusted_node_certs: &BTreeMap<NodeId, X509PublicKeyCert>,
 ) -> Result<AuthenticatedPeer, TlsServerHandshakeError> {
-    let client_cert_from_handshake_proto = x509_to_proto(&client_cert_from_handshake)?;
-    if allowed_client_certs
-        .iter()
-        .any(|cert| cert == &client_cert_from_handshake_proto)
-    {
-        Ok(AuthenticatedPeer::Cert(client_cert_from_handshake_proto))
-    } else {
-        let authenticated_node = check_cert_and_get_authenticated_client_node_id(
-            trusted_node_certs,
-            &client_cert_from_handshake,
-        )?;
-        Ok(AuthenticatedPeer::Node(authenticated_node))
+    let authenticated_node = check_cert_and_get_authenticated_client_node_id(
+        trusted_node_certs,
+        &client_cert_chain_from_handshake.leaf(),
+    );
+    match authenticated_node {
+        Ok(authenticated_node) => Ok(AuthenticatedPeer::Node(authenticated_node)),
+        Err(node_authentication_error) => {
+            let client_cert_chain_root_from_handshake_proto =
+                x509_to_proto(&client_cert_chain_from_handshake.root())?;
+            if allowed_client_certs
+                .iter()
+                .any(|cert| cert == &client_cert_chain_root_from_handshake_proto)
+            {
+                Ok(AuthenticatedPeer::Cert(x509_to_proto(
+                    &client_cert_chain_from_handshake.leaf(),
+                )?))
+            } else {
+                Err(node_authentication_error)
+            }
+        }
     }
 }
 
@@ -170,7 +174,7 @@ fn x509_to_proto(cert: &X509) -> Result<X509PublicKeyCert, TlsServerHandshakeErr
         certificate_der: cert
             .to_der()
             .map_err(|e| TlsServerHandshakeError::HandshakeError {
-                internal_error: format!("failed to DER-encode peer certificate {}", e),
+                internal_error: format!("failed to DER-encode peer certificate {:?}: {}", cert, e),
             })?,
     })
 }

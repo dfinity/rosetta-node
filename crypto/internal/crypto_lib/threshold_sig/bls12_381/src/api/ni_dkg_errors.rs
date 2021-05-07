@@ -8,9 +8,8 @@ use ic_types::{NodeIndex, NumberOfNodes};
 // These are the base error types used by ni_dkg
 // TODO(CRP-574): Move these up, out of dkg.
 pub use super::dkg_errors::{
-    InvalidArgumentError, KeyNotFoundError, MalformedDataError,
-    MalformedPopError as MalformedPokError, MalformedPublicKeyError, MalformedSecretKeyError,
-    SizeError,
+    InvalidArgumentError, KeyNotFoundError, MalformedDataError, MalformedPopError,
+    MalformedPublicKeyError, MalformedSecretKeyError, SizeError,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -56,8 +55,8 @@ pub enum CspDkgVerifyFsKeyError {
     /// variant.
     UnsupportedAlgorithmId(AlgorithmId),
     MalformedPublicKeyError(MalformedPublicKeyError),
-    MalformedPokError(MalformedPokError),
-    InvalidPok(()),
+    MalformedPopError(MalformedPopError),
+    InvalidPop(()),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -1,14 +1,14 @@
 use super::*;
 use ic_crypto_internal_types::sign::threshold_sig::dkg::encryption_public_key::CspEncryptionPublicKey;
 
+/// An encryption public key for interactive DKG.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct EncryptionPublicKey {
     internal: CspEncryptionPublicKey,
 }
 
 impl Default for EncryptionPublicKey {
-    // TODO (CRP-328): This is a temporary to make the code consuming the crypto
-    // interfaces compile.
+    // TODO (CRP-328)
     fn default() -> Self {
         EncryptionPublicKey::from(&CspEncryptionPublicKey::default())
     }

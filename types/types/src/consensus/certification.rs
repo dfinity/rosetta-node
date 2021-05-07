@@ -1,5 +1,9 @@
+//! Defines types used for certification.
+
 use crate::{
-    consensus::{Committee, HasCommittee, HasHeight, ThresholdSignature, ThresholdSignatureShare},
+    consensus::{
+        Committee, CountBytes, HasCommittee, HasHeight, ThresholdSignature, ThresholdSignatureShare,
+    },
     crypto::{CryptoHash, CryptoHashOf, Signed, SignedBytesWithoutDomainSeparator},
     CryptoHashOfPartialState, Height,
 };
@@ -7,10 +11,14 @@ use ic_protobuf::messaging::xnet::v1 as pb;
 use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
 
-/// Contains a partial signature or combined muti-signature of a state hash.
+/// CertificationMessage captures the different types of messages sent around
+/// for the purpose of state certification.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub enum CertificationMessage {
+    /// Certification captures a full certification on behalf of a subnet
     Certification(Certification),
+    /// CertificationShare captures a share of a certification created by a
+    /// single replica
     CertificationShare(CertificationShare),
 }
 
@@ -55,19 +63,26 @@ impl From<CertificationShare> for CertificationMessage {
     }
 }
 
-/// Message hash.
+/// CertificationMessageHash contains the hash of a CertificationMessage.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub enum CertificationMessageHash {
+    /// Certification captures the hash of a full certification on behalf of a
+    /// subnet
     Certification(CryptoHashOf<Certification>),
+    /// CertificationShare captures the hash of a share of a certification
+    /// created by a single replica
     CertificationShare(CryptoHashOf<CertificationShare>),
 }
 
+/// CertificationContent holds the data signed by certification
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct CertificationContent {
+    /// The hash of the relevant parts of the replicated state
     pub hash: CryptoHashOfPartialState,
 }
 
 impl CertificationContent {
+    /// Create a new CertificationContent given a CryptoHashOfPartialState
     pub fn new(hash: CryptoHashOfPartialState) -> Self {
         CertificationContent { hash }
     }
@@ -104,9 +119,13 @@ impl AsRef<CertificationContent> for CertificationMessage {
     }
 }
 
+/// A Certification is a CertificationContent that is cryptographically signed
+/// by a subnet using a threshold signature
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Certification {
+    /// the height that the CertificationContent belongs to
     pub height: Height,
+    /// the signature on the CertificationContent
     pub signed: Signed<CertificationContent, ThresholdSignature<CertificationContent>>,
 }
 
@@ -116,9 +135,21 @@ impl HasHeight for Certification {
     }
 }
 
+impl CountBytes for Certification {
+    fn count_bytes(&self) -> usize {
+        std::mem::size_of::<Height>()
+            + self.signed.content.hash.get_ref().0.len()
+            + self.signed.signature.count_bytes()
+    }
+}
+
+/// A certification share is the signature of a single replica on a
+/// CertificationContent
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CertificationShare {
+    /// the height that the CertificationContent belongs to
     pub height: Height,
+    /// the signature on the CertificationContent
     pub signed: Signed<CertificationContent, ThresholdSignatureShare<CertificationContent>>,
 }
 

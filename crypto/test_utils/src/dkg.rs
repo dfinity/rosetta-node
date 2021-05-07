@@ -1,4 +1,4 @@
-//! Functions to help with testing
+//! Utilities for testing Distributed Key Generation (DKG) code.
 use ic_types::{Height, IDkgId, PrincipalId, SubnetId};
 use rand::Rng;
 

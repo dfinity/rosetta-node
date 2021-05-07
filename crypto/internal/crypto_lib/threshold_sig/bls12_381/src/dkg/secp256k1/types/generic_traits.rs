@@ -7,8 +7,9 @@ use super::*;
 use secp256k1::curve::Affine;
 use std::fmt;
 
-/////////////////
-// PopBytes
+#[cfg(test)]
+mod tests;
+
 // Note: This is needed because Rust doesn't support const generics yet.
 impl fmt::Debug for EphemeralPopBytes {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -22,8 +23,6 @@ impl PartialEq for EphemeralPopBytes {
 }
 impl Eq for EphemeralPopBytes {}
 
-////////////
-// PublicKey
 // Note: This is needed because public keys can have multiple representations
 impl PartialEq for EphemeralPublicKey {
     fn eq(&self, other: &Self) -> bool {
@@ -32,13 +31,12 @@ impl PartialEq for EphemeralPublicKey {
 }
 impl Eq for EphemeralPublicKey {}
 
-/////////////////////////////
-// SecretKey
 impl Zeroize for EphemeralSecretKey {
     fn zeroize(&mut self) {
-        // TODO(DFN-1475)
+        self.0.clear()
     }
 }
+
 /* TODO(CRP-103): Zeroize all secret keys properly; Zeroize does not work as originally thought.
 impl Drop for EphemeralSecretKey {
     fn drop(&mut self) {
@@ -46,11 +44,26 @@ impl Drop for EphemeralSecretKey {
     }
 }
 */
+impl fmt::Debug for EphemeralSecretKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "REDACTED")
+    }
+}
 
-/////////////////////////////
-// KeySet
+impl fmt::Debug for EphemeralSecretKeyBytes {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "REDACTED")
+    }
+}
+
 impl Zeroize for EphemeralKeySetBytes {
     fn zeroize(&mut self) {
         self.secret_key_bytes.zeroize();
+    }
+}
+
+impl fmt::Debug for EncryptedShareBytes {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "REDACTED")
     }
 }

@@ -6,12 +6,85 @@
 //!    every inter-canister callback call.
 
 use std::{
-    cell::{RefCell, RefMut},
+    cell::{Cell, RefCell, RefMut},
     future::Future,
     pin::Pin,
     rc::Rc,
     task::{Context, Poll, Waker},
 };
+
+thread_local! {
+    static CURRENT_TOP_LEVEL_FUTURE: Cell<*mut TopLevelFuture> =
+        Cell::new(std::ptr::null_mut::<TopLevelFuture>());
+}
+
+/// This structure holds a future passed to the spawn() function and metadata
+/// required for cleanup.
+pub(crate) struct TopLevelFuture {
+    // The future passed to spawn() function.
+    future: Pin<Box<dyn Future<Output = ()>>>,
+    // Number of strong references to this top-level future.
+    ref_count: u32,
+}
+
+impl TopLevelFuture {
+    /// Increments weak reference count.
+    pub unsafe fn acquire(p: *mut TopLevelFuture) {
+        (*p).ref_count += 1;
+    }
+
+    /// Decrements weak reference count.
+    pub unsafe fn release(p: *mut TopLevelFuture) {
+        (*p).ref_count -= 1;
+        if (*p).ref_count == 0 {
+            drop_top_level_future(p);
+        }
+    }
+
+    /// Drops the top-level future if there are is exactly one pending calls
+    /// that can resolve it. This should only be called from call cleanup()
+    /// because the future should normally be deleted by the waker when it's
+    /// ready.
+    pub unsafe fn drop_if_last_reference(p: *mut TopLevelFuture) {
+        if (*p).ref_count == 1 {
+            Self::release(p)
+        }
+    }
+}
+
+/// Returns the pointer to the current top-level future.
+pub(crate) fn current_top_level_future() -> *mut TopLevelFuture {
+    CURRENT_TOP_LEVEL_FUTURE.with(|p| p.get())
+}
+
+/// Sets the pointer to the current top-level future.
+fn set_top_level_future(ptr: *mut TopLevelFuture) {
+    CURRENT_TOP_LEVEL_FUTURE.with(|p| {
+        p.set(ptr);
+    });
+}
+
+/// Deletes a top level-future.
+unsafe fn drop_top_level_future(ptr: *mut TopLevelFuture) {
+    if !ptr.is_null() {
+        let _ = Box::from_raw(ptr);
+    }
+}
+
+struct TopLevelFutureGuard(*mut TopLevelFuture);
+impl TopLevelFutureGuard {
+    pub fn new(p: *mut TopLevelFuture) -> Self {
+        let old = current_top_level_future();
+        set_top_level_future(p);
+        Self(old)
+    }
+}
+
+impl Drop for TopLevelFutureGuard {
+    fn drop(&mut self) {
+        set_top_level_future(self.0);
+    }
+}
 
 /// A reference counter wrapper we use with the CallFuture.
 /// This is required, because the future we return from the `call` method can
@@ -43,6 +116,9 @@ impl<T> RefCounted<T> {
     pub fn borrow_mut(&self) -> RefMut<'_, T> {
         self.0.borrow_mut()
     }
+    pub fn as_ptr(&self) -> *const RefCell<T> {
+        self.0.as_ptr() as *const _
+    }
 }
 
 impl<O, T: Future<Output = O>> Future for RefCounted<T> {
@@ -64,17 +140,28 @@ pub type FutureResult<A> = Result<A, (Option<i32>, String)>;
 
 /// The Future trait implementation, returned by the asynchronous inter-canister
 /// call.
-#[derive(Default)]
 pub(super) struct CallFuture {
     /// result of the canister call
     pub result: Option<FutureResult<Vec<u8>>>,
     /// waker (callback)
     pub waker: Option<Waker>,
+    /// Top-level future in scope of which poll() was called for the first time.
+    pub top_level_future: *mut TopLevelFuture,
+}
+
+impl Default for CallFuture {
+    fn default() -> Self {
+        Self {
+            result: None,
+            waker: None,
+            top_level_future: std::ptr::null_mut(),
+        }
+    }
 }
 
 impl CallFuture {
     pub fn new() -> Self {
-        CallFuture::default()
+        Self::default()
     }
 }
 
@@ -83,55 +170,54 @@ impl Future for CallFuture {
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         if let Some(result) = self.result.take() {
             return Poll::Ready(result);
+        } else if self.top_level_future.is_null() {
+            // NOTE: we set the top-level future here and not in the constructor
+            // because the future can be constructed in one context but actually
+            // polled in a different one, like in spawn(call()).
+            let top_level_future_ptr = current_top_level_future();
+            unsafe {
+                TopLevelFuture::acquire(top_level_future_ptr);
+            }
+            self.top_level_future = top_level_future_ptr;
         }
         self.waker = Some(cx.waker().clone());
         Poll::Pending
     }
 }
 
-/// Must be called on every top-level future corresponding to a method call of a
-/// canister by the IC.
+/// Spawns a future running concurrently with the caller.
 ///
-/// Saves the pointer to the future on the heap and kickstarts the future by
-/// polling it once. During the polling we also need to provide the waker
-/// callback which is triggered after the future made progress. The waker would
-/// then. The waker would then poll the future one last time to advance it to
-/// the final state. For that, we pass the future pointer to the waker, so that
-/// it can be restored into a box from a raw pointer and then dropped if not
-/// needed anymore.
-///
-/// Technically, we store 2 pointers on the heap: the pointer to the future
-/// itself, and a pointer to that pointer. The reason for this is that the waker
-/// API requires us to pass one thin pointer, while a a pointer to a `dyn Trait`
-/// can only be fat. So we create one additional thin pointer, pointing to the
-/// fat pointer and pass it instead.
-pub fn kickstart<F: 'static + Future<Output = ()>>(future: F) {
-    let future_ptr = Box::into_raw(Box::new(future));
-    let future_ptr_ptr: *mut *mut dyn Future<Output = ()> = Box::into_raw(Box::new(future_ptr));
-    let mut pinned_future = unsafe { Pin::new_unchecked(&mut *future_ptr) };
-    if let Poll::Ready(_) = pinned_future
-        .as_mut()
-        .poll(&mut Context::from_waker(&waker::waker(
-            future_ptr_ptr as *const (),
-        )))
-    {
+/// Note: the main purpose of this function is to kick-start top-level canister
+/// async method calls.
+pub fn spawn<F: 'static + Future<Output = ()>>(future: F) {
+    let top_level_future = Box::new(TopLevelFuture {
+        future: Box::pin(future),
+        ref_count: 1,
+    });
+
+    let top_level_future_ptr = Box::into_raw(top_level_future);
+    let _guard = TopLevelFutureGuard::new(top_level_future_ptr);
+
+    if let Poll::Ready(_) = unsafe {
+        (*top_level_future_ptr)
+            .future
+            .as_mut()
+            .poll(&mut Context::from_waker(&waker::waker(
+                top_level_future_ptr as *const (),
+            )))
+    } {
         unsafe {
-            let _ = Box::from_raw(future_ptr);
-            let _ = Box::from_raw(future_ptr_ptr);
+            TopLevelFuture::release(top_level_future_ptr);
         }
     }
 }
 
 // This module contains the implementation of a waker we're using for waking
-// top-level futures (the ones returned by canister methods). The waker polls
-// the future once and re-pins it on the heap, if it's pending. If the future is
-// done, we do nothing. Hence, it will be deallocated once we exit the scope and
-// we're not interested in the result, as it can only be a unit `()` if the
-// waker was used as intended.
+// top-level futures (the ones returned by canister methods). The waker waits
+// for the future to become ready and deletes it afterwards.
 mod waker {
     use super::*;
     use std::task::{RawWaker, RawWakerVTable, Waker};
-    type FuturePtr = *mut dyn Future<Output = ()>;
 
     static MY_VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
 
@@ -149,16 +235,15 @@ mod waker {
     // is pending, we leave it on the heap. If it's ready, we deallocate the
     // pointer.
     unsafe fn wake(ptr: *const ()) {
-        let boxed_future_ptr_ptr = Box::from_raw(ptr as *mut FuturePtr);
-        let future_ptr: FuturePtr = *boxed_future_ptr_ptr;
-        let boxed_future = Box::from_raw(future_ptr);
-        let mut pinned_future = Pin::new_unchecked(&mut *future_ptr);
-        if let Poll::Pending = pinned_future
+        let future_ptr = ptr as *mut TopLevelFuture;
+        let _guard = TopLevelFutureGuard::new(future_ptr);
+
+        if let Poll::Ready(_) = (*future_ptr)
+            .future
             .as_mut()
             .poll(&mut Context::from_waker(&waker::waker(ptr)))
         {
-            Box::into_raw(boxed_future_ptr_ptr);
-            Box::into_raw(boxed_future);
+            TopLevelFuture::release(future_ptr);
         }
     }
 

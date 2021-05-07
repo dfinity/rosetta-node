@@ -1,4 +1,5 @@
 use crate::api::tls_stub::tls_errors::{CspTlsClientHandshakeError, CspTlsServerHandshakeError};
+use crate::tls_stub::cert_chain::CspCertificateChain;
 use async_trait::async_trait;
 use ic_crypto_tls_interfaces::TlsStream;
 use ic_protobuf::registry::crypto::v1::X509PublicKeyCert;
@@ -7,6 +8,7 @@ use tokio::net::TcpStream;
 
 pub mod tls_errors;
 
+/// A trait that exposes TLS server-side handshaking
 #[async_trait]
 pub trait CspTlsServerHandshake {
     /// Transforms a TCP stream into a TLS stream by performing a TLS server
@@ -30,11 +32,11 @@ pub trait CspTlsServerHandshake {
     /// The TLS stream is returned in a form that does not allow for extracting
     /// the private key corresponding to `self_cert` or the TLS session keys.
     ///
-    /// Returns the TLS stream, together with an optional certificate. If the
-    /// client presented a certificate and successfully authenticated, that
-    /// certificate is returned (in `Some`). If the handshake was successful
-    /// and the client did not present a certificate, the returned certificate
-    /// is `None`.
+    /// Returns the TLS stream, together with an optional certificate chain. If
+    /// the client presented a certificate and successfully authenticated, the
+    /// respective certificate chain is returned (in `Some`). If the handshake
+    /// was successful and the client did not present a certificate, the
+    /// returned certificate chain is `None`.
     ///
     /// # Errors
     /// * CspTlsServerHandshakeError::MalformedSelfCertificate if `self_cert` is
@@ -57,9 +59,10 @@ pub trait CspTlsServerHandshake {
         tcp_stream: TcpStream,
         self_cert: X509PublicKeyCert,
         trusted_client_certs: Vec<X509PublicKeyCert>,
-    ) -> Result<(TlsStream, Option<X509>), CspTlsServerHandshakeError>;
+    ) -> Result<(TlsStream, Option<CspCertificateChain>), CspTlsServerHandshakeError>;
 }
 
+/// A trait that exposes TLS client-side handshaking
 #[async_trait]
 pub trait CspTlsClientHandshake {
     /// Transforms a TCP stream into a TLS stream by performing a TLS

@@ -1,3 +1,5 @@
+//! Defines types that allow outdated replicas to catch up to the latest state.
+
 use crate::{
     consensus::{
         Block, Committee, HasCommittee, HasHeight, HasVersion, HashedBlock, HashedRandomBeacon,
@@ -33,6 +35,7 @@ pub struct CatchUpContentT<T> {
 }
 
 impl CatchUpContent {
+    /// Create a new CatchUpContent
     pub fn new(
         block: HashedBlock,
         random_beacon: HashedRandomBeacon,
@@ -56,6 +59,7 @@ impl CatchUpContent {
             .registry_version
     }
 
+    /// Create a CatchupContent from a
     pub fn from_share_content(share: CatchUpShareContent, block: Block) -> Self {
         Self {
             version: share.version,
@@ -134,12 +138,9 @@ impl<T> HasCommittee for CatchUpContentT<T> {
 
 /// CatchUpPackage is signed by a threshold public key. Its CatchUpContent is
 /// only trusted if the threshold public key is trusted.
-///
-/// TODO(CON-306): At the moment the signature used here is ThresholdSignature,
-/// which has dkgId as the signer. This should be revisited once we have a
-/// clearer picture of what the key should be, where it is stored, etc.
 pub type CatchUpPackage = Signed<CatchUpContent, ThresholdSignature<CatchUpContent>>;
 
+/// CatchUpContentHash is the type of a hashed `CatchUpContent`
 pub type CatchUpContentHash = CryptoHashOf<CatchUpContent>;
 
 impl From<&CatchUpPackage> for pb::CatchUpPackage {
@@ -174,7 +175,7 @@ impl TryFrom<&pb::CatchUpPackage> for CatchUpPackage {
     }
 }
 
-/// Content of CatchUpPackageShare use the block hash to keep its size small.
+/// Content of CatchUpPackageShare uses the block hash to keep its size small.
 pub type CatchUpShareContent = CatchUpContentT<CryptoHashOf<Block>>;
 
 impl From<&CatchUpContent> for CatchUpShareContent {
@@ -228,6 +229,8 @@ impl From<&CatchUpPackage> for CatchUpPackageParam {
     }
 }
 
+/// CatchUpContentProtobufBytes holds bytes that represent a protobuf serialized
+/// catch-up package
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct CatchUpContentProtobufBytes(pub Vec<u8>);
 
@@ -236,11 +239,14 @@ pub struct CatchUpContentProtobufBytes(pub Vec<u8>);
 /// bytes CatchUpContent bytes that were signed in yet to be deserialized form.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct CUPWithOriginalProtobuf {
+    /// The CUP as [`CatchUpPackage`](type@CatchUpPackage)
     pub cup: CatchUpPackage,
+    /// The CUP as protobuf message
     pub protobuf: pb::CatchUpPackage,
 }
 
 impl CUPWithOriginalProtobuf {
+    /// Create a CUPWithOriginalProtobuf from a CatchUpPackage
     pub fn from_cup(cup: CatchUpPackage) -> Self {
         let protobuf = pb::CatchUpPackage::from(&cup);
         Self { cup, protobuf }

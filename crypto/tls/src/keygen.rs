@@ -1,3 +1,5 @@
+//! This module performs TLS keypair generation. It allows to generate an X.509
+//! public key certificate together with its private key.
 use super::*;
 use ic_crypto_internal_tls::keygen::generate_tls_key_pair;
 use openssl::asn1::Asn1Time;
@@ -18,6 +20,14 @@ use rand::Rng;
 ///   other ASN.1 time formats are not allowed. To set no well-defined
 ///   expiration date, pass "99991231235959Z" according to
 ///   https://tools.ietf.org/html/rfc5280#section-4.1.2.5
+///
+/// # Arguments
+/// * `common_name` is the Common Name (and Issuer Name, since the cert is
+///   self-signed)
+/// * `not_after` is a string representation of the Not After field (cf. above)
+///
+/// # Returns
+/// `(TlsPublicKeyCert, TlsPrivateKey)`
 ///
 /// # Panics
 /// * if `not_after` cannot be parsed or lies in the past

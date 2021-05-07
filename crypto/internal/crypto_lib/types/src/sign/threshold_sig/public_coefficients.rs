@@ -3,7 +3,7 @@
 //! Note: Public coefficients are a generalised public key for threshold
 //! signatures.
 use crate::sign::threshold_sig::ni_dkg::CspNiDkgTranscript;
-use crate::sign::threshold_sig::public_key::bls12_381::ThresholdSigPublicKeyError;
+use crate::sign::threshold_sig::public_key::bls12_381::ThresholdSigPublicKeyBytesConversionError;
 use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
 use strum_macros::IntoStaticStr;
@@ -17,7 +17,7 @@ pub enum PublicCoefficients {
 
 // TODO (CRP-832): Add AlgorithmID to the string version of these bytes
 impl TryFrom<&str> for PublicCoefficients {
-    type Error = ThresholdSigPublicKeyError;
+    type Error = ThresholdSigPublicKeyBytesConversionError;
 
     fn try_from(pub_coeffs_string: &str) -> Result<Self, Self::Error> {
         Ok(PublicCoefficients::Bls12_381(
@@ -38,7 +38,7 @@ pub type CspPublicCoefficients = PublicCoefficients;
 pub mod bls12_381 {
     use crate::sign::threshold_sig::public_coefficients::CspPublicCoefficients;
     use crate::sign::threshold_sig::public_key::bls12_381::{
-        PublicKeyBytes, ThresholdSigPublicKeyError,
+        PublicKeyBytes, ThresholdSigPublicKeyBytesConversionError,
     };
     use serde::{Deserialize, Serialize};
     use std::convert::TryFrom;
@@ -58,15 +58,17 @@ pub mod bls12_381 {
     }
 
     impl TryFrom<&str> for PublicCoefficientsBytes {
-        type Error = ThresholdSigPublicKeyError;
+        type Error = ThresholdSigPublicKeyBytesConversionError;
 
-        fn try_from(pub_coeffs_string: &str) -> Result<Self, ThresholdSigPublicKeyError> {
+        fn try_from(
+            pub_coeffs_string: &str,
+        ) -> Result<Self, ThresholdSigPublicKeyBytesConversionError> {
             if pub_coeffs_string.is_empty() {
                 Ok(PublicCoefficientsBytes {
                     coefficients: Vec::new(),
                 })
             } else {
-                let parts: Result<Vec<PublicKeyBytes>, ThresholdSigPublicKeyError> =
+                let parts: Result<Vec<PublicKeyBytes>, ThresholdSigPublicKeyBytesConversionError> =
                     pub_coeffs_string
                         .split(',')
                         .map(PublicKeyBytes::try_from)

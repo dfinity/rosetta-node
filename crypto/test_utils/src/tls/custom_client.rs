@@ -1,3 +1,6 @@
+//! A custom, configurable TLS client that does not rely on the crypto
+//! implementation. It is purely for testing the server.
+#![allow(clippy::unwrap_used)]
 use crate::tls::set_peer_verification_cert_store;
 use crate::tls::x509_certificates::CertWithPrivateKey;
 use ic_protobuf::registry::crypto::v1::X509PublicKeyCert;
@@ -13,17 +16,18 @@ const DEFAULT_MAX_PROTO_VERSION: SslVersion = SslVersion::TLS1_3;
 const DEFAULT_ALLOWED_CIPHER_SUITES: &str = "TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384";
 const DEFAULT_ALLOWED_SIGNATURE_ALGORITHMS: &str = "ed25519";
 
+/// A builder that allows to configure and build a `CustomClient` using a fluent
+/// API.
 pub struct CustomClientBuilder {
     max_proto_version: Option<SslVersion>,
     allowed_cipher_suites: Option<String>,
     allowed_signature_algorithms: Option<String>,
     expected_error: Option<String>,
     client_auth_data: Option<(PKey<Private>, X509)>,
-    client_ca_cert: Option<X509>,
+    extra_chain_certs: Option<Vec<X509>>,
     msg_expected_from_server: Option<String>,
 }
 
-#[allow(unused)]
 impl CustomClientBuilder {
     pub fn with_max_protocol_version(mut self, version: SslVersion) -> Self {
         self.max_proto_version = Some(version);
@@ -46,7 +50,7 @@ impl CustomClientBuilder {
         self
     }
 
-    pub fn with_default_client_auth(mut self, client_node: NodeId) -> Self {
+    pub fn with_default_client_auth(self, client_node: NodeId) -> Self {
         self.with_client_auth(
             CertWithPrivateKey::builder()
                 .cn(client_node.to_string())
@@ -64,8 +68,8 @@ impl CustomClientBuilder {
         self
     }
 
-    pub fn with_client_ca_cert(mut self, client_ca_cert: X509) -> Self {
-        self.client_ca_cert = Some(client_ca_cert);
+    pub fn with_extra_chain_certs(mut self, extra_chain_certs: Vec<X509>) -> Self {
+        self.extra_chain_certs = Some(extra_chain_certs);
         self
     }
 
@@ -86,7 +90,7 @@ impl CustomClientBuilder {
             X509::from_der(&server_cert.certificate_der).expect("Unable to parse server cert.");
         CustomClient {
             client_auth_data: self.client_auth_data,
-            client_ca_cert: self.client_ca_cert,
+            extra_chain_certs: self.extra_chain_certs,
             server_cert,
             max_proto_version,
             allowed_cipher_suites,
@@ -101,7 +105,7 @@ impl CustomClientBuilder {
 /// implementation. It is purely for testing the server.
 pub struct CustomClient {
     client_auth_data: Option<(PKey<Private>, X509)>,
-    client_ca_cert: Option<X509>,
+    extra_chain_certs: Option<Vec<X509>>,
     server_cert: X509,
     max_proto_version: SslVersion,
     allowed_cipher_suites: String,
@@ -119,11 +123,13 @@ impl CustomClient {
             allowed_signature_algorithms: None,
             expected_error: None,
             client_auth_data: None,
-            client_ca_cert: None,
+            extra_chain_certs: None,
             msg_expected_from_server: None,
         }
     }
 
+    /// Run this client asynchronously. This tries to connect to the configured
+    /// server.
     pub async fn run(self, server_port: u16) {
         let tcp_stream = TcpStream::connect(("127.0.0.1", server_port))
             .await
@@ -176,8 +182,10 @@ impl CustomClient {
                 .check_private_key()
                 .expect("Inconsistent private key and certificate.");
         }
-        if let Some(ca_cert) = &self.client_ca_cert {
-            builder.add_extra_chain_cert(ca_cert.clone());
+        if let Some(extra_chain_certs) = &self.extra_chain_certs {
+            for extra_chain_cert in extra_chain_certs {
+                builder.add_extra_chain_cert(extra_chain_cert.clone());
+            }
         }
         let mut connect_config = builder
             .build()
@@ -199,6 +207,7 @@ impl CustomClient {
             .expect("Failed to set the sigalgs list.");
     }
 
+    /// Returns the certificate used for client authentication.
     pub fn client_auth_cert(&self) -> X509PublicKeyCert {
         if let Some((_, cert)) = &self.client_auth_data {
             return X509PublicKeyCert {

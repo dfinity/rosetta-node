@@ -1,6 +1,8 @@
+use ic_types::messages::{
+    HttpCanisterUpdate, HttpReadContent, HttpRequestEnvelope, HttpSubmitContent,
+};
 use ledger_canister::BlockHeight;
 use serde::{Deserialize, Serialize, Serializer};
-use serde_json::json;
 
 // This file is generated from https://github.com/coinbase/rosetta-specifications using openapi-generator
 // Then heavily tweaked because openapi-generator no longer generates valid rust
@@ -70,15 +72,6 @@ pub struct AccountBalanceResponse {
     #[serde(rename = "balances")]
     pub balances: Vec<Amount>,
 
-    /// If a blockchain is UTXO-based, all unspent Coins owned by an
-    /// account_identifier should be returned alongside the balance. It is
-    /// highly recommended to populate this field so that users of the Rosetta
-    /// API implementation don't need to maintain their own indexer to track
-    /// their UTXOs.
-    #[serde(rename = "coins")]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub coins: Option<Vec<Coin>>,
-
     /// Account-based blockchains that utilize a nonce or sequence number should
     /// include that number in the metadata. This number could be unique to the
     /// identifier or global across the account address.
@@ -92,7 +85,6 @@ impl AccountBalanceResponse {
         AccountBalanceResponse {
             block_identifier,
             balances,
-            coins: None,
             metadata: None,
         }
     }
@@ -479,7 +471,7 @@ pub struct ConstructionCombineRequest {
     pub network_identifier: NetworkIdentifier,
 
     #[serde(rename = "unsigned_transaction")]
-    pub unsigned_transaction: String,
+    pub unsigned_transaction: String, // = CBOR+hex-encoded 'UnsignedTransaction'
 
     #[serde(rename = "signatures")]
     pub signatures: Vec<Signature>,
@@ -505,7 +497,7 @@ impl ConstructionCombineRequest {
 #[cfg_attr(feature = "conversion", derive(LabelledGeneric))]
 pub struct ConstructionCombineResponse {
     #[serde(rename = "signed_transaction")]
-    pub signed_transaction: String,
+    pub signed_transaction: String, // = CBOR+hex-encoded 'Envelopes'
 }
 
 impl ConstructionCombineResponse {
@@ -513,6 +505,13 @@ impl ConstructionCombineResponse {
         ConstructionCombineResponse { signed_transaction }
     }
 }
+
+/// The type (encoded as CBOR) returned by /construction/combine, containing the
+/// IC calls to submit the transaction and to check the result.
+pub type Envelopes = Vec<(
+    HttpRequestEnvelope<HttpSubmitContent>,
+    HttpRequestEnvelope<HttpReadContent>,
+)>;
 
 /// ConstructionDeriveRequest is passed to the `/construction/derive` endpoint.
 /// Network is provided in the request because some blockchains have different
@@ -780,7 +779,7 @@ impl ConstructionPayloadsRequest {
 #[cfg_attr(feature = "conversion", derive(LabelledGeneric))]
 pub struct ConstructionPayloadsResponse {
     #[serde(rename = "unsigned_transaction")]
-    pub unsigned_transaction: String,
+    pub unsigned_transaction: String, // = CBOR+hex-encoded 'UnsignedTransaction'
 
     #[serde(rename = "payloads")]
     pub payloads: Vec<SigningPayload>,
@@ -796,6 +795,12 @@ impl ConstructionPayloadsResponse {
             payloads,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnsignedTransaction {
+    pub update: HttpCanisterUpdate,
+    pub ingress_expiries: Vec<u64>,
 }
 
 /// ConstructionPreprocessRequest is passed to the `/construction/preprocess`
@@ -1024,6 +1029,7 @@ impl Error {
             ApiError::InvalidNetworkId(r, d) => (710, "Invalid NetworkId", r, d),
             ApiError::InvalidAccountId(r, d) => (711, "Account not found", r, d),
             ApiError::InvalidBlockId(r, d) => (712, "Block not found", r, d),
+            ApiError::InvalidPublicKey(r, d) => (713, "Invalid public key", r, d),
             ApiError::MempoolTransactionMissing(r, d) => {
                 (720, "Transaction not in the mempool", r, d)
             }
@@ -1033,6 +1039,7 @@ impl Error {
             }
             ApiError::ICError(r, d) => (740, "Internet Computer error", r, d),
             ApiError::TransactionRejected(r, d) => (750, "Transaction rejected", r, d),
+            ApiError::TransactionExpired => (760, "Transaction expired", &false, &None),
         };
         Self {
             code,
@@ -1042,15 +1049,9 @@ impl Error {
         }
     }
 
-    pub fn serialization_error_json_str(details: Option<Object>) -> String {
-        // This needs to match ApiError::InternalError code and message
-        json!({
-                "code": 700,
-                "message": "Internal server error",
-                "retriable": true,
-                "details": details
-        })
-        .to_string()
+    pub fn serialization_error_json_str() -> String {
+        "{\"code\":700,\"message\":\"Internal server error\",\"retriable\":true,\"details\":null}"
+            .to_string()
     }
 }
 
@@ -1063,12 +1064,14 @@ pub enum ApiError {
     InvalidNetworkId(bool, Option<Object>),
     InvalidAccountId(bool, Option<Object>),
     InvalidBlockId(bool, Option<Object>),
+    InvalidPublicKey(bool, Option<Object>),
     MempoolTransactionMissing(bool, Option<Object>),
     BlockchainEmpty(bool, Option<Object>),
     InvalidTransaction(bool, Option<Object>),
     NotAvailableOffline(bool, Option<Object>),
     ICError(bool, Option<Object>),
     TransactionRejected(bool, Option<Object>),
+    TransactionExpired,
 }
 
 impl serde::Serialize for ApiError {
@@ -1808,6 +1811,82 @@ impl TransactionIdentifierResponse {
         TransactionIdentifierResponse {
             transaction_identifier,
             metadata: None,
+        }
+    }
+}
+
+/// SearchTransactionsRequest models a small subset of the /search/transactions
+/// endpoint. Currently we only support looking up a transaction given its hash;
+/// this functionality is desired by our crypto exchanges partners.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "conversion", derive(LabelledGeneric))]
+pub struct SearchTransactionsRequest {
+    #[serde(rename = "network_identifier")]
+    pub network_identifier: NetworkIdentifier,
+
+    #[serde(rename = "transaction_identifier")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transaction_identifier: Option<TransactionIdentifier>,
+
+    #[serde(rename = "account_identifier")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_identifier: Option<AccountIdentifier>,
+}
+
+impl SearchTransactionsRequest {
+    pub fn new(
+        network_identifier: NetworkIdentifier,
+        transaction_identifier: Option<TransactionIdentifier>,
+        account_identifier: Option<AccountIdentifier>,
+    ) -> SearchTransactionsRequest {
+        SearchTransactionsRequest {
+            network_identifier,
+            transaction_identifier,
+            account_identifier,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "conversion", derive(LabelledGeneric))]
+pub struct BlockTransaction {
+    #[serde(rename = "block_identifier")]
+    pub block_identifier: BlockIdentifier,
+
+    #[serde(rename = "transaction")]
+    pub transaction: Transaction,
+}
+
+impl BlockTransaction {
+    pub fn new(block_identifier: BlockIdentifier, transaction: Transaction) -> BlockTransaction {
+        BlockTransaction {
+            block_identifier,
+            transaction,
+        }
+    }
+}
+
+/// SearchTransactionsResponse is the result of the /search/transactions
+/// endpoint. Currently we only return either 0 or 1 transactions, based on
+/// whether the given transaction hash is found.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "conversion", derive(LabelledGeneric))]
+pub struct SearchTransactionsResponse {
+    #[serde(rename = "transactions")]
+    pub transactions: Vec<BlockTransaction>,
+
+    #[serde(rename = "total_count")]
+    pub total_count: i64,
+}
+
+impl SearchTransactionsResponse {
+    pub fn new(
+        transactions: Vec<BlockTransaction>,
+        total_count: i64,
+    ) -> SearchTransactionsResponse {
+        SearchTransactionsResponse {
+            transactions,
+            total_count,
         }
     }
 }

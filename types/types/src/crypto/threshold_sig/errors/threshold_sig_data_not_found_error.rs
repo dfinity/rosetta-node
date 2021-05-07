@@ -1,7 +1,13 @@
+//! An error that occurs if the threshold signature data has not been loaded
+//! into the threshold signature data store.
 use crate::crypto::threshold_sig::ni_dkg::DkgId;
 use crate::crypto::CryptoError;
 use std::fmt;
 
+/// Occurs if the threshold signature data has not been loaded into the
+/// threshold signature data store. Refer to the documentation of
+/// `ThresholdSigner` and `ThresholdSigVerifier` for details on how to act upon
+/// this error.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ThresholdSigDataNotFoundError {
     ThresholdSigDataNotFound { dkg_id: DkgId },

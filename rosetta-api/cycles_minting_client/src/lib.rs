@@ -1,14 +1,11 @@
 use cycles_minting_canister::{
     create_canister_txn, top_up_canister_txn, CreateCanisterResult, TopUpCanisterResult,
 };
-use dfn_candid::CandidOne;
 use dfn_protobuf::ProtoBuf;
 use ic_canister_client::{Agent, HttpClient, Sender};
 use ic_types::{CanisterId, PrincipalId};
 use lazy_static::lazy_static;
-use ledger_canister::{
-    self, BlockHeight, ICPTs, NotifyCanisterArgs, Subaccount, TransactionNotificationResult,
-};
+use ledger_canister::{self, BlockHeight, CyclesResponse, ICPTs, NotifyCanisterArgs, Subaccount};
 use on_wire::{FromWire, IntoWire, NewType};
 use std::sync::atomic::{AtomicU64, Ordering};
 use url::Url;
@@ -42,7 +39,7 @@ impl<'a> CreateCanister<'a> {
         let bytes = ledger_agent
             .execute_update(
                 self.ledger_canister_id,
-                "send",
+                "send_pb",
                 ProtoBuf(send_args.clone())
                     .into_bytes()
                     .map_err(|err| (err, None))?,
@@ -67,8 +64,8 @@ impl<'a> CreateCanister<'a> {
         let bytes = ledger_agent
             .execute_update(
                 self.ledger_canister_id,
-                "notify",
-                CandidOne(notify_args)
+                "notify_pb",
+                ProtoBuf(notify_args)
                     .into_bytes()
                     .map_err(|err| (err, None))?,
                 get_nonce(),
@@ -77,13 +74,16 @@ impl<'a> CreateCanister<'a> {
             .map_err(|err| (err, None))?
             .unwrap();
 
-        let result: TransactionNotificationResult = CandidOne::from_bytes(bytes)
+        match ProtoBuf::from_bytes(bytes)
             .map_err(|err| (err, None))?
-            .into_inner();
-
-        result
-            .decode::<CreateCanisterResult>()
-            .map_err(|err| (err, None))?
+            .into_inner()
+        {
+            CyclesResponse::CanisterCreated(cid) => Ok(cid),
+            CyclesResponse::ToppedUp(()) => {
+                Err(("Unexpected response, 'topped up'".to_string(), None))
+            }
+            CyclesResponse::Refunded(err, height) => Err((err, height)),
+        }
     }
 }
 
@@ -116,7 +116,7 @@ impl<'a> TopUpCanister<'a> {
         let bytes = agent
             .execute_update(
                 self.ledger_canister_id,
-                "send",
+                "send_pb",
                 ProtoBuf(send_args.clone())
                     .into_bytes()
                     .map_err(|err| (err, None))?,
@@ -141,8 +141,8 @@ impl<'a> TopUpCanister<'a> {
         let bytes = agent
             .execute_update(
                 self.ledger_canister_id,
-                "notify",
-                CandidOne(notify_args)
+                "notify_pb",
+                ProtoBuf(notify_args)
                     .into_bytes()
                     .map_err(|err| (err, None))?,
                 get_nonce(),
@@ -151,13 +151,16 @@ impl<'a> TopUpCanister<'a> {
             .map_err(|err| (err, None))?
             .unwrap();
 
-        let result: TransactionNotificationResult = CandidOne::from_bytes(bytes)
+        match ProtoBuf::from_bytes(bytes)
             .map_err(|err| (err, None))?
-            .into_inner();
-
-        result
-            .decode::<TopUpCanisterResult>()
-            .map_err(|err| (err, None))?
+            .into_inner()
+        {
+            CyclesResponse::CanisterCreated(_) => {
+                Err(("Unexpected response, 'created canister'".to_string(), None))
+            }
+            CyclesResponse::ToppedUp(()) => Ok(()),
+            CyclesResponse::Refunded(err, height) => Err((err, height)),
+        }
     }
 }
 

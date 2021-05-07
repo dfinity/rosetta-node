@@ -1,3 +1,4 @@
+//! The gossip pool public interface.
 use crate::{
     artifact_pool::ArtifactPoolError, certification::ChangeSet as CertificationChangeSet,
     consensus_pool::ChangeSet as ConsensusChangeSet, dkg::ChangeSet as DkgChangeSet,
@@ -14,10 +15,6 @@ use ic_types::{
 /// to interact with the Pools internally and allow GossipProtocol to
 /// serve the gossip functionality. Every pool needs to implement this
 /// trait.
-///
-/// TODO: This needs to be discussed to understand alignment with the
-/// expected
-/// Architecture(https://docs.dfinity.systems/dfinity/spec/meta/rust-arch.html).
 pub trait GossipPool<T, S> {
     type MessageId;
     type Filter;
@@ -41,8 +38,6 @@ pub trait GossipPool<T, S> {
     /// #Returns:
     /// - 'Some`: Artifact from the validated pool.
     /// - `None`: Artifact does not exist in the validated pool.
-    // TODO: Should we return reference to the object instead of a copy?
-    // Revisit this.
     fn get_validated_by_identifier(&self, id: &Self::MessageId) -> Option<T>;
 
     /// Get all validated artifacts by the filter
@@ -50,9 +45,6 @@ pub trait GossipPool<T, S> {
     ///
     /// #Returns:
     /// A iterator over all the validated artifacts.
-    // TODO: Should we return reference to the object instead of a copy?
-    // Currently it is not easy to return a reference to the
-    // caller as some of the pools have the artifacts in the persistent memory.
     fn get_all_validated_by_filter(&self, filter: Self::Filter)
         -> Box<dyn Iterator<Item = T> + '_>;
 }

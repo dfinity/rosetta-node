@@ -127,12 +127,17 @@ impl ThresholdSigDataStoreImpl {
             self.store.insert(dkg_id, ThresholdSigData::default());
             self.dkg_id_insertion_order.push_back(dkg_id);
         }
-        self.store.get_mut(&dkg_id).unwrap(/* infallible */)
+        self.store
+            .get_mut(&dkg_id)
+            .expect("Missing dkg id from store")
     }
 
     fn purge_entry_for_oldest_dkg_id_if_necessary(&mut self) {
         if self.store.len() > self.max_num_of_dkg_ids {
-            let oldest_dkg_id = self.dkg_id_insertion_order.pop_front().unwrap(/* infallible: self.max_num_of_dkg_ids >= 1 */);
+            let oldest_dkg_id = self
+                .dkg_id_insertion_order
+                .pop_front()
+                .expect("dkg store unexpectedly empty");
             self.store.remove(&oldest_dkg_id);
         }
     }

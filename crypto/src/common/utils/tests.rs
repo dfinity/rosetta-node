@@ -1,8 +1,14 @@
+#![allow(clippy::unwrap_used)]
+
 use super::*;
 use ic_config::crypto::CryptoConfig;
 use ic_test_utilities::types::ids::node_test_id;
 
 const NODE_ID: u64 = 42;
+
+fn store_public_keys(crypto_root: &Path, node_pks: &NodePublicKeys) {
+    public_key_store::store_node_public_keys(crypto_root, node_pks).unwrap();
+}
 
 #[test]
 fn should_generate_all_keys_for_given_node_id_for_new_node() {

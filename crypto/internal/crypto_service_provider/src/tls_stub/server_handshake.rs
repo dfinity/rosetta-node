@@ -1,7 +1,10 @@
 use crate::api::tls_errors::{CspMalformedPeerCertificateError, CspTlsServerHandshakeError};
 use crate::api::CspTlsServerHandshake;
 use crate::secret_key_store::SecretKeyStore;
-use crate::tls_stub::{key_from_secret_key_store, peer_cert_from_stream, CspTlsSecretKeyError};
+use crate::tls_stub::cert_chain::CspCertificateChain;
+use crate::tls_stub::{
+    key_from_secret_key_store, peer_cert_chain_from_stream, CspTlsSecretKeyError,
+};
 use crate::Csp;
 use async_trait::async_trait;
 use ic_crypto_tls_interfaces::TlsStream;
@@ -21,7 +24,7 @@ impl<R: Rng + CryptoRng + Send + Sync, S: SecretKeyStore> CspTlsServerHandshake 
         tcp_stream: TcpStream,
         self_cert: X509PublicKeyCert,
         trusted_client_certs: Vec<X509PublicKeyCert>,
-    ) -> Result<(TlsStream, Option<X509>), CspTlsServerHandshakeError> {
+    ) -> Result<(TlsStream, Option<CspCertificateChain>), CspTlsServerHandshakeError> {
         let tls_acceptor = self.tls_acceptor(self_cert, trusted_client_certs.clone())?;
 
         let tls_stream = tokio_openssl::accept(&tls_acceptor, tcp_stream)
@@ -30,8 +33,8 @@ impl<R: Rng + CryptoRng + Send + Sync, S: SecretKeyStore> CspTlsServerHandshake 
                 internal_error: format!("Handshake failed in tokio_openssl:accept: {}", e),
             })?;
 
-        let peer_cert = peer_cert_from_stream(&tls_stream)?;
-        Ok((TlsStream::new(tls_stream), peer_cert))
+        let peer_cert_chain = peer_cert_chain_from_stream(&tls_stream)?;
+        Ok((TlsStream::new(tls_stream), peer_cert_chain))
     }
 }
 
@@ -87,8 +90,8 @@ impl From<CspTlsSecretKeyError> for CspTlsServerHandshakeError {
             CspTlsSecretKeyError::SecretKeyNotFound => {
                 CspTlsServerHandshakeError::SecretKeyNotFound
             }
-            CspTlsSecretKeyError::MalformedSecretKey { internal_error } => {
-                CspTlsServerHandshakeError::MalformedSecretKey { internal_error }
+            CspTlsSecretKeyError::MalformedSecretKey => {
+                CspTlsServerHandshakeError::MalformedSecretKey
             }
             CspTlsSecretKeyError::WrongSecretKeyType => {
                 CspTlsServerHandshakeError::WrongSecretKeyType

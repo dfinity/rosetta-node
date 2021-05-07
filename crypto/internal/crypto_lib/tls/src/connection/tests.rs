@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use ic_crypto_test_utils::tls::x509_certificates::{
     ed25519_key_pair, generate_cert, generate_ed25519_cert, prime256v1_key_pair,
 };

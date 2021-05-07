@@ -5,6 +5,7 @@ use ic_types::IDkgId;
 #[cfg(test)]
 mod tests;
 
+/// Compute a key identifier for a DKG id
 // This conversion is currently in a separate module since it cannot be
 // implemented using the `From` trait in the types crate. The reason for this is
 // that the types crate has no dependency on crypto.

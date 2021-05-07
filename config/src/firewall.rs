@@ -14,14 +14,6 @@ pub const FIREWALL_FILE_DEFAULT_PATH: &str = "/This/must/not/be/a/real/path";
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(test, derive(Arbitrary))]
-pub struct DataCenter {
-    pub dcop_principal_id: Vec<u8>,
-    pub ipv6_prefixes: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[cfg_attr(test, derive(Arbitrary))]
 pub struct Config {
     /// Path to use for storing state on the file system
     #[cfg_attr(
@@ -29,20 +21,18 @@ pub struct Config {
         proptest(strategy = "any::<String>().prop_map(|x| PathBuf::from(x))")
     )]
     pub config_file: PathBuf,
-    pub ipv4_config: String,
-    pub ipv6_config: String,
-    pub dcs_var_name: String,
-    pub data_centers: Vec<DataCenter>,
+    pub firewall_config: String,
+    pub ipv4_prefixes: Vec<String>,
+    pub ipv6_prefixes: Vec<String>,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             config_file: PathBuf::from(FIREWALL_FILE_DEFAULT_PATH),
-            ipv4_config: "".to_string(),
-            ipv6_config: "".to_string(),
-            dcs_var_name: "".to_string(),
-            data_centers: vec![],
+            firewall_config: "".to_string(),
+            ipv4_prefixes: vec![],
+            ipv6_prefixes: vec![],
         }
     }
 }

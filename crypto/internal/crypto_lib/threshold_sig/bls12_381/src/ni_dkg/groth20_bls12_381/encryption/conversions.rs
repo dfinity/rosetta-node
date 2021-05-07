@@ -3,13 +3,13 @@ use super::super::types::{BTENode, FsEncryptionSecretKey};
 use super::crypto;
 use arrayvec::ArrayVec;
 use ic_crypto_internal_bls12381_serde_miracl::{
-    miracl_fr_from_bytes_unchecked, miracl_fr_to_bytes, miracl_g1_from_bytes, miracl_g1_to_bytes,
+    miracl_fr_from_bytes, miracl_fr_to_bytes, miracl_g1_from_bytes, miracl_g1_to_bytes,
     miracl_g2_from_bytes, miracl_g2_to_bytes,
 };
 use ic_crypto_internal_fs_ni_dkg::{nizk_chunking::ProofChunking, nizk_sharing::ProofSharing};
 use ic_crypto_internal_types::curves::bls12_381::{G1 as G1Bytes, G2 as G2Bytes};
 use ic_crypto_internal_types::sign::threshold_sig::ni_dkg::ni_dkg_groth20_bls12_381::{
-    Chunk, FsEncryptionCiphertext, FsEncryptionPlaintext, FsEncryptionPok, FsEncryptionPublicKey,
+    Chunk, FsEncryptionCiphertext, FsEncryptionPlaintext, FsEncryptionPop, FsEncryptionPublicKey,
     NUM_CHUNKS,
 };
 use ic_crypto_internal_types::sign::threshold_sig::ni_dkg::ni_dkg_groth20_bls12_381::{
@@ -74,20 +74,25 @@ pub fn secret_key_into_miracl(secret_key: &FsEncryptionSecretKey) -> crypto::Sec
     }
 }
 
-/// Serialises a miracl public key to standard form public key + pok
+/// Serialises a miracl public key to standard form public key + pop
 pub fn public_key_from_miracl(
-    crypto_public_key: &crypto::PublicKey,
-) -> (FsEncryptionPublicKey, FsEncryptionPok) {
+    crypto_public_key: &crypto::PublicKeyWithPop,
+) -> (FsEncryptionPublicKey, FsEncryptionPop) {
     let public_key_bytes = {
-        let g1 = miracl_g1_to_bytes(&crypto_public_key.y);
+        let g1 = miracl_g1_to_bytes(&crypto_public_key.key_value);
         FsEncryptionPublicKey(g1)
     };
-    let pok_bytes = {
-        let blinder = miracl_g1_to_bytes(&crypto_public_key.nizk_a);
-        let response = miracl_fr_to_bytes(&crypto_public_key.nizk_z);
-        FsEncryptionPok { blinder, response }
+    let pop_bytes = {
+        let pop_key = miracl_g1_to_bytes(&crypto_public_key.proof_data.pop_key);
+        let challenge = miracl_fr_to_bytes(&crypto_public_key.proof_data.challenge);
+        let response = miracl_fr_to_bytes(&crypto_public_key.proof_data.response);
+        FsEncryptionPop {
+            pop_key,
+            challenge,
+            response,
+        }
     };
-    (public_key_bytes, pok_bytes)
+    (public_key_bytes, pop_bytes)
 }
 
 /// Parses a standard form public key into the miracl-based type.
@@ -95,13 +100,16 @@ pub fn public_key_from_miracl(
 /// # Errors
 /// Returns an error if any of the components is not a correct group element.
 pub fn public_key_into_miracl(
-    public_key_with_pok: (&FsEncryptionPublicKey, &FsEncryptionPok),
-) -> Result<crypto::PublicKey, ()> {
-    let (public_key, pok) = public_key_with_pok;
-    Ok(crypto::PublicKey {
-        y: miracl_g1_from_bytes(public_key.as_bytes())?,
-        nizk_a: miracl_g1_from_bytes(&pok.blinder.0)?,
-        nizk_z: miracl_fr_from_bytes_unchecked(&pok.response.0),
+    public_key_with_pop: (&FsEncryptionPublicKey, &FsEncryptionPop),
+) -> Result<crypto::PublicKeyWithPop, ()> {
+    let (public_key, pop) = public_key_with_pop;
+    Ok(crypto::PublicKeyWithPop {
+        key_value: miracl_g1_from_bytes(public_key.as_bytes())?,
+        proof_data: crypto::EncryptionKeyPop {
+            pop_key: miracl_g1_from_bytes(&pop.pop_key.0)?,
+            challenge: miracl_fr_from_bytes(&pop.challenge.0)?,
+            response: miracl_fr_from_bytes(&pop.response.0)?,
+        },
     })
 }
 
@@ -121,26 +129,8 @@ impl From<Epoch> for Tau {
 
 impl From<&Tau> for Epoch {
     fn from(tau: &Tau) -> Epoch {
-        epoch_from_tau_vec(&tau.0)
+        crypto::epoch_from_tau_vec(&tau.0)
     }
-}
-
-/// Converts an epoch prefix to an epoch by filling in remaining bits with
-/// zeros.
-fn epoch_from_tau_vec(tau: &[crypto::Bit]) -> Epoch {
-    let num_bits = ::std::mem::size_of::<Epoch>() * 8;
-    Epoch::from(
-        (0..num_bits)
-            .rev()
-            .zip(tau)
-            .fold(0u32, |epoch, (shift, tau)| {
-                epoch
-                    | ((match *tau {
-                        crypto::Bit::One => 1,
-                        crypto::Bit::Zero => 0,
-                    }) << shift)
-            }),
-    )
 }
 
 /// Gets the current epoch for a secret key.
@@ -149,7 +139,7 @@ fn epoch_from_tau_vec(tau: &[crypto::Bit]) -> Epoch {
 /// This will panic if the secret key has expired; in this case it has no
 /// current epoch.
 pub fn epoch_from_miracl_secret_key(secret_key: &crypto::SecretKey) -> Epoch {
-    epoch_from_tau_vec(&secret_key.current().expect("No more secret keys left").tau)
+    crypto::epoch_from_tau_vec(&secret_key.current().expect("No more secret keys left").tau)
 }
 
 /// Serialises a ciphertext from the miracl representation into the standard
@@ -281,7 +271,7 @@ pub fn plaintext_from_bytes(bytes: &[Chunk; NUM_CHUNKS]) -> Vec<isize> {
 pub fn public_coefficients_to_miracl(
     public_coefficients: &PublicCoefficientsBytes,
 ) -> Result<Vec<ECP2>, ()> {
-    // TODO (CRP-816): Return malformed public key
+    // TODO (CRP-816): Return CryptoError::MalformedPublicKey instead of ()
     public_coefficients
         .coefficients
         .iter()
@@ -352,13 +342,13 @@ pub fn chunking_proof_into_miracl(proof: &ZKProofDec) -> Result<ProofChunking, (
         z_r: proof
             .response_z_r
             .iter()
-            .map(|fr| miracl_fr_from_bytes_unchecked(fr.as_bytes()))
-            .collect(),
+            .map(|fr| miracl_fr_from_bytes(fr.as_bytes()))
+            .collect::<Result<_, _>>()?,
         z_s: proof.response_z_s[..]
             .iter()
-            .map(|fr| miracl_fr_from_bytes_unchecked(fr.as_bytes()))
-            .collect(),
-        z_beta: miracl_fr_from_bytes_unchecked(&proof.response_z_b.as_bytes()),
+            .map(|fr| miracl_fr_from_bytes(fr.as_bytes()))
+            .collect::<Result<_, _>>()?,
+        z_beta: miracl_fr_from_bytes(&proof.response_z_b.as_bytes())?,
     };
     if chunking_proof.dd.len() != chunking_proof.z_r.len() + 1 {
         return Err(());
@@ -389,11 +379,7 @@ pub fn sharing_proof_into_miracl(proof: &ZKProofShare) -> Result<ProofSharing, (
         ff: miracl_g1_from_bytes(&proof.first_move_f.as_bytes())?,
         aa: miracl_g2_from_bytes(&proof.first_move_a.as_bytes())?,
         yy: miracl_g1_from_bytes(&proof.first_move_y.as_bytes())?,
-        z_r: miracl_fr_from_bytes_unchecked(&proof.response_z_r.as_bytes()), /* TODO: Should this
-                                                                              * be a result?
-                                                                              * What if the value
-                                                                              * is larger than
-                                                                              * the modulus? */
-        z_alpha: miracl_fr_from_bytes_unchecked(&proof.response_z_a.as_bytes()),
+        z_r: miracl_fr_from_bytes(&proof.response_z_r.as_bytes())?,
+        z_alpha: miracl_fr_from_bytes(&proof.response_z_a.as_bytes())?,
     })
 }

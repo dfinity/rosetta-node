@@ -1,5 +1,4 @@
 //! Implements the dealing methods of `DkgAlgorithm`.
-//! Spec: https://docs.dfinity.systems/dfinity/spec/replica/ancillary/crypto/index.html#_dkg
 
 use super::*;
 use crate::sign::threshold_sig::dkg::shared_utils::csp_keys;

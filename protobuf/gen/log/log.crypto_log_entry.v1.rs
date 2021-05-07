@@ -1,3 +1,4 @@
+/// A crypto component log entry.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CryptoLogEntry {

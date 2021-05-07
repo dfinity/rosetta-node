@@ -94,8 +94,8 @@ impl From<CspTlsSecretKeyError> for CspTlsClientHandshakeError {
             CspTlsSecretKeyError::SecretKeyNotFound => {
                 CspTlsClientHandshakeError::SecretKeyNotFound
             }
-            CspTlsSecretKeyError::MalformedSecretKey { internal_error } => {
-                CspTlsClientHandshakeError::MalformedSecretKey { internal_error }
+            CspTlsSecretKeyError::MalformedSecretKey => {
+                CspTlsClientHandshakeError::MalformedSecretKey
             }
             CspTlsSecretKeyError::WrongSecretKeyType => {
                 CspTlsClientHandshakeError::WrongSecretKeyType

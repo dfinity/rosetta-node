@@ -1,3 +1,4 @@
+//! Test vectors for multisignatures using BLS12-381.
 pub const TESTVEC_MULTI_BLS12_381_1_SK: &str = "d9c35fad8d209c951f5facdb23ff9615\
                                                 862ae6c68f4b8b35f90f319c411d638b";
 pub const TESTVEC_MULTI_BLS12_381_1_PK: &str = "abf62cf8f448af4fa2071cc31fcdbe56\

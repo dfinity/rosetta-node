@@ -68,7 +68,7 @@ pub fn operations(transaction: &Transfer, completed: bool) -> Result<Vec<Operati
         } => {
             let from_account = Some(to_model_account_identifier(from));
             let to_account = Some(to_model_account_identifier(to));
-            let amount = i128::try_from(amount.get_doms())
+            let amount = i128::try_from(amount.get_e8s())
                 .map_err(|_| ApiError::InternalError(true, None))?;
             let db = Operation::new(
                 0,
@@ -77,22 +77,20 @@ pub fn operations(transaction: &Transfer, completed: bool) -> Result<Vec<Operati
                 from_account.clone(),
                 Some(signed_amount(-amount)),
             );
-            let mut cr = Operation::new(
+            let cr = Operation::new(
                 1,
                 TRANSACTION.to_string(),
                 status.clone(),
                 to_account,
                 Some(signed_amount(amount)),
             );
-            cr.related_operations = Some(vec![db.operation_identifier.clone()]);
-            let mut fee = Operation::new(
+            let fee = Operation::new(
                 2,
                 FEE.to_string(),
                 status,
                 from_account,
-                Some(signed_amount(-(fee.get_doms() as i128))),
+                Some(signed_amount(-(fee.get_e8s() as i128))),
             );
-            fee.related_operations = Some(vec![db.operation_identifier.clone()]);
             vec![db, cr, fee]
         }
         // TODO include the destination in the metadata
@@ -103,7 +101,7 @@ pub fn operations(transaction: &Transfer, completed: bool) -> Result<Vec<Operati
             vec![op]
         }
         Transfer::Burn { from, amount, .. } => {
-            let amount = i128::try_from(amount.get_doms())
+            let amount = i128::try_from(amount.get_e8s())
                 .map_err(|_| ApiError::InternalError(true, None))?;
             let account = Some(to_model_account_identifier(from));
             let amount = Some(signed_amount(-amount));
@@ -135,7 +133,7 @@ pub fn from_operations(
 
     // Requests to preprocess often doesn't have a fee, but there's nothing stopping
     // someone from putting one there so we are flexible
-    if ops.len() != 3 && !preprocessing {
+    if ops.len() > 3 {
         return trans_err(
             "Operations do not combine to make a recognizable
     transaction"
@@ -156,20 +154,20 @@ pub fn from_operations(
 
         match o._type.as_str() {
             TRANSACTION => {
-                if amount < 0 || cr.is_some() && amount == 0 {
-                    let icpts = ICPTs::from_doms((-amount) as u64);
-                    db = Some((icpts, account));
-                } else {
-                    let icpts = ICPTs::from_doms(amount as u64);
+                if amount > 0 || db.is_some() && amount == 0 {
+                    let icpts = ICPTs::from_e8s(amount as u64);
                     cr = Some((icpts, account));
+                } else {
+                    let icpts = ICPTs::from_e8s((-amount) as u64);
+                    db = Some((icpts, account));
                 }
             }
             FEE => {
-                if -amount != TRANSACTION_FEE.get_doms() as i128 {
-                    let msg = format!("Fee should be equal: {}", TRANSACTION_FEE.get_doms());
+                if -amount != TRANSACTION_FEE.get_e8s() as i128 {
+                    let msg = format!("Fee should be equal: {}", TRANSACTION_FEE.get_e8s());
                     return Err(op_error(&o, msg));
                 }
-                let icpts = ICPTs::from_doms((-amount) as u64);
+                let icpts = ICPTs::from_e8s((-amount) as u64);
                 fee = Some((icpts, account));
             }
             _ => {
@@ -189,13 +187,17 @@ pub fn from_operations(
             "Operations do not combine to make a recognizable transaction".to_string(),
         );
     }
-    let (cr_amount, to) = cr.unwrap();
-    let (db_amount, from) = db.unwrap();
+    let (cr_amount, mut to) = cr.unwrap();
+    let (db_amount, mut from) = db.unwrap();
     let (fee_amount, fee_acc) = fee.unwrap();
 
     if fee_acc != from {
-        let msg = format!("Fee should be taken from {}", from);
-        return trans_err(msg);
+        if cr_amount == ICPTs::ZERO && fee_acc == to {
+            std::mem::swap(&mut from, &mut to);
+        } else {
+            let msg = format!("Fee should be taken from {}", from);
+            return trans_err(msg);
+        }
     }
     if cr_amount != db_amount {
         return trans_err("Debit_amount should be equal -credit_amount".to_string());
@@ -210,7 +212,7 @@ pub fn from_operations(
 }
 
 pub fn amount_(amount: ICPTs) -> Result<Amount, ApiError> {
-    let amount = amount.get_doms();
+    let amount = amount.get_e8s();
     Ok(Amount {
         value: format!("{}", amount),
         currency: icp(),
@@ -245,7 +247,7 @@ pub fn from_amount(amount: &Amount) -> Result<i128, String> {
 }
 pub fn ledgeramount_from_amount(amount: &Amount) -> Result<ICPTs, String> {
     let inner = from_amount(amount)?;
-    Ok(ICPTs::from_doms(inner as u64))
+    Ok(ICPTs::from_e8s(inner as u64))
 }
 
 pub fn icp() -> Currency {
@@ -281,12 +283,6 @@ pub fn from_metadata(mut ob: models::Object) -> Result<BlockHeight, ApiError> {
     from_value(v).map_err(|_| ApiError::InternalError(false, None))
 }
 
-pub fn into_metadata(h: BlockHeight) -> models::Object {
-    let mut m = Map::new();
-    m.insert(LAST_HEIGHT.to_string(), Value::from(h));
-    m
-}
-
 // This converts an error message to something that ApiError can consume
 // This returns an option because it's what the error type expects, but it will
 // always return Some
@@ -311,27 +307,26 @@ pub fn to_hex(v: &[u8]) -> String {
 }
 
 pub fn transaction_id(
-    signed_transaction: HttpRequestEnvelope<HttpSubmitContent>,
+    signed_transaction: &HttpRequestEnvelope<HttpSubmitContent>,
 ) -> Result<TransactionIdentifier, ApiError> {
-    let update = match signed_transaction.content {
-        HttpSubmitContent::Call { update } => update,
-    };
-    let from = PrincipalId::try_from(update.sender.0).map_err(|e| internal_error(e.to_string()))?;
+    let HttpSubmitContent::Call { update } = &signed_transaction.content;
+    let from = PrincipalId::try_from(update.sender.clone().0)
+        .map_err(|e| internal_error(e.to_string()))?;
     let SendArgs {
         memo,
         amount,
         fee,
         from_subaccount,
         to,
-        block_height,
-    } = from_arg(update.arg.0)?;
-    let created_at = block_height.ok_or_else(|| internal_error(
-        "A transaction ID cannot be generated from a constructed transaction without an explicit block height"
+        created_at_time,
+    } = from_arg(update.arg.clone().0)?;
+    let created_at_time = created_at_time.ok_or_else(|| internal_error(
+        "A transaction ID cannot be generated from a constructed transaction without an explicit 'created_at_time'"
     ))?;
 
     let from = ledger_canister::AccountIdentifier::new(from, from_subaccount);
 
-    let hash = Transaction::new(from, to, amount, fee, memo, created_at).hash();
+    let hash = Transaction::new(from, to, amount, fee, memo, created_at_time).hash();
 
     Ok(transaction_identifier(&hash))
 }

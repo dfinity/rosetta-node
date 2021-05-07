@@ -1,9 +1,12 @@
+//! Types related to receivers for non-interactive DKG.
 use super::*;
 use crate::crypto::threshold_sig::ni_dkg::config::errors::NiDkgConfigValidationError;
 
 #[cfg(test)]
 mod tests;
 
+/// A set of receivers for non-interactive DKG. Satisfies invariants, see
+/// `NiDkgReceivers::new`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NiDkgReceivers {
     receivers: BTreeSet<NodeId>,
@@ -45,6 +48,8 @@ impl NiDkgReceivers {
         Ok(())
     }
 
+    /// Returns the position of the given `node_id` in the receivers. Returns
+    /// `None` if the `node_id` is not a receiver.
     pub fn position(&self, node_id: NodeId) -> Option<NodeIndex> {
         self.receivers
             .iter()

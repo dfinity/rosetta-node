@@ -51,6 +51,7 @@ message NiDkgTranscriptResult {
 	}
 }
 
+// A transcript for non-interactive Distributed Key Generation (NI-DKG).
 message NiDkgTranscript {
 	NiDkgId dkg_id = 1;
 	uint32 threshold = 2;
@@ -59,6 +60,7 @@ message NiDkgTranscript {
 	bytes internal_csp_transcript = 5;
 }
 
+// A configuration for non-interactive Distributed Key Generation (NI-DKG).
 message NiDkgConfig {
 	NiDkgId dkg_id = 1;
 	uint32 max_corrupt_dealers = 2;

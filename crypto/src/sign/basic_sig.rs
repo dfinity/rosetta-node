@@ -1,5 +1,6 @@
 use super::*;
 use ic_crypto_internal_csp::api::CspSigner;
+use ic_crypto_internal_csp::types::SigConverter;
 
 #[cfg(test)]
 mod tests;

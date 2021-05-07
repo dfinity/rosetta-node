@@ -1,3 +1,4 @@
+//! Message Routing public interfaces.
 use crate::validation::{ValidationError, ValidationResult};
 use ic_types::{
     batch::{Batch, ValidationContext, XNetPayload},
@@ -17,6 +18,7 @@ pub enum MessageRoutingError {
     },
 }
 
+/// XNet payload validation error details.
 #[derive(Debug)]
 pub enum InvalidXNetPayload {
     InvalidSlice(String),

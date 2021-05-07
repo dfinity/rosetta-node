@@ -1,5 +1,4 @@
 //! Implements the transcript methods of `DkgAlgorithm`.
-//! Spec: https://docs.dfinity.systems/dfinity/spec/replica/ancillary/crypto/index.html#_dkg
 
 use super::*;
 use ic_crypto_internal_csp::api::DistributedKeyGenerationCspClient;

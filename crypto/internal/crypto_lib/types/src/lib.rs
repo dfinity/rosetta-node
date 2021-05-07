@@ -1,3 +1,6 @@
+#![forbid(unsafe_code)]
+#![deny(clippy::unwrap_used)]
+
 //! The structure of internal types is as follows:
 //!
 //! The type for the external API (e.g. `EncryptionPublicKey`) is defined in the

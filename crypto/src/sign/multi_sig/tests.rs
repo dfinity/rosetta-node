@@ -1,104 +1,10 @@
+#![allow(clippy::unwrap_used)]
+
 use super::*;
 use crate::common::test_utils::crypto_component::crypto_component_with;
 use crate::sign::tests::*;
 use ic_test_utilities::types::ids::{NODE_1, NODE_2, NODE_3, NODE_4};
 use ic_types::crypto::KeyId;
-
-/*
-TODO(DFN-1229): Cosider adding the below test cases for the new multisig API, then remove this comment
-
-mod test_combine_sigs {
-    use super::*;
-    use proptest::prelude::*;
-    mod combine_sigs_helpers {
-        use super::*;
-        prop_compose! {
-            /// Create a lot of signatures with the given purpose and algorithm.
-            /// For this to be useful, signatories and their public keys also need to be generated.
-            pub fn fixture(key_purpose: KeyPurpose, algorithm_id: AlgorithmId) (
-                mut contributions in proptest::collection::hash_map(
-                    arbitrary_types::node_id(),
-                    (arbitrary_crypto::public_key_registry_record(), arbitrary_crypto::signature()),
-                1..5)) -> HashMap<NodeId, (PublicKeyRegistryRecord, Signature)> {
-
-                for (node_id, (record, _)) in contributions.iter_mut() {
-                    record.node_id = *node_id;
-                    record.key_purpose = key_purpose;
-                    record.algorithm_id = algorithm_id;
-                }
-                contributions
-            }
-        }
-    }
-    proptest! {
-        #[test]
-        fn combine_sigs_returns_ok(
-            message: Vec<u8>,
-            registry_version in arbitrary_types::registry_version(),
-            contributions in combine_sigs_helpers::fixture(KeyPurpose::CommitteeMember, AlgorithmId::MultiBls12_381),
-            ) {
-            let message_type = MessageType::BlockProposal; // TODO(DFN-1002): Use an arbitrary message type that uses multisig.
-            let public_key_registry_records: Vec<PublicKeyRegistryRecord> = contributions.values().map(|(record, _)| record).cloned().collect();
-            let registry_version = {
-              let max_record_version = public_key_registry_records.iter().map(|record| record.version).max().unwrap().get();
-              prop_assume!(max_record_version < std::u64::MAX);
-              RegistryVersion::from(std::u64::MAX - (registry_version.get() % (std::u64::MAX - max_record_version)))
-            };
-            let signatures: Vec<(Signature, NodeId)> = contributions.iter().map(|(node_id, (_, signature))| (signature.clone(), *node_id)).collect();
-            let crypto = crypto_component_with(mock_registry_with_records(public_key_registry_records), MockSecretKeyStore::new());
-
-            assert!(crypto.combine_sigs(signatures, &message, message_type, registry_version).is_ok());
-        }
-
-        #[test]
-        fn combine_sigs_fails_if_public_keys_are_not_found(
-            message: Vec<u8>,
-            registry_version in arbitrary_types::registry_version(),
-            contributions in combine_sigs_helpers::fixture(KeyPurpose::CommitteeMember, AlgorithmId::MultiBls12_381),
-            ) {
-            let message_type = MessageType::BlockProposal; // TODO(DFN-1002): Use an arbitrary message type that uses multisig.
-            let signatures: Vec<(Signature, NodeId)> = contributions.iter().map(|(node_id, (_, signature))| (signature.clone(), *node_id)).collect();
-            let crypto = crypto_component_with(mock_registry_with_records(Vec::new()), MockSecretKeyStore::new());
-            assert!(crypto.combine_sigs(signatures, &message, message_type, registry_version).unwrap_err().is_public_key_not_found());
-        }
-
-        #[test]
-        #[should_panic]
-        fn combine_sigs_panics_with_no_sigs(
-            message: Vec<u8>,
-            registry_version in arbitrary_types::registry_version(),
-            contributions in combine_sigs_helpers::fixture(KeyPurpose::CommitteeMember, AlgorithmId::MultiBls12_381),
-            ){
-            let message_type = MessageType::BlockProposal; // TODO(DFN-1002): Use an arbitrary message type that uses multisig.
-            let public_key_registry_records: Vec<PublicKeyRegistryRecord> = contributions.values().map(|(record, _)| record).cloned().collect();
-            prop_assume!(public_key_registry_records.iter().map(|record| record.version).max().unwrap() < registry_version);
-            let signatures: Vec<(Signature, NodeId)> = Vec::new();
-            let crypto = crypto_component_with(mock_registry_with_records(public_key_registry_records), MockSecretKeyStore::new());
-
-            crypto.combine_sigs(signatures, &message, message_type, registry_version).unwrap_err();
-        }
-
-        #[test]
-        fn combine_sigs_fails_with_an_inconsistent_algorithm(
-            message: Vec<u8>,
-            registry_version in arbitrary_types::registry_version(),
-            contributions in combine_sigs_helpers::fixture(KeyPurpose::CommitteeMember, AlgorithmId::MultiBls12_381)
-                .prop_filter("single entry maps cannot be inconsistent", |map| map.len() > 1),
-            different_contribution_index: usize,
-            ){
-            let message_type = MessageType::BlockProposal; // TODO(DFN-1002): Use an arbitrary message type that uses multisig.
-            let mut public_key_registry_records: Vec<PublicKeyRegistryRecord> = contributions.values().map(|(record, _)| record).cloned().collect();
-            let different_contribution_index = different_contribution_index % public_key_registry_records.len();
-            public_key_registry_records[different_contribution_index].algorithm_id = AlgorithmId::ThresBls12_381;
-            prop_assume!(public_key_registry_records.iter().map(|record| record.version).max().unwrap() < registry_version);
-            let signatures: Vec<(Signature, NodeId)> = contributions.iter().map(|(node_id, (_, signature))| (signature.clone(), *node_id)).collect();
-            let crypto = crypto_component_with(mock_registry_with_records(public_key_registry_records), MockSecretKeyStore::new());
-
-            assert!(crypto.combine_sigs(signatures, &message, message_type, registry_version).unwrap_err().is_inconsistent_algorithms());
-        }
-    }
-}
-*/
 
 mod test_multi_sign {
     use super::*;

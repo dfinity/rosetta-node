@@ -4,6 +4,7 @@ package log.crypto_log_entry.v1;
 
 import "google/protobuf/wrappers.proto";
 
+// A crypto component log entry.
 message CryptoLogEntry {
   google.protobuf.StringValue trait_name = 1;
   google.protobuf.StringValue dkg_id = 2;

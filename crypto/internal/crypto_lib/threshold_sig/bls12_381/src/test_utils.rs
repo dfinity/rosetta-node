@@ -1,3 +1,4 @@
+use crate::ni_dkg::groth20_bls12_381::types::BTENode;
 use ic_types::{NumberOfNodes, Randomness};
 use rand::seq::IteratorRandom;
 use rand_chacha::ChaChaRng;
@@ -40,4 +41,23 @@ pub fn malformed_secret_threshold_key_test_vectors() -> Vec<([u8; 32], bool, Str
         (modulus, false, "Modulus".to_string()),
         (modulus_minus_one, true, "Max legal".to_string()),
     ]
+}
+
+/// Check that components of a BTENode struct aren't logged
+/// in a given debug string.
+pub fn assert_bte_node_components_are_redacted(node: &BTENode, debug_str: &str) {
+    let a_str = format!("{:?}", node.a);
+    assert!(!debug_str.contains(&a_str));
+
+    let b_str = format!("{:?}", node.b);
+    assert!(!debug_str.contains(&b_str));
+
+    let d_t_str = format!("{:?}", node.d_t);
+    assert!(!debug_str.contains(&d_t_str));
+
+    let d_h_str = format!("{:?}", node.d_h);
+    assert!(!debug_str.contains(&d_h_str));
+
+    let e_str = format!("{:?}", node.e);
+    assert!(!debug_str.contains(&e_str));
 }

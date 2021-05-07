@@ -1,6 +1,6 @@
 [package]
 name = "ic-crypto-internal-bls12381-common"
-version = "0.0.0"
+version = "0.8.0"
 edition = "2018"
 
 [dependencies]
@@ -16,6 +16,7 @@ rand_chacha = "0.2.2"
 rand_core = "0.5.1"
 
 [dev-dependencies]
+ic-crypto-internal-bls12381-serde-miracl = {path = "../serde/miracl"}
 proptest = "0.9.4"
 proptest-derive = "0.1.0"
 rand_core = "0.5.1"

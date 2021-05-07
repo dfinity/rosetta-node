@@ -43,8 +43,8 @@ pub fn crypto_sharing_csp_and_registry<C: CryptoServiceProvider>(
 }
 
 pub fn join_threads(thread_1: JoinHandle<()>, thread_2: JoinHandle<()>) {
-    thread_1.join().unwrap();
-    thread_2.join().unwrap();
+    thread_1.join().expect("Threads were not joinable");
+    thread_2.join().expect("Threads were not joinable");
 }
 
 /// Allows to repeat multi-threading tests in order to avoid flakiness due to

@@ -8,7 +8,7 @@ const SNOWMAN: &str = "☃";
 const SNOWCODE: &str = "4piD";
 use crate::types::arbitrary::threshold_sig_public_key_bytes;
 use ic_crypto_internal_types::sign::threshold_sig::public_key::bls12_381::{
-    PublicKeyBytes, ThresholdSigPublicKeyError,
+    PublicKeyBytes, ThresholdSigPublicKeyBytesConversionError,
 };
 
 proptest! {
@@ -99,7 +99,7 @@ proptest! {
 fn test_invalid_public_key_fails_to_parse() {
     let invalid_public_key = PublicKeyBytes([0xCC; 96]);
     match PublicKey::try_from(&invalid_public_key) {
-        Err(ThresholdSigPublicKeyError::Malformed { .. }) => (),
+        Err(ThresholdSigPublicKeyBytesConversionError::Malformed { .. }) => (),
         other => panic!(
             "Expected a ThresholdSigPublicKeyBytes::Malformed error.  Got: {:?}",
             other
@@ -178,7 +178,7 @@ fn test_base64_snowman_is_not_valid_secret_key() {
 #[test]
 fn test_snowman_is_not_valid_public_key() {
     match PublicKeyBytes::try_from(SNOWMAN) {
-        Err(ThresholdSigPublicKeyError::Malformed { .. }) => (),
+        Err(ThresholdSigPublicKeyBytesConversionError::Malformed { .. }) => (),
         other => panic!(
             "Expected a ThresholdSigPublicKeyBytes::Malformed error.  Got: {:?}",
             other
@@ -190,7 +190,7 @@ fn test_snowman_is_not_valid_public_key() {
 #[test]
 fn test_base64_snowman_is_not_valid_public_key() {
     match PublicKeyBytes::try_from(SNOWCODE) {
-        Err(ThresholdSigPublicKeyError::Malformed { .. }) => (),
+        Err(ThresholdSigPublicKeyBytesConversionError::Malformed { .. }) => (),
         other => panic!(
             "Expected a ThresholdSigPublicKeyBytes::Malformed error.  Got: {:?}",
             other

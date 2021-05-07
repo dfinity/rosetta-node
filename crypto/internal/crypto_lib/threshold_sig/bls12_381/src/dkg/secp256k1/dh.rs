@@ -45,7 +45,7 @@ pub fn key_encryption_key<
     let diffie_hellman: EphemeralPublicKeyBytes = diffie_hellman.into();
     let mut hash = Sha256::new();
     hash.write(DomainSeparationContext::new(DOMAIN_SEPERATOR_DH_ENCRYPT).as_bytes());
-    hash.write(&serde_cbor::to_vec(&dkg_id).unwrap());
+    hash.write(&serde_cbor::to_vec(&dkg_id).expect("Failed to serialize to CBOR"));
     hash.write(&dealer_public_key.0);
     hash.write(&receiver_public_key.0);
     hash.write(&diffie_hellman.0);

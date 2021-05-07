@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use super::*;
 use ic_base_types::PrincipalId;
 use ic_crypto::utils::get_node_keys_or_generate_if_missing;
@@ -6,6 +7,7 @@ use ic_crypto_test_utils::tls::x509_certificates::{
 };
 use ic_test_utilities::crypto::temp_dir::temp_dir;
 use openssl::hash::MessageDigest;
+use std::ops::Range;
 
 #[test]
 fn should_succeed_on_valid_keys() {
@@ -64,18 +66,12 @@ fn should_fail_if_node_signing_key_pubkey_conversion_fails() {
 fn should_fail_if_node_signing_key_verification_fails() {
     let (keys, node_id) = {
         let (mut keys, _node_id) = valid_node_keys_and_node_id();
-        let point_of_composite_order = {
-            use curve25519_dalek::edwards::CompressedEdwardsY;
+        let invalid_pubkey = {
             let nspk_proto = keys.node_signing_pk.as_ref().unwrap();
             let nspk_bytes = BasicSigEd25519PublicKeyBytes::try_from(nspk_proto).unwrap();
-            let point_of_prime_order = CompressedEdwardsY(nspk_bytes.0).decompress().unwrap();
-            let point_of_order_8 = CompressedEdwardsY([0; 32]).decompress().unwrap();
-            let point_of_composite_order = point_of_prime_order + point_of_order_8;
-            assert_eq!(point_of_composite_order.is_torsion_free(), false);
-            point_of_composite_order
+            invalidate_valid_ed25519_pubkey(nspk_bytes)
         };
-        let corrupted_pubkey = BasicSigEd25519PublicKeyBytes(point_of_composite_order.compress().0);
-        keys.node_signing_pk.as_mut().unwrap().key_value = corrupted_pubkey.0.to_vec();
+        keys.node_signing_pk.as_mut().unwrap().key_value = invalid_pubkey.0.to_vec();
 
         let node_id_for_corrupted_node_signing_key = {
             let corrupted_key = &keys.node_signing_pk.as_ref().unwrap().key_value;
@@ -233,7 +229,7 @@ fn should_fail_if_dkg_dealing_encryption_key_is_missing() {
 }
 
 #[test]
-fn should_fail_if_dkg_dealing_encryption_key_pok_is_missing() {
+fn should_fail_if_dkg_dealing_encryption_key_pop_is_missing() {
     let (keys, node_id) = {
         let (mut keys, node_id) = valid_node_keys_and_node_id();
         if let Some(pk) = keys.dkg_dealing_encryption_pk.as_mut() {
@@ -248,7 +244,7 @@ fn should_fail_if_dkg_dealing_encryption_key_pok_is_missing() {
         result.unwrap_err(),
         KeyValidationError {
             error: "invalid DKG dealing encryption key: Failed to convert proof \
-            of knowledge (PoK): Missing proof data"
+            of possession (PoP): Missing proof data"
                 .to_string(),
         }
     );
@@ -313,6 +309,7 @@ fn should_correctly_display_key_validation_error() {
 mod tls_certificate_validation {
     use super::*;
     use chrono::{Duration, Utc};
+    use ic_crypto_test_utils::tls::x509_certificates::prime256v1_key_pair;
 
     #[test]
     fn should_fail_if_tls_certificate_is_missing() {
@@ -564,6 +561,47 @@ mod tls_certificate_validation {
     }
 
     #[test]
+    fn should_fail_if_tls_certificate_pubkey_is_malformed() {
+        let (keys, node_id) = {
+            let (mut keys, node_id) = valid_node_keys_and_node_id();
+            let key_pair_for_signing = ed25519_key_pair();
+            let non_ed25519_key_pair = prime256v1_key_pair();
+            assert_ne!(
+                non_ed25519_key_pair.public_key_to_der().unwrap(),
+                key_pair_for_signing.public_key_to_der().unwrap()
+            );
+            let cert_with_invalid_sig = valid_cert_builder(node_id)
+                .with_ca_signing(key_pair_for_signing, node_id.get().to_string())
+                .build(non_ed25519_key_pair, MessageDigest::null());
+            keys.tls_certificate.as_mut().unwrap().certificate_der =
+                cert_with_invalid_sig.x509().to_der().unwrap();
+            (keys, node_id)
+        };
+
+        let result = ValidNodePublicKeys::try_from(&keys, node_id);
+
+        assert!(matches!(result, Err(KeyValidationError { error })
+            if error.contains("invalid TLS certificate: conversion to Ed25519 public key failed")
+        ));
+    }
+
+    #[test]
+    fn should_fail_if_tls_certificate_pubkey_verification_fails() {
+        let (keys, node_id) = {
+            let (mut keys, node_id) = valid_node_keys_and_node_id();
+            let cert = keys.tls_certificate.as_mut().unwrap();
+            replace_tls_certificate_pubkey_with_invalid_one(cert);
+            (keys, node_id)
+        };
+
+        let result = ValidNodePublicKeys::try_from(&keys, node_id);
+
+        assert!(matches!(result, Err(KeyValidationError { error })
+            if error.contains("invalid TLS certificate: public key verification failed")
+        ));
+    }
+
+    #[test]
     fn should_fail_if_tls_certificate_signature_verification_fails() {
         let (keys, node_id) = {
             let (mut keys, node_id) = valid_node_keys_and_node_id();
@@ -573,11 +611,11 @@ mod tls_certificate_validation {
                 key_pair.public_key_to_der().unwrap(),
                 key_pair_for_signing.public_key_to_der().unwrap()
             );
-            let cert_with_invalid_sig = valid_cert_builder(node_id)
+            let cert_that_is_not_self_signed = valid_cert_builder(node_id)
                 .with_ca_signing(key_pair_for_signing, node_id.get().to_string())
                 .build(key_pair, MessageDigest::null());
             keys.tls_certificate.as_mut().unwrap().certificate_der =
-                cert_with_invalid_sig.x509().to_der().unwrap();
+                cert_that_is_not_self_signed.x509().to_der().unwrap();
             (keys, node_id)
         };
 
@@ -588,11 +626,76 @@ mod tls_certificate_validation {
         ));
     }
 
+    #[test]
+    fn should_fail_if_tls_certificate_is_ca() {
+        let (keys, node_id) = {
+            let (mut keys, node_id) = valid_node_keys_and_node_id();
+            let cert = valid_cert_builder(node_id)
+                .set_ca_key_usage_extension()
+                .build_ed25519();
+            keys.tls_certificate.as_mut().unwrap().certificate_der = cert.x509().to_der().unwrap();
+            (keys, node_id)
+        };
+
+        let result = ValidNodePublicKeys::try_from(&keys, node_id);
+
+        assert!(matches!(result, Err(KeyValidationError { error })
+            if error.contains("BasicConstraints:CA is True")
+        ));
+    }
+
     fn valid_cert_builder(node_id: NodeId) -> CertBuilder {
         CertWithPrivateKey::builder()
             .cn(node_id.get().to_string())
             .not_after("99991231235959Z")
     }
+
+    /// Replaces the TLS certificate's valid public key with an invalid one.
+    /// The replacement is done by directly manipulating the DER encoding rather
+    /// than using a respective API because such an API currently exists neither
+    /// in the openssl crate nor in the x509_parser crate.
+    fn replace_tls_certificate_pubkey_with_invalid_one(cert: &mut X509PublicKeyCert) {
+        let x509_cert_der = &cert.certificate_der;
+        let (_, x509_cert) = x509_parser::parse_x509_certificate(x509_cert_der).unwrap();
+        let pubkey_raw = x509_cert
+            .tbs_certificate
+            .subject_pki
+            .subject_public_key
+            .data;
+        let range_of_pubkey_raw_in_der = range_of_needle_in_haystack(pubkey_raw, x509_cert_der);
+        let invalid_pubkey = invalidate_valid_ed25519_pubkey_bytes(pubkey_raw);
+        cert.certificate_der
+            .splice(range_of_pubkey_raw_in_der, invalid_pubkey.0.iter().copied());
+    }
+
+    fn range_of_needle_in_haystack(needle: &[u8], haystack: &[u8]) -> Range<usize> {
+        let position_of_needle_in_haystack =
+            find_needle_in_haystack(needle, haystack).expect("cannot find needle in haystack");
+        position_of_needle_in_haystack..(position_of_needle_in_haystack + needle.len())
+    }
+
+    /// Inefficient implementation for finding a needle in a haystack that is
+    /// efficient enough for our testing purposes.
+    fn find_needle_in_haystack(needle: &[u8], haystack: &[u8]) -> Option<usize> {
+        haystack.windows(needle.len()).position(|win| win == needle)
+    }
+}
+
+fn invalidate_valid_ed25519_pubkey(
+    valid_pubkey: BasicSigEd25519PublicKeyBytes,
+) -> BasicSigEd25519PublicKeyBytes {
+    use curve25519_dalek::edwards::CompressedEdwardsY;
+    let point_of_prime_order = CompressedEdwardsY(valid_pubkey.0).decompress().unwrap();
+    let point_of_order_8 = CompressedEdwardsY([0; 32]).decompress().unwrap();
+    let point_of_composite_order = point_of_prime_order + point_of_order_8;
+    assert_eq!(point_of_composite_order.is_torsion_free(), false);
+    BasicSigEd25519PublicKeyBytes(point_of_composite_order.compress().0)
+}
+
+fn invalidate_valid_ed25519_pubkey_bytes(pubkey_bytes: &[u8]) -> BasicSigEd25519PublicKeyBytes {
+    let mut buf = [0u8; BasicSigEd25519PublicKeyBytes::SIZE];
+    buf.copy_from_slice(pubkey_bytes);
+    invalidate_valid_ed25519_pubkey(BasicSigEd25519PublicKeyBytes(buf))
 }
 
 fn valid_node_keys() -> NodePublicKeys {
@@ -605,6 +708,6 @@ pub fn valid_node_keys_and_node_id() -> (NodePublicKeys, NodeId) {
     get_node_keys_or_generate_if_missing(temp_dir.path())
 }
 
-fn node_id(n: u64) -> NodeId {
+pub fn node_id(n: u64) -> NodeId {
     NodeId::from(PrincipalId::new_node_test_id(n))
 }

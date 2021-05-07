@@ -46,9 +46,6 @@ message NodeRecord {
   reserved 4;
   reserved "gossip_artifact";
 
-  // The id of the dc operator that added this node.
-  bytes dcop_principal_id = 9;
-
   // The endpoint where this node receives xnet messages.
   ConnectionEndpoint xnet = 5;
 
@@ -60,6 +57,9 @@ message NodeRecord {
 
   // The P2P flow end points.
   repeated FlowEndpoint p2p_flow_endpoints = 8;
+
+  reserved 9;
+  reserved "dcop_principal_id";
 
   // Endpoint where the node provides Prometheus format metrics over HTTP
   ConnectionEndpoint prometheus_metrics_http = 10;
@@ -76,4 +76,7 @@ message NodeRecord {
 
   // Endpoints on which the XNet API is served
   repeated ConnectionEndpoint xnet_api = 14;
+  
+  // The id of the node operator that added this node.
+  bytes node_operator_id = 15;
 }
