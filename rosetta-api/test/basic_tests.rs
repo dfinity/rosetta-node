@@ -389,7 +389,7 @@ async fn load_from_store_test() {
 
     let scribe = Scribe::new_with_sample_data(10, 100);
 
-    let mut blocks = Blocks::new_on_disk(tmpdir.path().into()).unwrap();
+    let mut blocks = Blocks::new_on_disk(tmpdir.path().into(), true).unwrap();
     for hb in &scribe.blockchain {
         blocks.add_block(hb.clone()).unwrap();
         if hb.index < 20 {
@@ -405,7 +405,7 @@ async fn load_from_store_test() {
 
     drop(blocks);
 
-    let mut blocks = Blocks::new_on_disk(tmpdir.path().into()).unwrap();
+    let mut blocks = Blocks::new_on_disk(tmpdir.path().into(), true).unwrap();
     blocks.load_from_store().unwrap();
 
     assert!(blocks.get_verified_at(10).is_ok());
@@ -420,7 +420,7 @@ async fn load_from_store_test() {
 
     drop(blocks);
 
-    let mut blocks = Blocks::new_on_disk(tmpdir.path().into()).unwrap();
+    let mut blocks = Blocks::new_on_disk(tmpdir.path().into(), true).unwrap();
     blocks.load_from_store().unwrap();
 
     verify_balances(&scribe, &blocks, 0);
@@ -435,7 +435,7 @@ async fn load_from_store_test() {
 
     drop(blocks);
 
-    let mut blocks = Blocks::new_on_disk(tmpdir.path().into()).unwrap();
+    let mut blocks = Blocks::new_on_disk(tmpdir.path().into(), true).unwrap();
     blocks.load_from_store().unwrap();
 
     assert_eq!(balances_at_10, blocks.get_balances_at(10).unwrap());

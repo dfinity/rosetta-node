@@ -1,3 +1,5 @@
+//! Error type conversions imported from other parts of the codebase
+
 // TODO (CRP-817): Import tests for all the below.
 
 // From: crypto/src/sign/threshold_sig/dkg/dealing.rs

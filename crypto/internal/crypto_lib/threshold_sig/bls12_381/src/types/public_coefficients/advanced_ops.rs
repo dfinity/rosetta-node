@@ -1,4 +1,4 @@
-//! Non-trivial mathematical operations on PublicCoefficients
+//! Non-trivial mathematical operations on `PublicCoefficients`.
 
 use super::super::ThresholdError;
 use super::*;

@@ -1,6 +1,4 @@
-//! Non-interactive Distributed Key Generation
-//! Modules are used in this order:
-//! * dealing
+//! Non-interactive Distributed Key Generation using Groth20 with BLS12-381.
 mod dealing;
 mod encryption;
 mod transcript;

@@ -12,10 +12,15 @@ use ic_types::{
     },
     PrincipalId,
 };
-use ledger_canister::{account_identifier::SUB_ACCOUNT_ZERO, AccountIdentifier, ICPTs, SendArgs};
-use rand::RngCore;
+use ledger_canister::{AccountIdentifier, ICPTs, SendArgs, Subaccount, TimeStamp};
+use rand::{Rng, RngCore};
+use rand_distr::Distribution;
+use rand_distr::Uniform;
+use serde::ser::SerializeSeq;
+use serde::ser::Serializer;
 use serde_json::json;
 use std::iter::once;
+use std::ops::BitAnd;
 use std::{convert::TryFrom, fmt::Display};
 
 fn zondex_icp_format(amount: ICPTs) -> String {
@@ -27,7 +32,7 @@ fn zondex_icp_format(amount: ICPTs) -> String {
         .rev()
         .enumerate()
         .flat_map(|(pos, c)| {
-            (if pos % 3 == 0 && pos > 0 { "," } else { "" })
+            (if pos % 3 == 0 && pos > 0 { "'" } else { "" })
                 .chars()
                 .chain(once(c))
         })
@@ -46,7 +51,11 @@ fn zondex_icp_format(amount: ICPTs) -> String {
     format!("{}.{}", int_part, frac_part)
 }
 
-pub fn generate_zondax_test(index: u32, keypair: EdKeypair, send_args: SendArgs) -> String {
+pub fn generate_zondax_test(
+    index: u32,
+    keypair: EdKeypair,
+    send_args: SendArgs,
+) -> serde_json::Value {
     let public_key_der =
         ic_canister_client::ed25519_public_key_to_der(keypair.public.to_bytes().to_vec());
 
@@ -78,7 +87,7 @@ pub fn generate_zondax_test(index: u32, keypair: EdKeypair, send_args: SendArgs)
         ingress_expiry: 0,
     };
 
-    let from: AccountIdentifier = pid.into();
+    let from = AccountIdentifier::new(pid, from_subaccount);
 
     let account_identifier = to_model_account_identifier(&from);
 
@@ -111,50 +120,84 @@ pub fn generate_zondax_test(index: u32, keypair: EdKeypair, send_args: SendArgs)
 
     let bytes: Vec<u8> = SignedRequestBytes::try_from(envelope).unwrap().into();
 
-    let from_subaccount = from_subaccount.unwrap_or(SUB_ACCOUNT_ZERO);
+    let mut expert = Vec::new();
+    expert.push("0 | Transaction type : Send ICP".to_string());
+    expert.push(format!("1 | Sender [1/2] : {}", chunk_pid(pid, 0)));
+    expert.push(format!("1 | Sender [2/2] : {}", chunk_pid(pid, 1)));
+    match from_subaccount {
+        Some(sa) => {
+            expert.push(format!(
+                "2 | Subaccount [1/2] : {} {}",
+                row(sa, 0),
+                row(sa, 1)
+            ));
+            expert.push(format!(
+                "2 | Subaccount [2/2] : {} {}",
+                row(sa, 2),
+                row(sa, 3)
+            ));
+        }
+        None => expert.push("2 | Subaccount  : Not set".to_string()),
+    }
 
-    let json = json!({
+    expert.push(format!(
+        "3 | From account[1/2] : {} {}",
+        row(from, 0),
+        row(from, 1)
+    ));
+    expert.push(format!(
+        "3 | From account[2/2] : {} {}",
+        row(from, 2),
+        row(from, 3)
+    ));
+    expert.push(format!(
+        "4 | To account [1/2] : {} {}",
+        row(to, 0),
+        row(to, 1)
+    ));
+    expert.push(format!(
+        "4 | To account [2/2] : {} {}",
+        row(to, 2),
+        row(to, 3)
+    ));
+    expert.push(format!("5 | Payment (ICP) : {}", zondex_icp_format(amount)));
+    expert.push(format!(
+        "6 | Maximum fee (ICP) : {}",
+        zondex_icp_format(fee)
+    ));
+    expert.push(format!("7 | Memo : {}", memo.0));
+
+    json!({
         "index": index,
         "name": format!("Send tx index {}", index),
+        "valid": true,
         "blob": hex::encode(&bytes),
         "output": [
             "0 | Transaction type : Send ICP",
-            format!("1 | From account [1/2] : {}", chunk(from, 0)),
-            format!("1 | From account [2/2] : {}", chunk(from, 1)),
-            format!("2 | To account [1/2] : {}", chunk(to, 0)),
-            format!("2 | To account [2/2] : {}", chunk(to, 1)),
+            format!("1 | From account[1/2] : {}{}", row(from, 0), row(from, 1)),
+            format!("1 | From account[2/2] : {}{}", row(from, 2), row(from, 3)),
+            format!("2 | To account [1/2] : {}{}", row(to, 0), row(to, 1)),
+            format!("2 | To account [2/2] : {}{}", row(to, 2), row(to, 3)),
             format!("3 | Payment (ICP) : {}", zondex_icp_format(amount)),
             format!("4 | Maximum fee (ICP) : {}", zondex_icp_format(fee)),
             format!("5 | Memo : {}", memo.0)
         ],
-        "output_expert": [
-            "0 | Transaction type : Send ICP",
-            format!("1 | Sender [1/2] : {}", chunk_pid(pid, 0)),
-            format!("1 | Sender [2/2] : {}", chunk_pid(pid, 1)),
-            format!("2 | Subaccount [1/2] : {}", chunk(from_subaccount, 0)),
-            format!("2 | Subaccount [2/2] : {}", chunk(from_subaccount, 1)),
-            format!("3 | From account [1/2] : {}", chunk(from, 0)),
-            format!("3 | From account [2/2] : {}", chunk(from, 1)),
-            format!("4 | To account [1/2] : {}", chunk(to, 0)),
-            format!("4 | To account [2/2] : {}", chunk(to, 1)),
-            format!("3 | Payment (IPT) : {}", zondex_icp_format(amount)),
-            format!("4 | Maximum fee (ICP) : {}", zondex_icp_format(fee)),
-            format!("5 | Memo : {}", memo.0)
-        ]
-    });
-
-    serde_json::to_string_pretty(&json).unwrap()
+        "output_expert": expert
+    })
 }
 
-fn chunk<D: Display>(d: D, chunk: usize) -> String {
+/// Returns the requested row (0 to 3)
+fn row<D: Display>(d: D, row: usize) -> String {
     let s = format!("{}", d);
-    let chunks = s
-        .chars()
-        .collect::<Vec<char>>()
-        .chunks(32)
-        .map(|c| c.iter().collect::<String>())
-        .collect::<Vec<String>>();
-    chunks.get(chunk).unwrap().clone()
+    let chars: Vec<char> = s.chars().collect();
+    assert!(chars.len() <= 64);
+    let offset = row * 16;
+    let space = ' ';
+    (chars[offset..offset + 8])
+        .iter()
+        .chain(once(&space))
+        .chain(chars[offset + 8..offset + 16].iter())
+        .collect()
 }
 
 fn chunk_pid(pid: PrincipalId, chunk: usize) -> String {
@@ -214,26 +257,37 @@ fn test_pretty_icp_format() {
     assert_eq!(zondex_icp_format(ICPTs::from_icpts(12).unwrap()), *"12.00");
     assert_eq!(
         zondex_icp_format(ICPTs::from_icpts(1234567890).unwrap()),
-        *"1,234,567,890.00"
+        *"1'234'567'890.00"
     );
 
     // Some arbitrary case
     assert_eq!(
         zondex_icp_format(ICPTs::from_e8s(8151012345000)),
-        *"81,510.12345"
+        *"81'510.12345"
     );
 
     // extreme case
     assert_eq!(
         zondex_icp_format(ICPTs::from_e8s(u64::MAX)),
-        *"184,467,440,737.09551615"
+        *"184'467'440'737.09551615"
     );
 
     // largest power of ten below u64::MAX doms
     assert_eq!(
         zondex_icp_format(ICPTs::from_icpts(100_000_000_000).unwrap()),
-        *"100,000,000,000.00"
+        *"100'000'000'000.00"
     );
+}
+
+struct PrincipalDistribution {}
+
+impl Distribution<PrincipalId> for PrincipalDistribution {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PrincipalId {
+        let num_bytes = Uniform::from(0_usize..PrincipalId::MAX_LENGTH_IN_BYTES + 1).sample(rng);
+        let mut buf: [u8; PrincipalId::MAX_LENGTH_IN_BYTES] = [0; PrincipalId::MAX_LENGTH_IN_BYTES];
+        rng.fill_bytes(&mut buf[0..num_bytes]);
+        PrincipalId::try_from(&buf[0..num_bytes]).unwrap()
+    }
 }
 
 #[allow(dead_code)]
@@ -246,35 +300,67 @@ fn main() {
 
     let mut index = 0;
 
+    let principal_distribution = PrincipalDistribution {};
+    let mut serializer = serde_json::Serializer::pretty(std::io::stdout());
+    let mut seq = serializer.serialize_seq(None).unwrap();
+
     for num_trailing_zeros in 0..11 {
         for magnitude in num_trailing_zeros..18 {
-            index += 1;
-            let multiple_of = 10_u64.pow(num_trailing_zeros);
-            // Dividing by, then multiply by, "multiple_of" has the effect of getting the
-            // last decimal digits being zero, while keeping the magnitude unchanged.
-            let amount = ICPTs::from_e8s(
-                ((rng.next_u64() % 10_u64.pow(magnitude)) / multiple_of) * multiple_of,
-            );
+            for with_subaccount in &[false, true] {
+                index += 1;
+                let multiple_of = 10_u64.pow(num_trailing_zeros);
+                // Dividing by, then multiply by, "multiple_of" has the effect of getting the
+                // last decimal digits being zero, while keeping the magnitude unchanged.
+                let amount = ICPTs::from_e8s(
+                    ((rng.next_u64() % 10_u64.pow(magnitude)) / multiple_of) * multiple_of,
+                );
 
-            // To avoid combinatorial explosion of test cases, we use the same parameters to
-            // generate the fee.
-            let fee = ICPTs::from_e8s(
-                ((rng.next_u64() % 10_u64.pow(magnitude)) / multiple_of) * multiple_of,
-            );
+                // To avoid combinatorial explosion of test cases, we use the same parameters to
+                // generate the fee.
+                let fee = ICPTs::from_e8s(
+                    ((rng.next_u64() % 10_u64.pow(magnitude)) / multiple_of) * multiple_of,
+                );
 
-            let send_args = SendArgs {
-                memo: Memo(0),
-                amount,
-                fee,
-                from_subaccount: None,
-                to: PrincipalId::new_anonymous().into(),
-                created_at_time: None,
-            };
+                // Memo: sample a number to have the whole range of lengths.
+                let original_memo = rng.next_u64();
+                let num_bits_distribution = Uniform::from(0_u32..65_u32);
+                let shift = num_bits_distribution.sample(&mut rng);
+                let bit_mask = u64::MAX.checked_shr(shift).unwrap_or_default();
+                let memo = Memo(original_memo.bitand(bit_mask));
 
-            let keypair = EdKeypair::generate(&mut rng);
+                let from_subaccount = if *with_subaccount {
+                    let mut bytes: [u8; 32] = [0; 32];
+                    rng.fill_bytes(&mut bytes);
+                    Some(Subaccount(bytes))
+                } else {
+                    None
+                };
 
-            let s = generate_zondax_test(index, keypair, send_args);
-            println!("{}", s);
+                // created_at_time is optional and has no impact on the test vector
+                // Set it with probability 1/2.
+                let created_at_time = if rng.gen::<bool>() {
+                    None
+                } else {
+                    Some(TimeStamp {
+                        timestamp_nanos: rng.next_u64(),
+                    })
+                };
+
+                let send_args = SendArgs {
+                    memo,
+                    amount,
+                    fee,
+                    from_subaccount,
+                    to: principal_distribution.sample(&mut rng).into(),
+                    created_at_time,
+                };
+
+                let keypair = EdKeypair::generate(&mut rng);
+
+                let s = generate_zondax_test(index, keypair, send_args);
+                seq.serialize_element(&s).unwrap();
+            }
         }
     }
+    seq.end().unwrap();
 }

@@ -3,7 +3,10 @@ use structopt::StructOpt;
 use ic_crypto_internal_threshold_sig_bls12381 as bls12_381;
 use ic_crypto_utils_threshold_sig::parse_threshold_sig_key;
 use ic_rosetta_api::rosetta_server::RosettaApiServer;
-use ic_rosetta_api::{ledger_client, RosettaRequestHandler};
+use ic_rosetta_api::{
+    ledger_client::{self, StoreType},
+    RosettaRequestHandler,
+};
 use ic_types::crypto::threshold_sig::ThresholdSigPublicKey;
 use ic_types::{CanisterId, PrincipalId};
 use std::{path::PathBuf, str::FromStr, sync::Arc};
@@ -40,8 +43,14 @@ struct Opt {
     exit_on_sync: bool,
     #[structopt(long = "offline")]
     offline: bool,
-    #[structopt(long = "mainnet")]
+    #[structopt(long = "mainnet", about = "Connect to the Internet Computer Mainnet")]
     mainnet: bool,
+    #[structopt(long = "not-whitelisted")]
+    not_whitelisted: bool,
+    #[structopt(long = "in-memory-store")]
+    in_memory_store: bool,
+    #[structopt(long = "disable-fsync")]
+    disable_fsync: bool,
 }
 
 #[actix_web::main]
@@ -82,7 +91,12 @@ async fn main() -> std::io::Result<()> {
         let root_key = ThresholdSigPublicKey::from(pubkey_bytes);
 
         let canister_id = ic_nns_constants::LEDGER_CANISTER_ID;
-        let url = url::Url::parse("https://rosetta.dfinity.network").unwrap();
+
+        let url = if opt.not_whitelisted {
+            url::Url::parse("https://ic0.dev").unwrap()
+        } else {
+            url::Url::parse("https://rosetta.dfinity.network").unwrap()
+        };
 
         (Some(root_key), canister_id, url)
     } else {
@@ -101,10 +115,22 @@ async fn main() -> std::io::Result<()> {
         (root_key, canister_id, url)
     };
 
+    let store_type = if opt.in_memory_store {
+        log::info!("Using in-memory block store");
+        StoreType::InMemory
+    } else {
+        let fsync = !opt.disable_fsync;
+        log::info!(
+            "Using on-disk block store with fsync {}",
+            if fsync { "enabled" } else { "disabled" }
+        );
+        StoreType::OnDisk(opt.store_location, fsync)
+    };
+
     let client = ledger_client::LedgerClient::create_on_disk(
         url,
         canister_id,
-        &opt.store_location,
+        store_type,
         opt.store_max_blocks,
         opt.offline,
         root_key,

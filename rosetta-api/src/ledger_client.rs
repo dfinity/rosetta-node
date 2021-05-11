@@ -18,14 +18,14 @@ use ic_types::{
 use ledger_canister::protobuf::ArchiveIndexResponse;
 use ledger_canister::{
     protobuf::TipOfChainRequest, AccountIdentifier, BalancesStore, BlockArg, BlockHeight, BlockRes,
-    EncodedBlock, GetBlocksArgs, GetBlocksRes, HashOf, ICPTs, TipOfChainRes,
+    EncodedBlock, GetBlocksArgs, GetBlocksRes, HashOf, ICPTs, TipOfChainRes, Transaction,
 };
 use log::{debug, error, info, trace};
 use on_wire::{FromWire, IntoWire};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
 use std::convert::TryFrom;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -59,21 +59,31 @@ pub struct LedgerClient {
     root_key: Option<ThresholdSigPublicKey>,
 }
 
+pub enum StoreType {
+    InMemory,
+    OnDisk(PathBuf, bool),
+}
+
 impl LedgerClient {
     pub async fn create_on_disk(
         testnet_url: Url,
         canister_id: CanisterId,
-        store_location: &Path,
+        store_type: StoreType,
         store_max_blocks: Option<u64>,
         offline: bool,
         root_key: Option<ThresholdSigPublicKey>,
     ) -> Result<LedgerClient, ApiError> {
-        let location = store_location.join("blocks");
-        std::fs::create_dir_all(&location)
-            .map_err(|e| format!("{}", e))
-            .map_err(internal_error)?;
+        let mut blocks = match store_type {
+            StoreType::InMemory => Blocks::new_in_memory(),
+            StoreType::OnDisk(store_location, fsync) => {
+                let location = store_location.join("blocks");
+                std::fs::create_dir_all(&location)
+                    .map_err(|e| format!("{}", e))
+                    .map_err(internal_error)?;
 
-        let mut blocks = Blocks::new_on_disk(location)?;
+                Blocks::new_on_disk(location, fsync)?
+            }
+        };
 
         let canister_access = if offline {
             None
@@ -783,6 +793,8 @@ impl BalancesStore for ChunkmapBalancesStore {
 pub struct Blocks {
     balances: HashMap<BlockHeight, Balances>,
     hash_location: HashMap<HashOf<EncodedBlock>, BlockHeight>,
+    pub tx_hash_location: HashMap<HashOf<Transaction>, BlockHeight>,
+    pub account_location: HashMap<AccountIdentifier, Vec<BlockHeight>>,
     pub block_store: Box<dyn BlockStore + Send + Sync>,
     last_hash: Option<HashOf<EncodedBlock>>,
 }
@@ -798,16 +810,20 @@ impl Blocks {
         Self {
             balances: HashMap::default(),
             hash_location: HashMap::default(),
+            tx_hash_location: HashMap::default(),
+            account_location: HashMap::default(),
             block_store: Box::new(InMemoryStore::new()),
             last_hash: None,
         }
     }
 
-    pub fn new_on_disk(location: PathBuf) -> Result<Self, BlockStoreError> {
+    pub fn new_on_disk(location: PathBuf, fsync: bool) -> Result<Self, BlockStoreError> {
         Ok(Blocks {
             balances: HashMap::default(),
             hash_location: HashMap::default(),
-            block_store: Box::new(OnDiskStore::new(location)?),
+            block_store: Box::new(OnDiskStore::new(location, fsync)?),
+            tx_hash_location: HashMap::default(),
+            account_location: HashMap::default(),
             last_hash: None,
         })
     }
@@ -816,6 +832,8 @@ impl Blocks {
         assert!(self.last()?.is_none(), "Blocks is not empty");
         assert!(self.balances.is_empty(), "Blocks is not empty");
         assert!(self.hash_location.is_empty(), "Blocks is not empty");
+        assert!(self.tx_hash_location.is_empty(), "Blocks is not empty");
+        assert!(self.account_location.is_empty(), "Blocks is not empty");
 
         if let Ok(genesis) = self.block_store.get_at(0) {
             self.process_block(genesis)?;
@@ -826,6 +844,33 @@ impl Blocks {
         if let Some((first, balances)) = self.block_store.first_snapshot().cloned() {
             self.balances.insert(first.index, balances);
             self.hash_location.insert(first.hash, first.index);
+
+            let tx = first.block.decode().unwrap().transaction;
+            self.tx_hash_location.insert(tx.hash(), first.index);
+            match tx.transfer {
+                ledger_canister::Transfer::Burn { from, .. } => {
+                    self.account_location
+                        .entry(from)
+                        .or_insert_with(Vec::new)
+                        .push(first.index);
+                }
+                ledger_canister::Transfer::Mint { to, .. } => {
+                    self.account_location
+                        .entry(to)
+                        .or_insert_with(Vec::new)
+                        .push(first.index);
+                }
+                ledger_canister::Transfer::Send { from, to, .. } => {
+                    self.account_location
+                        .entry(from)
+                        .or_insert_with(Vec::new)
+                        .push(first.index);
+                    self.account_location
+                        .entry(to)
+                        .or_insert_with(Vec::new)
+                        .push(first.index);
+                }
+            };
             self.last_hash = Some(first.hash);
         }
 
@@ -948,6 +993,34 @@ impl Blocks {
         new_balances.add_payment(&block.transaction.transfer);
 
         self.hash_location.insert(hash, index);
+
+        let tx = block.transaction;
+        self.tx_hash_location.insert(tx.hash(), index);
+        match tx.transfer {
+            ledger_canister::Transfer::Burn { from, .. } => {
+                self.account_location
+                    .entry(from)
+                    .or_insert_with(Vec::new)
+                    .push(index);
+            }
+            ledger_canister::Transfer::Mint { to, .. } => {
+                self.account_location
+                    .entry(to)
+                    .or_insert_with(Vec::new)
+                    .push(index);
+            }
+            ledger_canister::Transfer::Send { from, to, .. } => {
+                self.account_location
+                    .entry(from)
+                    .or_insert_with(Vec::new)
+                    .push(index);
+                self.account_location
+                    .entry(to)
+                    .or_insert_with(Vec::new)
+                    .push(index);
+            }
+        };
+
         self.balances.insert(index, new_balances);
         self.last_hash = Some(hb.hash);
 

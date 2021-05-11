@@ -1,4 +1,5 @@
-//! Key share encryption
+//! (deprecated) Key share encryption for interactive distributed key
+//! generation.
 
 use crate::dkg::secp256k1::types::{EncryptedShare, EphemeralPublicKeyBytes};
 use crate::types::SecretKey as ThresholdSecretKey;

@@ -16,8 +16,9 @@ use ledger_canister::{
 };
 use on_wire::{FromWire, IntoWire};
 use serde_json::map::Map;
-use serde_json::{from_value, Value};
+use serde_json::{from_value, Number, Value};
 use std::convert::TryFrom;
+use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// This module converts from ledger_canister data structures to Rosetta data
@@ -41,12 +42,31 @@ const MINT: &str = "MINT";
 const BURN: &str = "BURN";
 const FEE: &str = "FEE";
 
-pub fn transaction(
-    transaction: &Transfer,
-    transaction_identifier: TransactionIdentifier,
-) -> Result<models::Transaction, ApiError> {
-    let operations = operations(transaction, true)?;
-    Ok(models::Transaction::new(transaction_identifier, operations))
+pub fn transaction(hb: &HashedBlock) -> Result<models::Transaction, ApiError> {
+    let block = hb
+        .block
+        .decode()
+        .map_err(|err| internal_error(format!("Cannot decode block: {}", err)))?;
+    let transaction = block.transaction;
+    let transaction_identifier = transaction_identifier(&transaction.hash());
+    let transfer = transaction.transfer;
+    let operations = operations(&transfer, true)?;
+    let mut t = models::Transaction::new(transaction_identifier, operations);
+    let mut metadata = Map::new();
+    metadata.insert(
+        "memo".to_string(),
+        Value::Number(Number::from(transaction.memo.0)),
+    );
+    metadata.insert(
+        "block_height".to_string(),
+        Value::Number(Number::from(hb.index)),
+    );
+    metadata.insert(
+        "timestamp".to_string(),
+        Value::Number(Number::from(block.timestamp.as_nanos_since_unix_epoch())),
+    );
+    t.metadata = Some(metadata);
+    Ok(t)
 }
 
 // This currently only takes a transation
@@ -261,6 +281,12 @@ pub fn block_id(block: &HashedBlock) -> Result<BlockIdentifier, ApiError> {
 
 pub fn transaction_identifier(hash: &HashOf<Transaction>) -> TransactionIdentifier {
     TransactionIdentifier::new(format!("{}", hash))
+}
+
+pub fn from_model_transaction_identifier(
+    tid: &TransactionIdentifier,
+) -> Result<HashOf<Transaction>, String> {
+    HashOf::from_str(&tid.hash)
 }
 
 pub fn to_model_account_identifier(aid: &ledger_canister::AccountIdentifier) -> AccountIdentifier {

@@ -1,10 +1,10 @@
-//! Defines scopes for grouping keys
+//! Defines scopes for grouping keys.
 use serde::{Deserialize, Serialize};
 use strum_macros::{EnumDiscriminants, EnumIter, EnumString, IntoStaticStr};
 #[cfg(test)]
 mod tests;
 
-/// Scope is label for grouping keys.
+/// A scope is a label for grouping keys.
 ///
 /// A key with scope `A` is in scope `B` iff `A == B`.
 ///

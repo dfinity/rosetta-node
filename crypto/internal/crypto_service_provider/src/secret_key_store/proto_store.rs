@@ -1,3 +1,4 @@
+//! Filesystem-backed secret key store
 #![allow(clippy::unwrap_used)]
 use crate::secret_key_store::{Scope, SecretKeyStore, SecretKeyStoreError};
 use crate::threshold::ni_dkg::{NIDKG_FS_SCOPE, NIDKG_THRESHOLD_SCOPE};
@@ -49,6 +50,7 @@ fn key_id_from_hex(key_id_hex: &str) -> KeyId {
     KeyId::from(bytes)
 }
 
+/// The secret key store protobuf definitions
 // Include the prost-build generated registry protos.
 #[path = "../../gen/ic.crypto.v1.rs"]
 #[rustfmt::skip]

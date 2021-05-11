@@ -1,3 +1,4 @@
+//! Interfaces for saving and retrieving public keys
 use prost::Message;
 use std::fs;
 use std::path::Path;
@@ -7,6 +8,7 @@ use std::io::Write;
 
 const PK_DATA_FILENAME: &str = "public_keys.pb";
 
+/// Error while reading or writing public keys
 #[derive(Clone, Debug)]
 pub enum PublicKeyStoreError {
     ParsingError(String),

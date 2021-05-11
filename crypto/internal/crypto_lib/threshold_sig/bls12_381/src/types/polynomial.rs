@@ -1,4 +1,5 @@
-//! Polynomials over Fr.
+//! Polynomials over `Fr`.
+//!
 //! Note: This file is largely based on https://github.com/poanetwork/threshold_crypto/blob/master/src/poly.rs
 
 use ff::Field;

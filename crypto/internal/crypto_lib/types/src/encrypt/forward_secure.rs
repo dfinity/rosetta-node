@@ -1,4 +1,4 @@
-//! Forward Secure Encryption
+//! Types for forward-secure encryption used for distributed key generation
 
 use crate::curves::bls12_381;
 use ic_protobuf::registry::crypto::v1::AlgorithmId as AlgorithmIdProto;
@@ -54,6 +54,7 @@ impl TryFrom<PublicKeyProto> for CspFsEncryptionPublicKey {
     }
 }
 
+/// A forward secure encryption public key is malformed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MalformedFsEncryptionPublicKeyError {
     pub key_bytes: Vec<u8>,
@@ -95,6 +96,8 @@ impl TryFrom<&PublicKeyProto> for CspFsEncryptionPop {
     }
 }
 
+/// The forward secure encryption proof of possession (PoP) cannot be obtained
+/// from its protobuf.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CspFsEncryptionPopFromPublicKeyProtoError {
     UnknownAlgorithm {

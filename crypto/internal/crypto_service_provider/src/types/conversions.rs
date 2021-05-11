@@ -1,3 +1,5 @@
+//! Type conversion utilities
+
 use super::{
     CspDealing, CspDkgTranscript, CspPop, CspPublicCoefficients, CspPublicKey, CspSecretKey,
     CspSignature, MultiBls12_381_Signature, SigConverter, ThresBls12_381_Signature,
@@ -129,6 +131,7 @@ impl TryFrom<&PublicKeyProto> for CspPop {
     }
 }
 
+/// A problem while reading PoP from a public key protobuf
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CspPopFromPublicKeyProtoError {
     NoPopForAlgorithm {
@@ -265,6 +268,7 @@ impl TryFrom<CspSecretKey> for threshold_types::SecretKeyBytes {
     }
 }
 
+/// Error while converting secret key
 pub enum CspSecretKeyConversionError {
     WrongSecretKeyType,
 }

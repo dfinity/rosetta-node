@@ -1,3 +1,4 @@
+//! Signature utilities
 use crate::types::CspSignature;
 use ic_crypto_internal_basic_sig_der_utils as der_utils;
 use ic_crypto_internal_basic_sig_ecdsa_secp256k1 as ecdsa_secp256k1;

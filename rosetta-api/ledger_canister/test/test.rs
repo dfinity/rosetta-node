@@ -12,6 +12,7 @@ use ledger_canister::{
 use on_wire::IntoWire;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
+use std::time::Duration;
 
 fn create_sender(i: u64) -> ic_canister_client::Sender {
     use rand_chacha::ChaChaRng;
@@ -359,6 +360,78 @@ fn archive_blocks_large_test() {
 }
 
 #[test]
+fn notify_timeout_test() {
+    local_test_e(|r| async move {
+        let proj = Project::new(env!("CARGO_MANIFEST_DIR"));
+        let mut accounts = HashMap::new();
+        let us = PrincipalId::new_anonymous();
+        accounts.insert(us.into(), ICPTs::from_icpts(100).unwrap());
+
+        let test_canister = proj
+            .cargo_bin("test-notified")
+            .install_(&r, Vec::new())
+            .await?;
+
+        let minting_account = create_sender(0);
+
+        let mut send_whitelist = HashSet::new();
+        send_whitelist.insert(CanisterId::new(us).unwrap());
+
+        let ledger_canister = proj
+            .cargo_bin("ledger-canister")
+            .install_(
+                &r,
+                CandidOne(LedgerCanisterInitPayload {
+                    minting_account: CanisterId::try_from(minting_account.get_principal_id())
+                        .unwrap()
+                        .into(),
+                    initial_values: accounts,
+                    max_message_size_bytes: None,
+                    // A tiny notification window so notifications will fail
+                    transaction_window: Some(Duration::from_millis(1)),
+                    archive_options: None,
+                    send_whitelist,
+                }),
+            )
+            .await?;
+
+        let block_height: BlockHeight = ledger_canister
+            .update_(
+                "send_pb",
+                protobuf,
+                SendArgs {
+                    from_subaccount: None,
+                    to: test_canister.canister_id().into(),
+                    amount: ICPTs::from_icpts(1).unwrap(),
+                    fee: TRANSACTION_FEE,
+                    memo: Memo(0),
+                    created_at_time: None,
+                },
+            )
+            .await?;
+
+        let notify = NotifyCanisterArgs {
+            block_height,
+            max_fee: TRANSACTION_FEE,
+            from_subaccount: None,
+            to_canister: test_canister.canister_id(),
+            to_subaccount: None,
+        };
+
+        let r1: Result<(), String> = ledger_canister
+            .update_("notify_pb", protobuf, notify.clone())
+            .await;
+
+        assert!(
+            r1.unwrap_err().contains("that is more than"),
+            "Cannot notify after duration"
+        );
+
+        Ok(())
+    });
+}
+
+#[test]
 fn notify_test() {
     local_test_e(|r| async move {
         let proj = Project::new(env!("CARGO_MANIFEST_DIR"));
@@ -482,7 +555,7 @@ fn notify_test() {
         // This is vague because it contains stuff like src spans as it's a panic
         assert!(r3
             .unwrap_err()
-            .contains("There is already an outstanding notification"));
+            .contains("notification state is already true"));
 
         assert_eq!(2, count);
 

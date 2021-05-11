@@ -1,4 +1,5 @@
-//! Zero Knowledge Proofs
+//! Proofs of correct chunking
+
 use crate::forward_secure::CHUNK_SIZE;
 use crate::random_oracles::{random_oracle, random_oracle_to_scalar, HashedMap, UniqueHash};
 use crate::utils::*;
@@ -9,12 +10,19 @@ use miracl_core::rand::RAND;
 use std::vec::Vec;
 
 /// Domain separators for the zk proof of chunking
-pub const DOMAIN_PROOF_OF_CHUNKING_ORACLE: &str = "ic-zk-proof-of-chunking-chunking";
-pub const DOMAIN_PROOF_OF_CHUNKING_CHALLENGE: &str = "ic-zk-proof-of-chunking-challenge";
+const DOMAIN_PROOF_OF_CHUNKING_ORACLE: &str = "ic-zk-proof-of-chunking-chunking";
+const DOMAIN_PROOF_OF_CHUNKING_CHALLENGE: &str = "ic-zk-proof-of-chunking-challenge";
 
+const SECURITY_LEVEL: usize = 256;
+
+/// The number of parallel proofs handled by one challenge
+///
+/// In Section 6.5 of <https://eprint.iacr.org/2021/339.pdf> this
+/// value is referred to as `l`
 pub const NUM_ZK_REPETITIONS: usize = 32;
-pub const SECURITY_LEVEL: usize = 256;
-pub const CHALLENGE_BITS: usize = (SECURITY_LEVEL + NUM_ZK_REPETITIONS - 1) / NUM_ZK_REPETITIONS; // == ceil(SECURITY_LEVEL/NUM_ZK_REPETITIONS)
+
+/// Defined as ceil(SECURITY_LEVEL/NUM_ZK_REPETITIONS)
+pub const CHALLENGE_BITS: usize = (SECURITY_LEVEL + NUM_ZK_REPETITIONS - 1) / NUM_ZK_REPETITIONS;
 
 /// Instance for a chunking relation.
 ///
@@ -44,6 +52,7 @@ pub struct ChunkingWitness {
     pub scalars_s: Vec<Vec<BIG>>,
 }
 
+/// Creating or verifying a proof of correct chunking failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ZkProofChunkingError {
     InvalidProof,
@@ -142,6 +151,7 @@ impl UniqueHash for SecondMoveChunking {
     }
 }
 
+/// Create a proof of correct chunking
 pub fn prove_chunking(
     instance: &ChunkingInstance,
     witness: &ChunkingWitness,
@@ -287,6 +297,7 @@ pub fn prove_chunking(
     }
 }
 
+/// Verify a proof of correct chunking
 pub fn verify_chunking(
     instance: &ChunkingInstance,
     nizk: &ProofChunking,

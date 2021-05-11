@@ -1,7 +1,7 @@
-//! Data types for the Edwards-curve Digital Signature Algorithm
+//! Data types for the Edwards-curve Digital Signature Algorithm.
 
 pub mod ed25519 {
-    //! Data types for Ed25519
+    //! Data types for Ed25519.
     use std::convert::TryFrom;
     use std::fmt;
     use std::hash::{Hash, Hasher};
@@ -9,6 +9,7 @@ pub mod ed25519 {
     #[cfg(test)]
     mod tests;
 
+    /// An Ed25519 public key.
     #[derive(Copy, Clone, Eq, PartialEq, Hash)]
     pub struct PublicKey(pub [u8; PublicKey::SIZE]);
     crate::derive_serde!(PublicKey, PublicKey::SIZE);
@@ -42,6 +43,7 @@ pub mod ed25519 {
         }
     }
 
+    /// An Ed25519 secret key.
     #[derive(Copy, Clone, Eq, PartialEq, Hash)]
     pub struct SecretKey(pub [u8; SecretKey::SIZE]);
     crate::derive_serde!(SecretKey, SecretKey::SIZE);
@@ -76,6 +78,7 @@ pub mod ed25519 {
         }
     }
 
+    /// An Ed25519 signature.
     #[derive(Copy, Clone)]
     pub struct Signature(pub [u8; Signature::SIZE]);
     crate::derive_serde!(Signature, Signature::SIZE);
@@ -101,6 +104,7 @@ pub mod ed25519 {
         }
     }
 
+    /// The conversion from Ed25519 public key bytes failed.
     pub struct PublicKeyByteConversionError {
         pub length: usize,
     }
@@ -115,6 +119,7 @@ pub mod ed25519 {
         }
     }
 
+    /// The conversion from Ed25519 secret key bytes failed.
     pub struct SecretKeyByteConversionError {
         pub length: usize,
     }

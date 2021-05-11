@@ -221,9 +221,6 @@ impl Archive {
                 node_block_height_offset,
                 Some(self.node_max_memory_size_bytes),
             )),
-            // Set the memory allocation to how much data we want to store in the
-            // node + 32 MiB of "scratch" space
-            Some(self.node_max_memory_size_bytes + 32 * 1024 * 1024),
         )
         .await;
 

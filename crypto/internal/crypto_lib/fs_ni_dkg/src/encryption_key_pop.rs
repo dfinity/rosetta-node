@@ -1,3 +1,5 @@
+//! Generating and verifying Proofs of Possession (PoP)
+
 #[cfg(test)]
 mod tests;
 
@@ -11,7 +13,7 @@ use miracl_core::bls12381::ecp::ECP;
 use miracl_core::rand::RAND;
 use zeroize::Zeroize;
 
-pub const DOMAIN_POP_ENCRYPTION_KEY: &str = "ic-pop-encryption";
+const DOMAIN_POP_ENCRYPTION_KEY: &str = "ic-pop-encryption";
 
 /// Proof of Possession (PoP) of the Encryption Key.
 #[derive(Clone, Debug)]
@@ -28,6 +30,7 @@ pub struct EncryptionKeyInstance {
     pub associated_data: Vec<u8>,
 }
 
+/// A PoP could not be generated or verified
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EncryptionKeyPopError {
     InvalidProof,

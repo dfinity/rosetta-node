@@ -1,3 +1,4 @@
+//! Hashing to group elements (fields, curves)
 use crate::utils::{curve_order, RAND_ChaCha20};
 use ic_crypto_internal_bls12381_common::{hash_to_miracl_g1, MiraclG1};
 use ic_crypto_internal_bls12381_serde_miracl::{

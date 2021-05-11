@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used)]
 
-//! Multisignature module
+//! Multisignatures using BLS12-381.
 mod api;
 mod crypto;
 #[cfg(test)]

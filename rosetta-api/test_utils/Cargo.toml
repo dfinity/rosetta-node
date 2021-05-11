@@ -5,7 +5,7 @@ authors = ["The Internet Computer Project Developers"]
 edition = "2018"
 
 [[bin]]
-name = "zondex-gen"
+name = "zondax-gen"
 path = "src/zondax_gen.rs"
 
 [dependencies]

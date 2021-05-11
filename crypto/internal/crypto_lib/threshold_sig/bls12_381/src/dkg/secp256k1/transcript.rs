@@ -1,4 +1,5 @@
-//! CSP Threshold Distributed Key Generation
+//! (deprecated) Transcript management for interactive distributed key
+//! generation.
 
 use crate::api::dkg_errors::{
     DkgCreateReshareTranscriptError, DkgCreateTranscriptError, DkgLoadPrivateKeyError,

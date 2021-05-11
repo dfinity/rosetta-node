@@ -1,3 +1,5 @@
+//! Utilities for key generation and key identifier generation
+
 use crate::api::{CspKeyGenerator, CspSecretKeyStoreChecker};
 use crate::hash::Sha256Hasher;
 use crate::secret_key_store::{SecretKeyStore, SecretKeyStoreError};
@@ -184,6 +186,7 @@ mod tls_keygen {
     }
 }
 
+/// Some key related utils
 pub mod utils {
     use ic_crypto_internal_types::encrypt::forward_secure::{
         CspFsEncryptionPop, CspFsEncryptionPublicKey,
