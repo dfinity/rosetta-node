@@ -1,3 +1,5 @@
+//! Cryptographic types
+
 // We disable clippy warnings for the whole module because they apply to
 // generated code, meaning we can't locally disable the warnings (the code is
 // defined in another module).
@@ -95,6 +97,7 @@ impl std::fmt::Debug for CspSecretKey {
     }
 }
 
+/// An encrypted threshold BLS12-381 key
 #[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum CspEncryptedSecretKey {
     ThresBls12_381(EncryptedShareBytes),
@@ -267,6 +270,7 @@ impl CspSignature {
 }
 
 /// A struct for converting signatures
+///
 /// Use SigConverter::for_target(alg).try_from_basic(signature) to convert
 /// from the bytes of a signature to a CspSignature
 pub struct SigConverter {

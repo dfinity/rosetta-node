@@ -1,3 +1,5 @@
+//! Proofs of correct sharing
+
 use crate::random_oracles::*;
 use crate::utils::*;
 use miracl_core::bls12381::big::BIG;
@@ -7,8 +9,8 @@ use miracl_core::rand::RAND;
 use std::vec::Vec;
 
 /// Domain separators for the zk proof of sharing
-pub const DOMAIN_PROOF_OF_SHARING_INSTANCE: &str = "ic-zk-proof-of-sharing-instance";
-pub const DOMAIN_PROOF_OF_SHARING_CHALLENGE: &str = "ic-zk-proof-of-sharing-challenge";
+const DOMAIN_PROOF_OF_SHARING_INSTANCE: &str = "ic-zk-proof-of-sharing-instance";
+const DOMAIN_PROOF_OF_SHARING_CHALLENGE: &str = "ic-zk-proof-of-sharing-challenge";
 
 /// Instance for a sharing relation.
 ///
@@ -49,6 +51,7 @@ struct FirstMoveSharing {
     pub blinded_instance: ECP,
 }
 
+/// Creating or verifying a proof of sharing failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ZkProofSharingError {
     InvalidProof,
@@ -110,14 +113,16 @@ fn sharing_proof_challenge(hashed_instance: &BIG, first_move: &FirstMoveSharing)
     random_oracle_to_scalar(DOMAIN_PROOF_OF_SHARING_CHALLENGE, &map)
 }
 
-// Section 8.4 of paper.
-//   instance = ([y_1..y_n], [A_0..A_{t-1}], R, [C_1..C_n])
-//   witness = (r, [s_1..s_n])
+/// Create a proof of correct sharing
+///
+/// See section 6.4 of <https://eprint.iacr.org/2021/339.pdf>
 pub fn prove_sharing(
     instance: &SharingInstance,
     witness: &SharingWitness,
     rng: &mut impl RAND,
 ) -> ProofSharing {
+    //   instance = ([y_1..y_n], [A_0..A_{t-1}], R, [C_1..C_n])
+    //   witness = (r, [s_1..s_n])
     instance
         .check_instance()
         .expect("The sharing proof instance is invalid");
@@ -180,6 +185,9 @@ pub fn prove_sharing(
     }
 }
 
+/// Verify a proof of correct sharing
+///
+/// See section 6.4 of <https://eprint.iacr.org/2021/339.pdf>
 pub fn verify_sharing(
     instance: &SharingInstance,
     nizk: &ProofSharing,

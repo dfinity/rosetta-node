@@ -206,6 +206,12 @@ pub async fn notify(
 
     let expected_to = AccountIdentifier::new(to_canister.get(), to_subaccount);
 
+    if max_fee != TRANSACTION_FEE {
+        panic!("Transaction fee should be {}", TRANSACTION_FEE);
+    }
+
+    // This transaction provides and on chain record that a notification was
+    // attempted
     let transfer = Transfer::Send {
         from: expected_from,
         to: expected_to,
@@ -260,8 +266,9 @@ pub async fn notify(
         memo: block.transaction().memo,
     };
 
-    change_notification_state(block_height, true)
-        .expect("There is already an outstanding notification");
+    let block_timestamp = block.timestamp();
+
+    change_notification_state(block_height, block_timestamp, true).expect("Notification failed");
 
     let response = if notify_using_protobuf {
         let bytes = ProtoBuf(transaction_notification_args)
@@ -307,7 +314,10 @@ pub async fn notify(
             }
         }
         Err((_code, err)) => {
-            let _ = change_notification_state(block_height, false);
+            // It may be that by the time this callback is made the block will have been
+            // garbage collected. That is fine because we don't inspect the
+            // response here.
+            let _ = change_notification_state(block_height, block_timestamp, false);
             if err.len() > MAX_LENGTH {
                 let caller = caller();
                 Err(format!(
@@ -401,13 +411,12 @@ fn main() {
 #[export_name = "canister_post_upgrade"]
 fn post_upgrade() {
     over_init(|_: BytesS| {
-        let bytes = stable::get();
-        *LEDGER.write().unwrap() =
-            serde_cbor::from_slice(&bytes).expect("Decoding stable memory failed");
+        let mut ledger = LEDGER.write().unwrap();
+        *ledger = serde_cbor::from_reader(&mut stable::StableReader::new())
+            .expect("Decoding stable memory failed");
+
         set_certified_data(
-            &LEDGER
-                .read()
-                .unwrap()
+            &ledger
                 .blockchain
                 .last_hash
                 .map(|h| h.into_bytes())
@@ -418,6 +427,8 @@ fn post_upgrade() {
 
 #[export_name = "canister_pre_upgrade"]
 fn pre_upgrade() {
+    use std::io::Write;
+
     setup::START.call_once(|| {
         printer::hook();
     });
@@ -426,8 +437,11 @@ fn pre_upgrade() {
         .read()
         // This should never happen, but it's better to be safe than sorry
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let bytes = serde_cbor::to_vec(&*ledger).unwrap();
-    stable::set(&bytes);
+    let mut writer = stable::StableWriter::new();
+    serde_cbor::to_writer(&mut writer, &*ledger).unwrap();
+    writer
+        .flush()
+        .expect("failed to flush stable memory writer");
 }
 
 /// Upon reaching a `trigger_threshold` we will archive `num_blocks`.
@@ -476,13 +490,16 @@ async fn archive_blocks() {
                 err
             ));
             // We're in real trouble if we can't acquire this lock
-            let blocks = &mut LEDGER
+            let blockchain = &mut LEDGER
                 .try_write()
                 .expect("Failed to get a lock on the ledger")
-                .blockchain
-                .blocks;
+                .blockchain;
 
-            recover_from_failed_archive(blocks, blocks_to_archive, chunk);
+            // Revert the change to the index of blocks not on this canister that was made
+            // in archive_blocks
+            blockchain.sub_num_archived_blocks(chunk.len() as u64);
+            // Add the blocks back to the local blockchain
+            recover_from_failed_archive(&mut blockchain.blocks, blocks_to_archive, chunk);
             return;
         }
     }
@@ -669,4 +686,76 @@ fn get_nodes_() {
             .map(|archive| archive.nodes().to_vec())
             .unwrap_or_default()
     });
+}
+
+fn encode_metrics(w: &mut metrics_encoder::MetricsEncoder<Vec<u8>>) -> std::io::Result<()> {
+    let ledger = LEDGER.try_read().map_err(|err| {
+        std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("Failed to get a LEDGER for read: {}", err),
+        )
+    })?;
+
+    w.encode_gauge(
+        "ledger_max_message_size_bytes",
+        *MAX_MESSAGE_SIZE_BYTES.read().unwrap() as f64,
+        "Maximum inter-canister message size in bytes.",
+    )?;
+    w.encode_gauge(
+        "ledger_stable_memory_pages",
+        dfn_core::api::stable_memory_size_in_pages() as f64,
+        "The size of the stable memory allocated by this canister measured in 64K Wasm pages.",
+    )?;
+
+    w.encode_gauge(
+        "ledger_transactions_by_hash_cache_size",
+        ledger.transactions_by_hash_len() as f64,
+        "The total number of entries in the transactions_by_hash cache.",
+    )?;
+    w.encode_gauge(
+        "ledger_transactions_by_height_size",
+        ledger.transactions_by_height_len() as f64,
+        "The total number of entries in the transaction_by_height queue.",
+    )?;
+    w.encode_gauge(
+        "ledger_blocks_notified_total",
+        ledger.transactions_by_height_len() as f64,
+        "The total number of blockheights that have been notified.",
+    )?;
+    w.encode_gauge(
+        "ledger_blocks_count",
+        ledger.blockchain.blocks.len() as f64,
+        "The total number of blocks stored in the main memory.",
+    )?;
+    w.encode_gauge(
+        "ledger_archived_blocks_count",
+        ledger.blockchain.num_archived_blocks as f64,
+        "The total number of blocks sent the archive.",
+    )?;
+    w.encode_gauge(
+        "ledger_archive_locked",
+        ledger.blockchain.archive.try_read().map(|_| 0).unwrap_or(1) as f64,
+        "Whether the archiving is in process.",
+    )?;
+    w.encode_gauge(
+        "ledger_balances_icpt_pool_total",
+        ledger.balances.icpt_pool.get_icpts() as f64,
+        "The total number of ICPTs in the pool.",
+    )?;
+    w.encode_gauge(
+        "ledger_balance_store_size",
+        ledger.balances.store.len() as f64,
+        "The total number of accounts in the balance store.",
+    )?;
+    w.encode_gauge(
+        "ledger_most_recent_block_timestamp",
+        ledger.blockchain.last_timestamp.timestamp_nanos as f64,
+        "The IC timestamp (in nanoseconds) of the most recent block.",
+    )?;
+    Ok(())
+}
+
+#[export_name = "canister_query http_request"]
+fn http_request() {
+    ledger_canister::http_request::serve_metrics(encode_metrics);
 }

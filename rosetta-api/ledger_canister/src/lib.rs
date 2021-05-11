@@ -24,7 +24,9 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
 
 pub mod account_identifier;
+pub mod http_request;
 pub mod icpts;
+pub mod metrics_encoder;
 #[path = "../gen/ic_ledger.pb.v1.rs"]
 #[rustfmt::skip]
 pub mod protobuf;
@@ -35,6 +37,7 @@ pub mod archive;
 
 use archive::Archive;
 pub use archive::ArchiveOptions;
+use dfn_core::api::now;
 
 pub mod spawn;
 pub use account_identifier::{AccountIdentifier, Subaccount};
@@ -494,7 +497,7 @@ pub struct Blockchain {
     pub archive: Arc<RwLock<Option<Archive>>>,
 
     /// How many blocks have been sent to the archive
-    num_archived_blocks: u64,
+    pub num_archived_blocks: u64,
 }
 
 impl Default for Blockchain {
@@ -552,8 +555,14 @@ impl Blockchain {
         self.num_archived_blocks
     }
 
+    /// This is used when we try to archive a chunk
     pub fn add_num_archived_blocks(&mut self, to_add: u64) {
         self.num_archived_blocks += to_add;
+    }
+
+    /// This is used when we fail to archive a chunk
+    pub fn sub_num_archived_blocks(&mut self, to_sub: u64) {
+        self.num_archived_blocks -= to_sub;
     }
 
     pub fn num_unarchived_blocks(&self) -> u64 {
@@ -785,6 +794,14 @@ impl Ledger {
             }
             let removed = self.transactions_by_hash.remove(&transaction_hash);
             assert!(removed.is_some());
+
+            // After 24 hours we don't need to store notification state because it isn't
+            // accessible. We don't inspect the result because we don't care whether a
+            // notification at this block height was made or not.
+            match removed {
+                Some(bh) => self.blocks_notified.remove(bh),
+                None => None,
+            };
             self.transactions_by_height.pop_front();
         }
     }
@@ -826,8 +843,17 @@ impl Ledger {
     pub fn change_notification_state(
         &mut self,
         height: BlockHeight,
+        block_timestamp: TimeStamp,
         new_state: bool,
+        now: TimeStamp,
     ) -> Result<(), String> {
+        if block_timestamp + self.transaction_window <= now {
+            return Err(format!(
+                "You cannot send a notification for a transaction that is more than {} seconds old",
+                self.transaction_window.as_secs(),
+            ));
+        }
+
         let is_notified = self.blocks_notified.get(height).is_some();
 
         match (is_notified, new_state) {
@@ -937,12 +963,20 @@ impl Ledger {
                 .send_whitelist
                 .contains(&CanisterId::new(*principal_id).unwrap())
     }
+
+    pub fn transactions_by_hash_len(&self) -> usize {
+        self.transactions_by_hash.len()
+    }
+
+    pub fn transactions_by_height_len(&self) -> usize {
+        self.transactions_by_height.len()
+    }
 }
 
 lazy_static! {
     pub static ref LEDGER: RwLock<Ledger> = RwLock::new(Ledger::default());
     // Maximum inter-canister message size in bytes
-    pub static ref MAX_MESSAGE_SIZE_BYTES: RwLock<usize> = RwLock::new(2 * (1024^2));
+    pub static ref MAX_MESSAGE_SIZE_BYTES: RwLock<usize> = RwLock::new(1024 * 1024);
 }
 
 pub fn add_payment(
@@ -957,11 +991,17 @@ pub fn add_payment(
         .expect("Transfer failed")
 }
 
-pub fn change_notification_state(height: BlockHeight, new_state: bool) -> Result<(), String> {
-    LEDGER
-        .write()
-        .unwrap()
-        .change_notification_state(height, new_state)
+pub fn change_notification_state(
+    height: BlockHeight,
+    block_timestamp: TimeStamp,
+    new_state: bool,
+) -> Result<(), String> {
+    LEDGER.write().unwrap().change_notification_state(
+        height,
+        block_timestamp,
+        new_state,
+        now().into(),
+    )
 }
 
 // This is how we pass arguments to 'init' in main.rs
@@ -1549,6 +1589,67 @@ mod tests {
             &blocks[..],
             "Recovered state, but first three blocks are still archived"
         )
+    }
+
+    #[test]
+    fn test_purge() {
+        let mut ledger = Ledger::default();
+        let genesis = SystemTime::now().into();
+        ledger.from_init(
+            vec![
+                (
+                    PrincipalId::new_user_test_id(0).into(),
+                    ICPTs::new(1, 0).unwrap(),
+                ),
+                (
+                    PrincipalId::new_user_test_id(1).into(),
+                    ICPTs::new(1, 0).unwrap(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            PrincipalId::new_user_test_id(1000).into(),
+            genesis,
+            Some(Duration::from_millis(10)),
+            HashSet::new(),
+        );
+        let little_later = genesis + Duration::from_millis(1);
+
+        let res1 = ledger.change_notification_state(1, genesis, true, little_later);
+        assert_eq!(res1, Ok(()), "The first notification succeeds");
+
+        let res2 = ledger.blocks_notified.get(1);
+        assert_eq!(res2, Some(&()), "You can see the lock in the store");
+
+        ledger.purge_old_transactions(genesis);
+
+        let res2 = ledger.blocks_notified.get(1);
+        assert_eq!(
+            res2,
+            Some(&()),
+            "A purge before the end of the window doesn't remove the notification"
+        );
+
+        let later = genesis + Duration::from_secs(10);
+        ledger.purge_old_transactions(later);
+
+        let res3 = ledger.blocks_notified.get(1);
+        assert_eq!(res3, None, "A purge afterwards does");
+
+        let res4 = ledger.blocks_notified.get(2);
+        assert_eq!(res4, None);
+
+        let res5 = ledger.change_notification_state(1, genesis, true, later);
+        assert!(res5.unwrap_err().contains("that is more than"));
+
+        let res5 = ledger.change_notification_state(1, genesis, false, later);
+        assert!(res5.unwrap_err().contains("that is more than"));
+
+        let res5 = ledger.change_notification_state(2, genesis, true, later);
+        assert!(res5.unwrap_err().contains("that is more than"));
+
+        let res6 = ledger.blocks_notified.get(2);
+        assert_eq!(res6, None);
     }
 }
 

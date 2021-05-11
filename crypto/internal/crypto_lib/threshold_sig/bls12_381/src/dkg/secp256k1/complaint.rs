@@ -1,4 +1,5 @@
-//! Make and verify complaints
+//! (deprecated) Make and verify complaints during interactive distributed key
+//! generation.
 
 use super::dh;
 use crate::api::dkg_errors::{

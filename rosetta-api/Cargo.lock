@@ -551,9 +551,9 @@ checksum = "55390dbbf21ce70683f3e926dace00a21da373e35e44a60cafd232e3e9bf2041"
 
 [[package]]
 name = "byteorder"
-version = "1.4.2"
+version = "1.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae44d1a3d5a19df61dd0c8beb138458ac2a53a7ac09eba97d55592540004306b"
+checksum = "14c189c53d098945499cdfa7ecc63567cf3886b3332b312a5b4585d8d3a6a610"
 
 [[package]]
 name = "bytes"
@@ -578,9 +578,9 @@ dependencies = [
 
 [[package]]
 name = "candid"
-version = "0.6.19"
+version = "0.6.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6baffb96f5f65a58cf67440868eace23e76a99bf936bfd4eb9ed39b4896f9525"
+checksum = "65f05b872d010281c905c4e6ff2079c1341d1e527e05f3bfab88d49ea3269def"
 dependencies = [
  "byteorder",
  "candid_derive",
@@ -914,6 +914,17 @@ dependencies = [
  "ic-base-types",
  "on_wire",
  "rustversion",
+]
+
+[[package]]
+name = "dfn_http"
+version = "0.8.0"
+dependencies = [
+ "candid",
+ "dfn_candid",
+ "dfn_core",
+ "serde",
+ "serde_bytes",
 ]
 
 [[package]]
@@ -2571,11 +2582,13 @@ dependencies = [
  "crc32fast",
  "dfn_candid",
  "dfn_core",
+ "dfn_http",
  "dfn_protobuf",
  "digest 0.9.0",
  "hex",
  "ic-base-types",
  "ic-crypto-sha256",
+ "ic-nns-constants",
  "ic-types 0.8.0",
  "intmap",
  "lazy_static",
@@ -2585,6 +2598,7 @@ dependencies = [
  "prost-build",
  "prost-derive",
  "serde",
+ "serde_bytes",
  "serde_cbor",
  "yansi",
 ]

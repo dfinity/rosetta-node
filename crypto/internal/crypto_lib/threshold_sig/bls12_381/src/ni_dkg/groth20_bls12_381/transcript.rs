@@ -1,4 +1,4 @@
-//! Non-interactive key generation transcript methods
+//! Non-interactive key generation transcript methods.
 
 use super::dealing::{
     verify_all_shares_are_present_and_well_formatted, verify_public_coefficients_match_threshold,
@@ -26,11 +26,22 @@ use crate::types::public_coefficients::conversions::pub_key_bytes_from_pub_coeff
 use ic_crypto_internal_types::curves::bls12_381::Fr as FrBytes;
 use ic_crypto_internal_types::sign::threshold_sig::ni_dkg::ni_dkg_groth20_bls12_381::PublicCoefficientsBytes;
 
-/// Creates a NiDKG transcript
+/// Creates an NiDKG transcript.
 ///
 /// # Prerequisites
 /// * The dealings MUST be verified before calling this method; otherwise
 ///   dealers may provide receivers with invalid shares.
+///
+/// # Errors
+/// * `CspDkgCreateTranscriptError::SizeError` if the threshold is too large for
+///   this machine.
+/// * `CspDkgCreateTranscriptError::InvalidThresholdError` if the threshold is
+///   either zero, or larger than the `number_of_receivers`.
+/// * `CspDkgCreateTranscriptError::InvalidDealingError` if `csp_dealings` is
+///   malformed or invalid.
+///
+/// # Panics
+/// * If Langrange interpolation fails (because of duplicate x-coordinates).
 pub fn create_transcript(
     threshold: NumberOfNodes,
     number_of_receivers: NumberOfNodes,
@@ -49,13 +60,27 @@ pub fn create_transcript(
     compute_transcript(threshold, number_of_receivers, &csp_dealings)
 }
 
-/// Creates a NiDKG transcript with the same public key as an existing threshold
-/// key
+/// Creates an NiDKG transcript with the same public key as an existing
+/// threshold key.
 ///
 /// # Prerequisites
 /// * The dealings MUST be verified before calling this method; otherwise
 ///   dealers may provide receivers with invalid shares or dealers may provide
 ///   keys that do not preserve the public key.
+///
+/// # Errors
+/// * `CspDkgCreateReshareTranscriptError::InsufficientDealingsError` if the
+///   length of `csp_dealings` is smaller than the new threshold (set by
+///   `resharing_public_coefficients`).
+/// * `CspDkgCreateReshareTranscriptError::ResharingFailed` if the public key
+///   created by this resharing does not match the previous public key.
+/// * `CspDkgCreateTranscriptError::InvalidThresholdError` if the threshold is
+///   either zero, or larger than the `number_of_receivers`.
+/// * `CspDkgCreateTranscriptError::InvalidDealingError` if `csp_dealings` is
+///   malformed or invalid.
+///
+/// # Panics
+/// * If Langrange interpolation fails (because of duplicate x-coordinates).
 pub fn create_resharing_transcript(
     threshold: NumberOfNodes,
     number_of_receivers: NumberOfNodes,
@@ -106,6 +131,9 @@ pub fn create_resharing_transcript(
 /// Computes the transcript using all provided dealings
 ///
 /// Note: The caller can optimise by providing a minimal number of dealings.
+///
+/// # Panics
+/// * If Langrange interpolation fails (because of duplicate x-coordinates).
 fn compute_transcript(
     threshold: NumberOfNodes,
     number_of_receivers: NumberOfNodes,
@@ -186,6 +214,23 @@ fn compute_transcript(
     })
 }
 
+/// Computes a participant's threshold signing key from the DKG transcript.
+///
+/// # Arguments
+/// * `transcript` - The transcript of the distributed key generation ceremony.
+/// * `receiver_index` - The index of the receiver whose signing key is
+///   computed.
+/// * `fs_secret_key` - The forward-secure decryption key of the given
+///   `receiver_index`.
+/// * `epoch` - The forward-secure decryption epoch to use.
+///
+/// # Errors
+/// * `CspDkgLoadPrivateKeyError::InvalidTranscriptError` if decryption of the
+///   share fails, or the share is invalid.
+///
+/// # Panics
+/// * If Langrange interpolation fails (because of duplicate x-coordinates).
+/// * Transcript serialization fails (during creation of an error message).
 pub fn compute_threshold_signing_key(
     transcript: &g20::Transcript,
     receiver_index: NodeIndex,

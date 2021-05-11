@@ -1,6 +1,6 @@
 #![deny(clippy::unwrap_used)]
 
-//! Threshold signatures
+//! Threshold signatures using BLS12-381.
 
 pub mod api;
 pub mod crypto;

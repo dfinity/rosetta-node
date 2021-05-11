@@ -1,4 +1,4 @@
-//! Type conversions
+//! Type conversions for BLS12-381 multisignatures.
 use super::*;
 use ic_crypto_internal_bls12381_common as bls;
 use ic_types::crypto::{AlgorithmId, CryptoError};

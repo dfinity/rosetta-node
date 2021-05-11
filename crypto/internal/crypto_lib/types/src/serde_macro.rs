@@ -1,3 +1,6 @@
+//! Macros for serialization and deserialization.
+
+/// A custom macro to serialize from and to bytes.
 #[macro_export]
 macro_rules! derive_serde {
     ($name:ident, $size:expr) => {

@@ -1,4 +1,4 @@
-//! Distributed Key Generation (DKG) Types
+//! (deprecated) Interactive Distributed Key Generation (DKG) Types
 //!
 //! The types in this file correspond to the types used in the spec, including
 //! ephemeral (secp256k1) keys, dealings, complaints and transcripts.  Please

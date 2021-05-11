@@ -146,14 +146,16 @@ pub struct OnDiskStore {
     location: PathBuf,
     first_block_snapshot: Option<(HashedBlock, Balances)>,
     last_verified_idx: Option<BlockHeight>,
+    fsync: bool,
 }
 
 impl OnDiskStore {
-    pub fn new(location: PathBuf) -> Result<Self, BlockStoreError> {
+    pub fn new(location: PathBuf, fsync: bool) -> Result<Self, BlockStoreError> {
         let mut store = Self {
             location,
             first_block_snapshot: None,
             last_verified_idx: None,
+            fsync,
         };
         store.first_block_snapshot = store
             .read_oldest_block_snapshot()
@@ -172,15 +174,15 @@ impl OnDiskStore {
     }
 
     pub fn block_file_name(&self, height: BlockHeight) -> Box<Path> {
-        self.location.join(format!("{}.json", height)).into()
+        self.location.join(format!("{}.cbor", height)).into()
     }
 
     fn oldest_block_snapshot_file_name(&self) -> Box<Path> {
-        self.location.join("oldest_block_snapshot.json").into()
+        self.location.join("oldest_block_snapshot.cbor").into()
     }
 
     fn last_verified_idx_file_name(&self) -> Box<Path> {
-        self.location.join("last_verified_idx.json").into()
+        self.location.join("last_verified_idx.cbor").into()
     }
 
     fn read_last_verified(&self) -> Result<Option<BlockHeight>, String> {
@@ -189,7 +191,7 @@ impl OnDiskStore {
         match file.map_err(|e| e.kind()) {
             Ok(f) => {
                 debug!("Loading last verified idx");
-                let h: BlockHeight = serde_json::from_reader(f).map_err(|e| e.to_string())?;
+                let h: BlockHeight = serde_cbor::from_reader(f).map_err(|e| e.to_string())?;
                 Ok(Some(h))
             }
             Err(std::io::ErrorKind::NotFound) => Ok(None),
@@ -204,7 +206,7 @@ impl OnDiskStore {
             Ok(f) => {
                 debug!("Loading oldest block snapshot");
                 let (hb, bal, icpt_pool): (HashedBlock, Vec<(AccountIdentifier, ICPTs)>, ICPTs) =
-                    serde_json::from_reader(f).map_err(|e| e.to_string())?;
+                    serde_cbor::from_reader(f).map_err(|e| e.to_string())?;
                 let mut balances = Balances::default();
                 balances.icpt_pool = icpt_pool;
                 balances.store.0 = immutable_chunkmap::map::Map::new()
@@ -236,15 +238,18 @@ impl OnDiskStore {
         // TODO implement Serialize for Balances
         let b = balances.store.0.clone();
         let bal: Vec<_> = b.into_iter().collect();
-        serde_json::to_writer(&file, &(hb, bal, balances.icpt_pool)).map_err(|e| e.to_string())?;
-        file.sync_all().map_err(|e| {
-            let msg = format!(
-                "Syncing oldest block snapshot file after write failed: {:?}",
-                e
-            );
-            error!("{}", msg);
-            msg
-        })?;
+        serde_cbor::to_writer(&file, &(hb, bal, balances.icpt_pool)).map_err(|e| e.to_string())?;
+
+        if self.fsync {
+            file.sync_data().map_err(|e| {
+                let msg = format!(
+                    "Syncing oldest block snapshot file after write failed: {:?}",
+                    e
+                );
+                error!("{}", msg);
+                msg
+            })?;
+        }
 
         self.first_block_snapshot = Some((hb.clone(), balances.clone()));
         Ok(())
@@ -256,7 +261,7 @@ impl BlockStore for OnDiskStore {
         let file_name = self.block_file_name(index);
         let file = OpenOptions::new().read(true).open(file_name);
         match file.map_err(|e| e.kind()) {
-            Ok(f) => serde_json::from_reader(f).map_err(|e| BlockStoreError::Other(e.to_string())),
+            Ok(f) => serde_cbor::from_reader(f).map_err(|e| BlockStoreError::Other(e.to_string())),
             Err(std::io::ErrorKind::NotFound) => {
                 let first_idx = self
                     .first_block_snapshot
@@ -285,12 +290,16 @@ impl BlockStore for OnDiskStore {
             .open(&file_name)
             .map_err(|e| BlockStoreError::Other(e.to_string()))?;
 
-        serde_json::to_writer(&file, &block).map_err(|e| BlockStoreError::Other(e.to_string()))?;
-        file.sync_all().map_err(|e| {
-            let msg = format!("Syncing file after write failed: {:?}", e);
-            error!("{}", msg);
-            BlockStoreError::Other(msg)
-        })?;
+        serde_cbor::to_writer(&file, &block).map_err(|e| BlockStoreError::Other(e.to_string()))?;
+
+        if self.fsync {
+            file.sync_data().map_err(|e| {
+                let msg = format!("Syncing file after write failed: {:?}", e);
+                error!("{}", msg);
+                BlockStoreError::Other(msg)
+            })?;
+        }
+
         Ok(())
     }
 
@@ -357,12 +366,15 @@ impl BlockStore for OnDiskStore {
             .open(&file_name)
             .map_err(|e| BlockStoreError::Other(e.to_string()))?;
 
-        serde_json::to_writer(&file, &h).map_err(|e| BlockStoreError::Other(e.to_string()))?;
-        file.sync_all().map_err(|e| {
-            let msg = format!("Syncing last verified idx file after write failed: {:?}", e);
-            error!("{}", msg);
-            BlockStoreError::Other(msg)
-        })?;
+        serde_cbor::to_writer(&file, &h).map_err(|e| BlockStoreError::Other(e.to_string()))?;
+
+        if self.fsync {
+            file.sync_data().map_err(|e| {
+                let msg = format!("Syncing last verified idx file after write failed: {:?}", e);
+                error!("{}", msg);
+                BlockStoreError::Other(msg)
+            })?;
+        }
 
         self.last_verified_idx = Some(h);
         Ok(())

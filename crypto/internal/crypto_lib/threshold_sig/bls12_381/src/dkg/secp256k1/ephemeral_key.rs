@@ -1,4 +1,5 @@
-//! DKG Ephemeral Key Generation
+//! (deprecated) Ephemeral Key Generation for interactive distributed key
+//! generation.
 
 use crate::api::dkg_errors::{DkgVerifyEphemeralError, MalformedPopError};
 use crate::dkg::secp256k1::types::{

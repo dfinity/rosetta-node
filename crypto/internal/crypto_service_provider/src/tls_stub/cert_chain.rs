@@ -1,3 +1,5 @@
+//! X.509 certificate chain utilities
+
 use super::*;
 use openssl::stack::StackRef;
 use std::fmt::{self, Debug, Formatter};

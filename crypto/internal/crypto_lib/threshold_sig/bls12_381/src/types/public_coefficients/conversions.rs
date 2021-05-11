@@ -1,4 +1,4 @@
-//! Reasonably simple type conversions
+//! Reasonably simple type conversions.
 
 use crate::crypto::public_key_from_secret_key;
 use crate::types::{Polynomial, PublicCoefficients, PublicKey};
@@ -32,6 +32,11 @@ impl TryFrom<&PublicCoefficients> for NumberOfNodes {
     }
 }
 
+/// Returns the length of the given `public_coefficients` as a `NumberOfNodes`.
+///
+/// # Errors
+/// * `CryptoError::InvalidArgument` if the `len` of the given
+///   `public_coefficients` cannot be converted to a `NodeIndex`.
 pub fn try_number_of_nodes_from_pub_coeff_bytes(
     public_coefficients: &PublicCoefficientsBytes,
 ) -> CryptoResult<NumberOfNodes> {
@@ -40,6 +45,12 @@ pub fn try_number_of_nodes_from_pub_coeff_bytes(
     Ok(NumberOfNodes::from(len))
 }
 
+/// Returns the length of the given `CspPublicCoefficients` as a
+/// `NumberOfNodes`.
+///
+/// Cf. `try_number_of_nodes_from_pub_coeff_bytes`.
+///
+/// Used only for testing.
 pub fn try_number_of_nodes_from_csp_pub_coeffs(
     value: &CspPublicCoefficients,
 ) -> CryptoResult<NumberOfNodes> {
@@ -93,11 +104,13 @@ impl TryFrom<&PublicCoefficientsBytes> for PublicKey {
     }
 }
 
+/// Returns the public key associated to the given `public_coefficients`.
+///
+/// Empty public_coefficients represent an all-zero polynomial,
+/// so in this case we return a zero-public key.
 pub fn pub_key_bytes_from_pub_coeff_bytes(
     public_coefficients: &PublicCoefficientsBytes,
 ) -> PublicKeyBytes {
-    // Empty public_coefficients represent an all-zero polynomial,
-    // so in this case we return a zero-public key.
     public_coefficients
         .coefficients
         .get(0)

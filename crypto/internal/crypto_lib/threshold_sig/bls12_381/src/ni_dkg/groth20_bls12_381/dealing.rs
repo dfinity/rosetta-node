@@ -1,4 +1,5 @@
-//! Distributed non-interactive key generation
+//! Dealing phase of Groth20-BLS12-381 non-interactive distributed key
+//! generation.
 
 use super::encryption::{encrypt_and_prove, verify_zk_proofs};
 use crate::api::ni_dkg_errors::{
@@ -27,7 +28,39 @@ use ic_crypto_internal_types::sign::threshold_sig::ni_dkg::ni_dkg_groth20_bls12_
 };
 use ic_crypto_internal_types::sign::threshold_sig::ni_dkg::Epoch;
 
-/// Creates a new dealing: Generates threshold keys.
+/// Creates a new dealing, i.e. generates threshold keys.
+///
+/// # Arguments
+/// * `keygen_seed` - randomness used to seed the PRNG for generating the
+///   keys/shares. It must be treated as a secret.
+/// * `encryption_seed` - randomness used to seed the PRNG for encrypting the
+///   shares and proving their correctness. It must be treated as a secret.
+/// * `threshold` - the minimum number of individual signatures that can be
+///   combined into a valid threshold signature.
+/// * `receiver_keys` - forward-secure encryption public keys of the receivers.
+/// * `epoch` - forward-secure epoch under which the shares are encrypted.
+/// * `dealer_index` - index of the dealer.
+/// * `resharing_secret` - existing secret key if resharing, or `None` if not.
+///
+/// # Errors
+/// * `CspDkgCreateReshareDealingError::SizeError` if the length of
+///   `receiver_keys` isn't supported.
+/// * `CspDkgCreateReshareDealingError::InvalidThresholdError` if the threshold
+///   is either zero or greater than the number of receivers.
+/// * `CspDkgCreateReshareDealingError::MalformedReshareSecretKeyError` if
+///   `resharing_key` is malformed.
+/// * `CspDkgCreateReshareDealingError::InvalidThresholdError` if key generation
+///   fails.
+/// * `CspDkgCreateDealingError::MalformedFsPublicKeyError` if one of the
+///   `receiver_keys` is malformed.
+/// * `CspDkgCreateReshareDealingError::MisnumberedReceiverError` if the
+///   receiver indices are not `0..num_receivers-1 inclusive`.
+///
+/// # Panics:
+/// * If key generation produces key shares with non-contiguous indices.
+/// * If key generation produces key shares that don't match the given
+///   `receiver_keys`.
+/// * If the key generation produces public coefficients that are malformed.
 pub fn create_dealing(
     keygen_seed: Randomness,
     encryption_seed: Randomness,
@@ -118,6 +151,35 @@ pub fn create_dealing(
     Ok(dealing)
 }
 
+/// Verifies a dealing.
+///
+/// # Arguments
+/// * `dealer_index` - The index of the dealer that provided the given
+///   `dealing`.
+/// * `threshold` - The threshold required by the given `dealing`.
+/// * `epoch` - The forward-secure encryption epoch used to encrypt the
+///   receivers' shares.
+/// * `receiver_keys` - The forward-secure encryption public keys used to
+///   encrypt the receivers' shares.
+/// * `dealing` - The dealing to verify.
+///
+/// # Errors
+/// * `CspDkgVerifyDealingError::InvalidThresholdError` if the threshold is less
+///   than 1.
+/// * `CspDkgVerifyDealingError::InvalidThresholdError` if the threshold is
+///   greater than the number of receivers.
+/// * `MisnumberedReceiverError` if the receiver indices are not
+///   0..num_receivers-1 inclusive.
+/// * `CspDkgVerifyDealingError::InvalidDealingError` if
+///   - The share indices are not 0..num_receivers-1 inclusive.
+///   - Any shares are malformed.
+/// * `CspDkgVerifyDealingError::InvalidDealingError` if
+///   dealing.public_coefficients.len() != threshold.
+/// * `CspDkgVerifyDealingError::MalformedDealingError` if any component of
+///   `dealing` is malformed or invalid.
+/// * `CspDkgVerifyDealingError::InvalidDealingError` if any one of the
+///   decryptability or sharing proofs of the dealing, or the integrity of the
+///   dealing ciphertexts, don't verify.
 pub fn verify_dealing(
     _dkg_id: NiDkgId,
     dealer_index: NodeIndex,
@@ -147,6 +209,33 @@ pub fn verify_dealing(
     Ok(())
 }
 
+/// Verifies a dealing created to reshare an existing secret.
+///
+/// Also cf. `verify_dealing`.
+///
+/// # Arguments
+/// * `dkg_id` - Unused.
+/// * `dealer_resharing_index` - The index of the dealer that provided the given
+///   `dealing`.
+/// * `threshold` - The threshold required by the given `dealing`.
+/// * `epoch` - The forward-secure encryption epoch used to encrypt the
+///   receivers' shares.
+/// * `receiver_keys` - The forward-secure encryption public keys used to
+///   encrypt the receivers' shares.
+/// * `dealing` - The dealing to verify.
+/// * `resharing_public_coefficients` - The `PublicCoefficients` corresponding
+///   to the secret share that is being re-shared.
+///
+/// # Errors
+/// * Same errors as `verify_dealing`.
+/// * `CspDkgVerifyDealingError::InvalidDealingError` if the constant term in
+///   the public coefficient doesn't equal the individual public key of the
+///   dealer in the resharing instance.
+/// * `CspDkgVerifyDealingError::InvalidDealingError` if the dealer's public key
+///   is malformed.
+///
+/// # Panics
+/// * If there are no `public_coefficients` in `dealing`.
 pub fn verify_resharing_dealing(
     dkg_id: NiDkgId,
     dealer_resharing_index: NodeIndex,
@@ -194,7 +283,7 @@ pub fn verify_resharing_dealing(
 }
 
 /// Tries to get the number of receivers as NumberOfNodes
-pub fn number_of_receivers(
+fn number_of_receivers(
     receiver_keys: &BTreeMap<NodeIndex, FsEncryptionPublicKey>,
 ) -> Result<NumberOfNodes, SizeError> {
     let size = NodeIndex::try_from(receiver_keys.len()).map_err(|_| SizeError {
@@ -208,7 +297,12 @@ pub fn number_of_receivers(
 }
 
 /// Verifies that the threshold is at least 1 but not greater than the number of
-/// receivers
+/// receivers.
+///
+/// # Errors
+/// * `InvalidArgumentError` if the threshold is less than 1.
+/// * `InvalidArgumentError` if the threshold is greater than the number of
+///   receivers.
 pub fn verify_threshold(
     threshold: NumberOfNodes,
     number_of_receivers: NumberOfNodes,
@@ -255,9 +349,9 @@ pub fn verify_public_coefficients_match_threshold(
 /// Verifies that receivers are indexed correctly
 ///
 /// # Errors
-/// This returns an error if:
-/// * The receiver indices are not 0..num_receivers-1 inclusive.
-pub fn verify_receiver_indices(
+/// * `MisnumberedReceiverError` if the receiver indices are not
+///   0..num_receivers-1 inclusive.
+fn verify_receiver_indices(
     receiver_keys: &BTreeMap<NodeIndex, FsEncryptionPublicKey>,
     number_of_receivers: NumberOfNodes,
 ) -> Result<(), MisnumberedReceiverError> {
@@ -277,9 +371,9 @@ pub fn verify_receiver_indices(
 /// Verifies that shares are well formed and have the correct indices.
 ///
 /// # Errors
-/// This returns an error if:
-/// * The share indices are not 0..num_receivers-1 inclusive.
-/// * Any shares are malformed.
+/// * `InvalidArgumentError` if
+///   - The share indices are not 0..num_receivers-1 inclusive.
+///   - Any shares are malformed.
 pub fn verify_all_shares_are_present_and_well_formatted(
     dealing: &Dealing,
     number_of_receivers: NumberOfNodes,

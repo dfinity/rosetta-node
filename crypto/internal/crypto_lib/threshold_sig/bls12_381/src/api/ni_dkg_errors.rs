@@ -1,4 +1,4 @@
-//! Error types used by non-interactive DKG
+//! Error types used by non-interactive DKG.
 
 use ic_crypto_internal_types::sign::threshold_sig::ni_dkg::Epoch;
 use ic_crypto_internal_types::sign::threshold_sig::public_key::bls12_381::PublicKeyBytes;
@@ -12,6 +12,7 @@ pub use super::dkg_errors::{
     MalformedPublicKeyError, MalformedSecretKeyError, SizeError,
 };
 
+/// The receiver set isn't properly indexed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MisnumberedReceiverError {
     pub receiver_index: NodeIndex,
@@ -42,6 +43,7 @@ impl From<MisnumberedReceiverError> for CspDkgVerifyDealingError {
     }
 }
 
+/// Creation of a forward-secure keypair during DKG failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CspDkgCreateFsKeyError {
     /// Precondition error: The AlgorithmId does not correspond to a NiDkg
@@ -49,6 +51,7 @@ pub enum CspDkgCreateFsKeyError {
     UnsupportedAlgorithmId(AlgorithmId),
 }
 
+/// Verification of a DKG forward-secure key failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CspDkgVerifyFsKeyError {
     /// Precondition error: The AlgorithmId does not correspond to a NiDkg
@@ -59,6 +62,7 @@ pub enum CspDkgVerifyFsKeyError {
     InvalidPop(()),
 }
 
+/// Updating the forward-secure epoch for DKG failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CspDkgUpdateFsEpochError {
     /// Precondition error: The AlgorithmId does not correspond to a NiDkg
@@ -67,6 +71,7 @@ pub enum CspDkgUpdateFsEpochError {
     FsKeyNotInSecretKeyStoreError(KeyNotFoundError),
 }
 
+/// Encrypting or zero-knowledge proving during DKG failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EncryptAndZKProveError {
     /// One of the receiver public keys is invalid.
@@ -78,6 +83,7 @@ pub enum EncryptAndZKProveError {
     MalformedPublicCoefficients,
 }
 
+/// Forward-secure decryption during DKG failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DecryptError {
     /// The ciphertext was malformed
@@ -100,6 +106,7 @@ pub enum DecryptError {
     SizeError(SizeError),
 }
 
+/// Creation of a DKG dealing failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CspDkgCreateDealingError {
     /// Precondition error: The AlgorithmId does not correspond to a NiDkg
@@ -140,6 +147,7 @@ impl From<EncryptAndZKProveError> for CspDkgCreateDealingError {
     }
 }
 
+/// Creation of a DKG resharing dealing failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CspDkgCreateReshareDealingError {
     /// Precondition error: The AlgorithmId does not correspond to a NiDkg
@@ -252,6 +260,7 @@ impl From<CspDkgCreateReshareDealingError> for CspDkgCreateDealingError {
     }
 }
 
+/// Verification of a DKG dealing failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CspDkgVerifyDealingError {
     /// Precondition error: The AlgorithmId does not correspond to a NiDkg
@@ -283,6 +292,7 @@ pub enum CspDkgVerifyDealingError {
     SizeError(SizeError),
 }
 
+/// Verification of a DKG resharing dealing failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CspDkgVerifyReshareDealingError {
     /// Precondition error: The AlgorithmId does not correspond to a NiDkg
@@ -352,6 +362,7 @@ impl From<CspDkgVerifyDealingError> for CspDkgVerifyReshareDealingError {
     }
 }
 
+/// Creation of a DKG transcript failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CspDkgCreateTranscriptError {
     /// Precondition error: The AlgorithmId does not correspond to a NiDkg
@@ -373,6 +384,7 @@ pub enum CspDkgCreateTranscriptError {
     SizeError(SizeError),
 }
 
+/// Creation of a DKG transcript after resharing failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CspDkgCreateReshareTranscriptError {
     /// Precondition error: The AlgorithmId does not correspond to a NiDkg
@@ -425,6 +437,7 @@ impl From<CspDkgCreateTranscriptError> for CspDkgCreateReshareTranscriptError {
     }
 }
 
+/// Loading a private key from a DKG transcript failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CspDkgLoadPrivateKeyError {
     /// The AlgorithmId does not correspond to a NiDkg variant
@@ -459,6 +472,7 @@ impl CspDkgLoadPrivateKeyError {
 }
 
 pub mod dealing {
+    //! Errors encountered during the NI-DKG dealing phase.
     use super::*;
 
     /// A dealing is invalid

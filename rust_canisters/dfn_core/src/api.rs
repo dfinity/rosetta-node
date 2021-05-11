@@ -695,6 +695,14 @@ pub fn now() -> SystemTime {
     UNIX_EPOCH + duration
 }
 
+pub fn time_nanos() -> u64 {
+    unsafe { ic0::time() }
+}
+
+pub fn stable_memory_size_in_pages() -> u32 {
+    unsafe { ic0::stable_size() }
+}
+
 /// Represents the different token units that are available on canisters.
 pub enum TokenUnit {
     Cycles = 0,

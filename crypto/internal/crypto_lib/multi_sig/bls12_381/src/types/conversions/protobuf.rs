@@ -1,3 +1,4 @@
+//! Conversions to/from protobuf for BLS12-381 multisignature types.
 use crate::types::{PopBytes, PublicKeyBytes};
 use ic_protobuf::registry::crypto::v1::AlgorithmId as AlgorithmIdProto;
 use ic_protobuf::registry::crypto::v1::PublicKey as PublicKeyProto;
@@ -33,6 +34,7 @@ impl TryFrom<&PublicKeyProto> for PublicKeyBytes {
     }
 }
 
+/// Parsing a public key from protobuf failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublicKeyBytesFromProtoError {
     pub key_bytes: Vec<u8>,
@@ -79,6 +81,7 @@ impl TryFrom<&PublicKeyProto> for PopBytes {
     }
 }
 
+/// Parsing a PoP from protobuf failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PopBytesFromProtoError {
     UnknownAlgorithm {

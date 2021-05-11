@@ -67,8 +67,7 @@ pub mod threshold_sign_error;
 ///   make a valid threshold signature.
 /// * `signatory_eligibility` is a boolean indicating, for each signatory,
 ///   whether they should receive a key.  The `i`th signatory should receive a
-///   key if and only if `signatory_eligibilty[i]==true`. signatory, whether
-///   they should receive a key.
+///   key if and only if `signatory_eligibilty[i]==true`.
 /// # Returns
 /// * `PublicCoefficients` can be used by the caller to verify signatures.
 /// * `Vec<Option<SecretKeyBytes>>` contains secret keys.  The vector has the
@@ -239,9 +238,8 @@ pub fn verify_combined_signature(
 }
 
 /// Converts public key bytes into its DER-encoded form.
-/// See:
-/// * https://sdk.dfinity.org/docs/interface-spec/index.html#_certificate
-/// * https://tools.ietf.org/html/rfc5480
+///
+/// See [the Interface Spec](https://sdk.dfinity.org/docs/interface-spec/index.html#_certificate) and [RFC 5480](https://tools.ietf.org/html/rfc5480).
 pub fn public_key_to_der(key: PublicKeyBytes) -> CryptoResult<Vec<u8>> {
     use simple_asn1::to_der;
     let key = key.0;
@@ -268,11 +266,14 @@ fn bls_curve_id() -> ASN1Block {
     ASN1Block::ObjectIdentifier(0, oid!(1, 3, 6, 1, 4, 1, 44668, 5, 3, 2, 1))
 }
 
-/// Parses a public key bytes from its DER-encoded form.
+/// Parses a `PublicKeyBytes` from its DER-encoded form.
 ///
-/// See:
-/// * https://sdk.dfinity.org/docs/interface-spec/index.html#_certificate
-/// * https://tools.ietf.org/html/rfc5480
+/// See [the Interface Spec](https://sdk.dfinity.org/docs/interface-spec/index.html#_certificate)
+/// and [RFC 5480](https://tools.ietf.org/html/rfc5480).
+///
+/// # Errors
+/// * `CryptoError::MalformedPublicKey` if the given `bytes` are not valid
+///   ASN.1, or include unexpected ASN.1 structures..
 pub fn public_key_from_der(bytes: &[u8]) -> CryptoResult<PublicKeyBytes> {
     use simple_asn1::{
         from_der,
@@ -331,9 +332,21 @@ pub fn public_key_from_der(bytes: &[u8]) -> CryptoResult<PublicKeyBytes> {
     }
 }
 
-/// Generates new keys for threshold signatories using `seed` for randomness,
-/// creates a signature on `message`, and returns the signature together with
-/// the combined public key.
+/// Generates new keys for threshold signatories and a signature using the new
+/// keys.
+///
+/// This is only used for testing (cf. CRP-622 and
+/// `ic-crypto-internal-csp::imported_utilities::
+/// combined_threshold_signature_and_public_key`).
+///
+/// # Arguments
+/// * `seed` is a random input.  It must be treated as a secret.
+/// * `message` is the bytes to be signed.
+/// * `group_size` is the number of signatories.
+///
+/// # Panics
+/// * If any one of key generation, signing, signature combination, or
+/// public key combination fails.
 pub fn combined_signature_and_public_key(
     seed: Randomness,
     group_size: usize,

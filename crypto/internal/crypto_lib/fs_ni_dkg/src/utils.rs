@@ -1,3 +1,5 @@
+//! Utility functions for the NI-DKG code
+
 use ic_crypto_internal_bls12381_serde_miracl::{
     miracl_fr_to_bytes, miracl_g1_to_bytes, miracl_g2_to_bytes,
 };
@@ -80,7 +82,14 @@ fn ceil(a: usize, b: usize) -> usize {
     (a - 1) / b + 1
 }
 
-// Hash to Z_p.
+/// Hash a message to a random integer modulo the BLS12-381 order
+///
+/// # Arguments
+/// * `dst` a domain seperator
+/// * `msg` the message to hash
+/// * `spec_p` the order of BLS12-381
+/// # Returns
+/// An integer between 0 and spec_p
 pub fn oracle_p(dst: &[u8], msg: &[u8], spec_p: &BIG) -> BIG {
     // We use `hash_to_field_bls12381` to hash to Z_p, even though it returns an
     // element of Z_MODULUS. However, MODULUS is 381-bit, while p is about 256 bits,
@@ -158,6 +167,16 @@ fn hash_to_field2_bls12381(
     spec_u
 }
 
+/// Hash a message onto the BLS12-381 G2 curve
+///
+/// Uses <https://datatracker.ietf.org/doc/draft-irtf-cfrg-hash-to-curve/>
+///
+/// # Arguments
+/// * `dst` a domain seperator (see the internet draft for guidance on
+///   formatting)
+/// * `mess` is a message that will be hashed onto G2
+/// # Returns
+/// An element of BLS12-381 G2
 pub fn htp2_bls12381(dst: &[u8], mess: &str) -> ECP2 {
     let m = mess.as_bytes();
     let spec_u = hash_to_field2_bls12381(hmac::MC_SHA2, ecp::HASH_TYPE, dst, m, 2);
@@ -168,6 +187,8 @@ pub fn htp2_bls12381(dst: &[u8], mess: &str) -> ECP2 {
     x.affine();
     x
 }
+
+/// A random number generator based on the ChaCha20 stream cipher
 #[allow(non_camel_case_types)]
 pub struct RAND_ChaCha20 {
     chacha20: ChaCha20Rng,

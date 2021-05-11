@@ -1,4 +1,4 @@
-//! Non-interactive DKG types.
+//! Data types for non-interactive distributed key generation (NI-DKG).
 pub use crate::encrypt::forward_secure::{CspFsEncryptionPop, CspFsEncryptionPublicKey};
 use crate::sign::threshold_sig::public_coefficients::CspPublicCoefficients;
 use phantom_newtype::AmountOf;
@@ -93,8 +93,9 @@ impl CspNiDkgTranscript {
     }
 }
 
-/// A unit of DKG time.
+/// A tag for defining the `Epoch` as `AmountOf`.
 pub struct EpochTag;
+/// A unit of DKG time.
 #[allow(unused)]
 pub type Epoch = AmountOf<EpochTag, u32>;
 
@@ -132,6 +133,7 @@ pub mod ni_dkg_groth20_bls12_381 {
     /// Threshold signature key material.
     pub use FsEncryptionCiphertext as EncryptedShares;
 
+    /// The number of repetitions for zero-knowledge proofs.
     pub const NUM_ZK_REPETITIONS: usize = 32;
 
     /// A zero knowledge proof that the encrypted shares can be decrypted by the

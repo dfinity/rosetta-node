@@ -1,4 +1,4 @@
-//! Type conversion for using the Miracl-based FS library
+//! Type conversion for using the Miracl-based FS library.
 use super::super::types::{BTENode, FsEncryptionSecretKey};
 use super::crypto;
 use arrayvec::ArrayVec;

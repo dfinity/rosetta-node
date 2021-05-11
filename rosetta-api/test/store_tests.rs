@@ -26,7 +26,7 @@ async fn in_memory_store_prune_corner_cases_test() {
 async fn on_disk_store_smoke_test() {
     init_test_logger();
     let tmpdir = create_tmp_dir();
-    let store = OnDiskStore::new(tmpdir.path().into()).unwrap();
+    let store = OnDiskStore::new(tmpdir.path().into(), true).unwrap();
     store_smoke_test(store);
 }
 
@@ -34,7 +34,7 @@ async fn on_disk_store_smoke_test() {
 async fn on_disk_store_prune_test() {
     init_test_logger();
     let tmpdir = create_tmp_dir();
-    let store = OnDiskStore::new(tmpdir.path().into()).unwrap();
+    let store = OnDiskStore::new(tmpdir.path().into(), true).unwrap();
     store_prune_test(store);
 }
 
@@ -42,7 +42,7 @@ async fn on_disk_store_prune_test() {
 async fn on_disk_store_prune_corner_cases_test() {
     init_test_logger();
     let tmpdir = create_tmp_dir();
-    let store = OnDiskStore::new(tmpdir.path().into()).unwrap();
+    let store = OnDiskStore::new(tmpdir.path().into(), true).unwrap();
     store_prune_corner_cases_test(store);
 }
 
@@ -50,7 +50,7 @@ async fn on_disk_store_prune_corner_cases_test() {
 async fn on_disk_store_prune_first_balance_test() {
     init_test_logger();
     let tmpdir = create_tmp_dir();
-    let store = OnDiskStore::new(tmpdir.path().into()).unwrap();
+    let store = OnDiskStore::new(tmpdir.path().into(), true).unwrap();
     store_prune_first_balance_test(store);
 }
 
@@ -58,7 +58,7 @@ async fn on_disk_store_prune_first_balance_test() {
 async fn on_disk_store_prune_and_load_test() {
     init_test_logger();
     let tmpdir = create_tmp_dir();
-    let mut store = OnDiskStore::new(tmpdir.path().into()).unwrap();
+    let mut store = OnDiskStore::new(tmpdir.path().into(), true).unwrap();
 
     let scribe = Scribe::new_with_sample_data(10, 100);
 
@@ -76,7 +76,7 @@ async fn on_disk_store_prune_and_load_test() {
 
     drop(store);
     // Now reload from disk
-    let mut store = OnDiskStore::new(tmpdir.path().into()).unwrap();
+    let mut store = OnDiskStore::new(tmpdir.path().into(), true).unwrap();
     verify_pruned(&scribe, &mut store, 20);
     verify_balance_snapshot(&scribe, &mut store, 20);
 
@@ -86,7 +86,7 @@ async fn on_disk_store_prune_and_load_test() {
 
     drop(store);
     // Reload once again
-    let mut store = OnDiskStore::new(tmpdir.path().into()).unwrap();
+    let mut store = OnDiskStore::new(tmpdir.path().into(), true).unwrap();
     verify_pruned(&scribe, &mut store, 30);
     verify_balance_snapshot(&scribe, &mut store, 30);
 }

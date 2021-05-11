@@ -1,4 +1,4 @@
-//! Convert DKG error types to and from other error types
+//! Convert DKG error types to and from other error types.
 use super::*;
 use ic_types::crypto::threshold_sig::ni_dkg::errors::create_transcript_error::DkgCreateTranscriptError;
 
