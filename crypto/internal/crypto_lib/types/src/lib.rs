@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used)]
 
+//! Types that are used internally in the crypto component.
+//!
 //! The structure of internal types is as follows:
 //!
 //! The type for the external API (e.g. `EncryptionPublicKey`) is defined in the
@@ -29,4 +31,5 @@ pub mod scope;
 pub mod serde_macro;
 pub mod sign;
 
+/// The index of a node.
 pub type NodeIndex = u32;

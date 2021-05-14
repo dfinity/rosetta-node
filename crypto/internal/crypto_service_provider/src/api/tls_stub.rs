@@ -8,6 +8,7 @@ use tokio::net::TcpStream;
 
 pub mod tls_errors;
 
+/// A trait that exposes TLS server-side handshaking
 #[async_trait]
 pub trait CspTlsServerHandshake {
     /// Transforms a TCP stream into a TLS stream by performing a TLS server
@@ -61,6 +62,7 @@ pub trait CspTlsServerHandshake {
     ) -> Result<(TlsStream, Option<CspCertificateChain>), CspTlsServerHandshakeError>;
 }
 
+/// A trait that exposes TLS client-side handshaking
 #[async_trait]
 pub trait CspTlsClientHandshake {
     /// Transforms a TCP stream into a TLS stream by performing a TLS

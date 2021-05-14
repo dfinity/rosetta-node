@@ -1,12 +1,15 @@
+//! Data types for DKG encryption public keys.
 use serde::{Deserialize, Serialize};
 use std::hash::Hash;
 use strum_macros::IntoStaticStr;
 
+/// An encryption public key.
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialOrd, Ord, PartialEq, Serialize, Deserialize)]
 pub struct CspEncryptionPublicKey {
     pub internal: InternalCspEncryptionPublicKey,
 }
 
+/// An internal encryption public key.
 #[derive(
     Copy, Clone, Debug, Eq, IntoStaticStr, Hash, PartialOrd, Ord, PartialEq, Serialize, Deserialize,
 )]
@@ -41,11 +44,13 @@ impl From<&CspEncryptionPublicKey> for InternalCspEncryptionPublicKey {
 }
 
 pub mod secp256k1 {
+    //! Secp256k1 encryption public keys.
     use super::*;
     use std::cmp::Ordering;
     use std::fmt;
     use std::hash::Hasher;
 
+    /// The public key as byte array.
     #[derive(Copy, Clone)]
     pub struct EphemeralPublicKeyBytes(pub [u8; EphemeralPublicKeyBytes::SIZE]);
     crate::derive_serde!(EphemeralPublicKeyBytes, EphemeralPublicKeyBytes::SIZE);

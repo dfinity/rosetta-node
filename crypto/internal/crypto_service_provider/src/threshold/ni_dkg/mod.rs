@@ -427,11 +427,12 @@ impl<R: Rng + CryptoRng, S: SecretKeyStore> NiDkgCspClient for Csp<R, S> {
 }
 
 pub mod static_api {
-    //! Some methods are non-static purley due to the way the mock framework is
+    //! Some methods are non-static purely due to the way the mock framework is
     //! used by callers.  The following are the true, static versions of those
     //! API methods.
     use super::*;
 
+    /// Verifies that a forward secure public key and PoP are valid.
     pub fn verify_forward_secure_key(
         algorithm_id: AlgorithmId,
         public_key: CspFsEncryptionPublicKey,
@@ -642,6 +643,7 @@ pub mod specialise {
     use super::*;
     use ic_crypto_internal_types::sign::threshold_sig::ni_dkg::ni_dkg_groth20_bls12_381 as g20_internal_types;
 
+    /// An error during specialisation
     #[derive(Debug)]
     pub struct SpecialisationError {
         unexpected_type_name: &'static str,

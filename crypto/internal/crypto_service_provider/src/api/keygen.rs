@@ -52,6 +52,8 @@ pub trait CspKeyGenerator {
     fn gen_tls_key_pair(&mut self, node_id: NodeId, not_after: &str) -> X509PublicKeyCert;
 }
 
+/// A trait that allows checking the secret key store for the availability of a
+/// key.
 pub trait CspSecretKeyStoreChecker {
     /// Checks whether the store contains a key with the given `id`.
     fn sks_contains(&self, key_id: &KeyId) -> bool;
@@ -60,6 +62,8 @@ pub trait CspSecretKeyStoreChecker {
     fn sks_contains_tls_key(&self, cert: &X509PublicKeyCert) -> bool;
 }
 
+/// A trait that exposes the information about node public keys and key
+/// identifiers.
 pub trait NodePublicKeyData {
     /// Returns the public keys of this node.
     fn node_public_keys(&self) -> NodePublicKeys;

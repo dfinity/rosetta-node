@@ -12,8 +12,10 @@ type TimeStamp = record {
 };
 
 type ArchiveOptions = record {
-    node_max_memory_size_bytes: opt nat32;
-    max_message_size_bytes: opt nat32;
+    trigger_threshold : nat64;
+    num_blocks_to_archive : nat64;
+    node_max_memory_size_bytes: opt nat64;
+    max_message_size_bytes: opt nat64;
     controller_id: principal;
 };
 
@@ -68,10 +70,10 @@ type AccountBalanceArgs = record {
 type LedgerCanisterInitPayload = record {
     minting_account: AccountIdentifier;
     initial_values: vec record {AccountIdentifier; ICPTs};
-    max_message_size_bytes: opt nat32;
+    max_message_size_bytes: opt nat64;
     transaction_window: opt Duration;
     archive_options: opt ArchiveOptions;
-    send_whitelist: vec record {principal};
+    send_whitelist: vec principal;
 }
 
 service: (LedgerCanisterInitPayload) -> {

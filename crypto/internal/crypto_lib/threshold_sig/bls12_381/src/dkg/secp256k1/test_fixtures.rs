@@ -1,3 +1,4 @@
+//! (deprecated) Test fixtures for interactive distributed key generation.
 use crate::api::dkg_errors::{DkgVerifyReshareDealingError, DkgVerifyResponseError};
 use crate::api::{combine_signatures, keygen, sign_message, verify_combined_signature};
 use crate::dkg::secp256k1 as dkg_lib;

@@ -1,8 +1,11 @@
+//! TLS error types
+
 use ic_crypto_internal_tls::{CreateTlsAcceptorError, CreateTlsConnectorError};
 use ic_crypto_tls_interfaces::{
     MalformedPeerCertificateError, TlsClientHandshakeError, TlsServerHandshakeError,
 };
 
+/// Errors occurring during a TLS handshake
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CspTlsClientHandshakeError {
     MalformedSelfCertificate {
@@ -23,6 +26,7 @@ pub enum CspTlsClientHandshakeError {
     WrongSecretKeyType,
 }
 
+/// The TLS peer certificate was malformed
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CspMalformedPeerCertificateError {
     pub internal_error: String,
@@ -81,6 +85,7 @@ impl From<CreateTlsConnectorError> for CspTlsClientHandshakeError {
     }
 }
 
+/// TLS handshake failed (server side)
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CspTlsServerHandshakeError {
     MalformedSelfCertificate {

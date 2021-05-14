@@ -1,6 +1,6 @@
 [package]
 name = "cycles-minting-canister"
-version = "0.0.1"
+version = "0.8.0"
 authors = ["The Internet Computer Project Developers"]
 description = "Canister for cycles administration"
 edition = "2018"

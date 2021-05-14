@@ -1,4 +1,4 @@
-//! Groth20 forward secure encryption API
+//! Groth20 forward secure encryption API.
 //!
 //! This file translates to and from an external library that does the
 //! mathematics.
@@ -68,6 +68,12 @@ lazy_static! {
 }
 
 /// Generates a forward secure key pair.
+///
+/// # Arguments
+/// * `seed` - randomness used to seed the PRNG for generating the keys. It must
+///   be treated as a secret.
+/// * `associated_data` - public information for the Proof of Possession of the
+///   key.
 pub fn create_forward_secure_key_pair(
     seed: Randomness,
     associated_data: &[u8],
@@ -86,6 +92,11 @@ pub fn create_forward_secure_key_pair(
 
 /// Verifies that a public key is a point on the curve and that the proof of
 /// possession holds.
+///
+/// # Errors
+/// * `Err(())` if
+///   - Any of the components of `public_key` is not a correct group element.
+///   - The proof of possession doesn't verify.
 pub fn verify_forward_secure_key(
     public_key: &FsEncryptionPublicKey,
     pop: &FsEncryptionPop,
@@ -103,6 +114,14 @@ pub fn verify_forward_secure_key(
 ///
 /// Note: If the lowest supported epoch of the secret key is greater than or
 /// equal to the threshold cutoff epoch, the secret key is unchanged.
+///
+/// # Arguments
+/// * `secret_key` - The forward-secure encryption key to be updated.
+/// * `epoch` - The earliest epoch at which to retain keys.
+/// * `seed` - Randomness used in updating the secret key to the given `epoch`.
+///
+/// # Returns
+/// A new `FsEncryptionSecretKey`, with keys only at or after the given epoch.
 pub fn update_forward_secure_epoch(
     secret_key: &FsEncryptionSecretKey,
     epoch: Epoch,
@@ -122,6 +141,10 @@ pub fn update_forward_secure_epoch(
 /// # Errors
 /// This should never return an error if the protocol is followed.  Every error
 /// should be prevented by the caller validating the arguments beforehand.
+///
+/// # Panics
+/// * If the `enc_chunks` function fails. Though, this truly should never happen
+///   (cf. CRP-815).
 pub fn encrypt_and_prove(
     seed: Randomness,
     key_message_pairs: &[(FsEncryptionPublicKey, FsEncryptionPlaintext)],
@@ -361,6 +384,25 @@ fn prove_sharing(
     )
 }
 
+/// Verifies zero-knowledge proofs associated to forward-secure encryptions.
+///
+/// # Errors
+/// * `CspDkgVerifyDealingError::MalformedFsPublicKeyError` if any of
+///   `receiver_fs_public_keys` is malformed or invalid.
+/// * `CspDkgVerifyDealingError::MalformedDealingError` if `ciphertexts` is
+///   malformed or invalid.
+/// * `CspDkgVerifyDealingError::InvalidDealingError` if the integrity of
+///   `ciphertexts` doesn't verify.
+/// * `CspDkgVerifyDealingError::MalformedDealingError` if `chunking_proof` is
+///   malformed or invalid.
+/// * `CspDkgVerifyDealingError::InvalidDealingError` if `chunking_proof`
+///   doesn't verify.
+/// * `CspDkgVerifyDealingError::MalformedDealingError` if `public_coefficients`
+///   is malformed or invalid.
+/// * `CspDkgVerifyDealingError::MalformedDealingError` if `sharing_proof` is
+///   malformed or invalid.
+/// * `CspDkgVerifyDealingError::InvalidDealingError` if `sharing_proof` doesn't
+///   verify.
 pub fn verify_zk_proofs(
     epoch: Epoch,
     receiver_fs_public_keys: &BTreeMap<NodeIndex, FsEncryptionPublicKey>,

@@ -1,7 +1,7 @@
+//! Conversion between MIRACL representations of BLS12-381 values and the
+//! standard representation.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used)]
-
-//! Serialisation and deserialisation of the MIRACL BLS12-381 types.
 
 #[cfg(test)]
 mod tests;
@@ -14,12 +14,17 @@ use miracl_core::bls12381::{
 };
 use std::cmp::Ordering;
 
-/// Serialises a miracl Fr to a standard, library-independent form.
+/// Serializes a MIRACL `Fr` (i.e. `BIG`) to a standard, library-independent
+/// form.
 ///
-/// Note: Miracl represents Fr as a BIG, which is a larger data type.
+/// Note: MIRACL represents `Fr` as a `BIG`, which is a larger data type than
+/// `FrBytes`.
 ///
 /// # References
-/// * The G1Bytes documentation includes a description of the format.
+/// * The `G1Bytes` documentation includes a description of the format.
+///
+/// # Panics
+/// * If the leading bytes of `big` are *not* `0`
 pub fn miracl_fr_to_bytes(big: &BIG) -> FrBytes {
     let mut big = BIG::new_big(big);
     big.rmod(&BIG::new_ints(&CURVE_ORDER));
@@ -36,6 +41,11 @@ pub fn miracl_fr_to_bytes(big: &BIG) -> FrBytes {
     FrBytes(buffer)
 }
 
+/// Parses an `Fr` in a standard, library-independent form to a MIRACL `BIG`.
+///
+/// # Errors
+/// * `Err(())` if `bytes` encodes a `BIG` that's greater than the BLS12_381
+///   curve order.
 pub fn miracl_fr_from_bytes(bytes: &[u8; FrBytes::SIZE]) -> Result<BIG, ()> {
     let mut buffer = [0u8; BIG_SIZE];
     buffer[BIG_SIZE - FrBytes::SIZE..].copy_from_slice(bytes);
@@ -47,11 +57,12 @@ pub fn miracl_fr_from_bytes(bytes: &[u8; FrBytes::SIZE]) -> Result<BIG, ()> {
     }
 }
 
-/// Serialises a miracl G1 == ECP to a standard, library-independent form.
+/// Serializes a MIRACL `G1` (i.e. `ECP`) to a standard, library-independent
+/// form.
 ///
 /// # References
-/// * The G1Bytes documentation includes a description of the format.
-/// * Miracl: https://github.com/miracl/core/blob/master/rust/ecp.rs - see
+/// * The `G1Bytes` documentation includes a description of the format.
+/// * [MIRACL](https://github.com/miracl/core/blob/master/rust/ecp.rs) - see
 ///   `tobytes(..)`
 pub fn miracl_g1_to_bytes(ecp: &ECP) -> G1Bytes {
     let mut buffer = [0u8; G1Bytes::SIZE];
@@ -73,8 +84,19 @@ pub fn miracl_g1_to_bytes(ecp: &ECP) -> G1Bytes {
     G1Bytes(buffer)
 }
 
-/// Parses a miracl G1 == ECP from a standard, library-independent form.
-pub fn miracl_g1_from_bytes_unchecked(bytes: &[u8; G1Bytes::SIZE]) -> Result<ECP, ()> {
+/// Parses a `G1` in a standard, library-independent form to a MIRACL `ECP`.
+///
+/// Note: This does NOT verify that the parsed value is actually in `G1`.
+///
+/// Errors:
+/// * `Err(())` if
+///   - The point is encoded in UNCOMPRESSED form
+///   - The point's x-coordinate is non-canonical (i.e. greater than the field
+///     modulus)
+///   - The point's x-coordinate is infinity, but the INFINITY flag is *not* set
+///   - The INFINITY flag is set, but the encoded x-coordinate is *not*
+///     all-zeroes
+fn miracl_g1_from_bytes_unchecked(bytes: &[u8; G1Bytes::SIZE]) -> Result<ECP, ()> {
     if (bytes[G1Bytes::FLAG_BYTE_OFFSET] & G1Bytes::COMPRESSED_FLAG) == 0 {
         return Err(());
     }
@@ -116,9 +138,19 @@ pub fn miracl_g1_from_bytes_unchecked(bytes: &[u8; G1Bytes::SIZE]) -> Result<ECP
     }
 }
 
-/// Parses a miracl G1 == ECP from a standard, library-independent form.
+/// Parses a `G1` in a standard, library-independent form to a MIRACL `ECP`.
 ///
 /// Also verifies that the point is in the correct prime order subgroup.
+///
+/// # Errors
+/// * `Err(())` if
+///   - The point is *not* in the correct prime order subgroup.
+///   - The point is encoded in UNCOMPRESSED form
+///   - The point's x-coordinate is non-canonical (i.e. greater than the field
+///     modulus)
+///   - The point's x-coordinate is infinity, but the INFINITY flag is *not* set
+///   - The INFINITY flag is set, but the encoded x-coordinate is *not*
+///     all-zeroes
 pub fn miracl_g1_from_bytes(bytes: &[u8; G1Bytes::SIZE]) -> Result<ECP, ()> {
     let ans = miracl_g1_from_bytes_unchecked(bytes)?;
     {
@@ -131,11 +163,12 @@ pub fn miracl_g1_from_bytes(bytes: &[u8; G1Bytes::SIZE]) -> Result<ECP, ()> {
     Ok(ans)
 }
 
-/// Serialises a miracl G2 == ECP2 to a standard, library-independent form.
+/// Serializes a MIRACL `G2` (i.e. `ECP2`) to a standard, library-independent
+/// form.
 ///
 /// # References
-/// * The G2Bytes documentation includes a description of the format.
-/// * Miracl: https://github.com/miracl/core/blob/master/rust/ecp2.rs - see
+/// * The `G2Bytes` documentation includes a description of the format.
+/// * [MIRACL](https://github.com/miracl/core/blob/master/rust/ecp2.rs) - see
 ///   `tobytes(..)`
 pub fn miracl_g2_to_bytes(ecp2: &ECP2) -> G2Bytes {
     let mut buffer = [0u8; G2Bytes::SIZE];
@@ -163,10 +196,19 @@ pub fn miracl_g2_to_bytes(ecp2: &ECP2) -> G2Bytes {
     G2Bytes(buffer)
 }
 
-/// Parses a miracl G2 == ECP2 from a standard, library-independent form.
+/// Parses a `G2` in a standard, library-independent form to a MIRACL `ECP2`.
 ///
-/// Note: This does NOT verify that the parsed value is actually in G2.
-pub fn miracl_g2_from_bytes_unchecked(bytes: &[u8; G2Bytes::SIZE]) -> Result<ECP2, ()> {
+/// Note: This does NOT verify that the parsed value is actually in `G2`.
+///
+/// Errors:
+/// * `Err(())` if
+///   - The point is encoded in UNCOMPRESSED form
+///   - Either sub-component of the point's x-coordinate is non-canonical (i.e.
+///     greater than the field modulus)
+///   - The point's x-coordinate is infinity, but the INFINITY flag is *not* set
+///   - The INFINITY flag is set, but the encoded x-coordinate is *not*
+///     all-zeroes
+fn miracl_g2_from_bytes_unchecked(bytes: &[u8; G2Bytes::SIZE]) -> Result<ECP2, ()> {
     if (bytes[G2Bytes::FLAG_BYTE_OFFSET] & G2Bytes::COMPRESSED_FLAG) == 0 {
         return Err(());
     }
@@ -216,9 +258,19 @@ pub fn miracl_g2_from_bytes_unchecked(bytes: &[u8; G2Bytes::SIZE]) -> Result<ECP
     }
 }
 
-/// Parses a miracl G2 == ECP2 from a standard, library-independent form.
+/// Parses a `G2` in a standard, library-independent form to a MIRACL `ECP2`.
 ///
 /// Also verifies that the point is in the correct prime order subgroup.
+///
+/// Errors:
+/// * `Err(())` if
+///   - The point is *not* in the correct prime order subgroup.
+///   - The point is encoded in UNCOMPRESSED form
+///   - Either sub-component of the point's x-coordinate is non-canonical (i.e.
+///     greater than the field modulus)
+///   - The point's x-coordinate is infinity, but the INFINITY flag is *not* set
+///   - The INFINITY flag is set, but the encoded x-coordinate is *not*
+///     all-zeroes
 pub fn miracl_g2_from_bytes(bytes: &[u8; G2Bytes::SIZE]) -> Result<ECP2, ()> {
     let ans = miracl_g2_from_bytes_unchecked(bytes)?;
     {
@@ -231,7 +283,7 @@ pub fn miracl_g2_from_bytes(bytes: &[u8; G2Bytes::SIZE]) -> Result<ECP2, ()> {
     Ok(ans)
 }
 
-/// Converts Miracl's comparison return value to the standard Rust cmp return
+/// Converts MIRACL's comparison return value to the standard Rust cmp return
 /// value.
 fn isize_to_ordering(ordering: isize) -> Ordering {
     match ordering {

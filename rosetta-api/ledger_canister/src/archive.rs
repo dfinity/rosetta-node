@@ -84,8 +84,8 @@ impl Archive {
             nodes_block_ranges: vec![],
             node_max_memory_size_bytes: options
                 .node_max_memory_size_bytes
-                .unwrap_or(2 * (1024 ^ 3)),
-            max_message_size_bytes: options.max_message_size_bytes.unwrap_or(2 * (1024 ^ 2)),
+                .unwrap_or(1024 * 1024 * 1024),
+            max_message_size_bytes: options.max_message_size_bytes.unwrap_or(2 * 1024 * 1024),
             num_archived_blocks: 0,
             trigger_threshold: options.trigger_threshold,
             num_blocks_to_archive: options.num_blocks_to_archive,
@@ -221,9 +221,6 @@ impl Archive {
                 node_block_height_offset,
                 Some(self.node_max_memory_size_bytes),
             )),
-            // Set the memory allocation to how much data we want to store in the
-            // node + 32 MiB of "scratch" space
-            Some(self.node_max_memory_size_bytes + 32 * 1024 * 1024),
         )
         .await;
 

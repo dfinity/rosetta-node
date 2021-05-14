@@ -1,3 +1,4 @@
+//! Utilities for testing BLS12-381 threshold signing and key generation.
 use crate::ni_dkg::groth20_bls12_381::types::BTENode;
 use ic_types::{NumberOfNodes, Randomness};
 use rand::seq::IteratorRandom;

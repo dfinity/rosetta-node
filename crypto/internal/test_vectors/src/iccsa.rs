@@ -1,3 +1,4 @@
+//! Test vectors for ICCSA signatures.
 #![allow(clippy::unwrap_used)]
 use strum_macros::EnumIter;
 

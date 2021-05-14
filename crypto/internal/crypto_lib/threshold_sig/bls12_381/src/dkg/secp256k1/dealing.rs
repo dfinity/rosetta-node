@@ -1,4 +1,4 @@
-//! CSP Threshold Distributed Key Generation
+//! (deprecated) Dealing phase of Interactive Distributed Key Generation.
 
 use super::dh;
 use crate::api::dkg_errors::{

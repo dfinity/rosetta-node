@@ -1,4 +1,4 @@
-//! Types for arbitrary  NiDKG methods.
+//! Types used by all implementations of NiDKG methods.
 
 #![allow(clippy::unit_arg)] // Arbitrary is a unit arg in: derive(proptest_derive::Arbitrary)
 
@@ -14,7 +14,7 @@ use zeroize::Zeroize;
 #[cfg(test)]
 use proptest_derive::Arbitrary;
 
-/// Forward secure encryption secret key
+/// Forward secure encryption secret key.
 #[derive(Clone, Eq, PartialEq, IntoStaticStr, Serialize, Deserialize, Zeroize)]
 #[allow(non_camel_case_types)]
 pub enum CspFsEncryptionSecretKey {
@@ -34,7 +34,8 @@ impl fmt::Debug for CspFsEncryptionSecretKey {
     }
 }
 
-/// Forward secure encryption secret key
+/// Forward secure encryption keys (secret and public keys, and
+/// proof-of-possession)
 #[derive(Clone, Debug, Eq, PartialEq, IntoStaticStr, Serialize, Deserialize, Zeroize)]
 #[cfg_attr(test, derive(Arbitrary))]
 #[allow(non_camel_case_types)]

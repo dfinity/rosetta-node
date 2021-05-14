@@ -1,13 +1,13 @@
-//! Public counterpart to a polynomial
+//! Public counterpart to a polynomial.
 
 use crate::types::PublicKey;
 
-pub mod advanced_ops;
+mod advanced_ops;
 #[cfg(test)]
 mod arbitrary;
 mod constructors;
 pub mod conversions;
-pub mod ops;
+mod ops;
 #[cfg(test)]
 pub mod tests;
 

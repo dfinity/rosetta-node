@@ -2,6 +2,7 @@
   "ledger": {
     "exchanges": "5o6tz-saaaa-aaaaa-qaacq-cai",
     "ic": "5h5yf-eiaaa-aaaaa-qaada-cai",
-    "local": "75hes-oqbaa-aaaaa-aaaaa-aaaaa-aaaaa-aaaaa-q"
+    "local": "75hes-oqbaa-aaaaa-aaaaa-aaaaa-aaaaa-aaaaa-q",
+    "mainnet-rosetta": "ryjl3-tyaaa-aaaaa-aaaba-cai"
   }
 }

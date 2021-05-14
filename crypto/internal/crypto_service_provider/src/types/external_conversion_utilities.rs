@@ -151,6 +151,7 @@ impl<T> TryFrom<CspSignature> for CombinedThresholdSigOf<T> {
 }
 
 impl SigConverter {
+    /// Convert from a BasicSigOf to a CspSignature
     pub fn try_from_basic<T>(&self, signature: &BasicSigOf<T>) -> CryptoResult<CspSignature> {
         match self.target_algorithm {
             AlgorithmId::Ed25519 => {

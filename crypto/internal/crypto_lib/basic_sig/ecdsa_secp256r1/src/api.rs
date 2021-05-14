@@ -14,15 +14,22 @@ mod tests;
 // cf. https://tools.ietf.org/html/rfc5480
 const CURVE_NAME: Nid = Nid::X9_62_PRIME256V1;
 
-// NOTE: both `new_keypair()` and `sign()` are marked as `#[cfg(test)]`
-// because the focus is on the signature verification (rather than creation),
-// which is the only ECDSA functionality needed currently.
+// NOTE: both `new_keypair()` and `sign()` are exposed as public but
+// are not used in production. They are exposed due to requirements on
+// how the tests are structured. This should be resolved.
+//
 // For the same reason the majority of tests is using signature verification
 // test vectors (addition of test vectors for signature creation is more
 // involved as Rust OpenSSL API doesn't seem to provide a way for
 // "de-randomization" of signing operation).
 
-//#[cfg(test)]
+/// Create a new secp256r1 keypair. This function should only be used for
+/// testing.
+///
+/// # Errors
+/// * `AlgorithmNotSupported` if an error occurs while generating the key
+/// # Returns
+/// A tuple of the secret key bytes and public key bytes
 pub fn new_keypair() -> CryptoResult<(types::SecretKeyBytes, types::PublicKeyBytes)> {
     let group = EcGroup::from_curve_name(CURVE_NAME)
         .map_err(|e| wrap_openssl_err(e, "unable to create EC group"))?;
@@ -49,6 +56,15 @@ pub fn new_keypair() -> CryptoResult<(types::SecretKeyBytes, types::PublicKeyByt
     Ok((sk, pk))
 }
 
+/// Parse a secp256r1 public key from the DER enncoding
+///
+/// # Arguments
+/// * `pk_der` is the binary DER encoding of the public key
+/// # Errors
+/// * `AlgorithmNotSupported` if an error occured while invoking OpenSSL
+/// * `MalformedPublicKey` if the public key could not be parsed
+/// # Returns
+/// The decoded public key
 pub fn public_key_from_der(pk_der: &[u8]) -> CryptoResult<types::PublicKeyBytes> {
     let pkey = PKey::public_key_from_der(pk_der).map_err(|e| CryptoError::MalformedPublicKey {
         algorithm: AlgorithmId::EcdsaP256,
@@ -79,6 +95,13 @@ pub fn public_key_from_der(pk_der: &[u8]) -> CryptoResult<types::PublicKeyBytes>
     Ok(types::PublicKeyBytes::from(pk_bytes))
 }
 
+/// Decode an ECDSA signature from the DER encoding
+///
+/// # Arguments
+/// `sig_der` the DER encoded signature, as a pair of integers (r,s)
+/// # Errors
+/// * `MalformedSignature` if the data could not be decoded as a DER ECDSA
+///   signature
 pub fn signature_from_der(sig_der: &[u8]) -> CryptoResult<types::SignatureBytes> {
     let ecdsa_sig = EcdsaSig::from_der(sig_der).map_err(|e| CryptoError::MalformedSignature {
         algorithm: AlgorithmId::EcdsaP256,
@@ -109,7 +132,7 @@ mod cose {
         pub key_bytes: Vec<u8>,
     }
 
-    // see https://tools.ietf.org/html/rfc8152
+    // see https://tools.ietf.org/html/rfc8152 section 8.1
     pub const COSE_PARAM_KTY: serde_cbor::Value = serde_cbor::Value::Integer(1);
     pub const COSE_PARAM_ALG: serde_cbor::Value = serde_cbor::Value::Integer(3);
     pub const COSE_PARAM_KEY_OPS: serde_cbor::Value = serde_cbor::Value::Integer(4);
@@ -246,6 +269,16 @@ mod cose {
     }
 }
 
+/// Parse a CBOR-encoded ECDSA P-256 key in the COSE (RFC 8152) format
+///
+/// # Arguments
+/// * `pk_cose` the CBOR-encoded COSE key
+/// # Errors
+/// * `MalformedPublicKey` if the data could not be CBOR-decoded
+/// * `AlgorithmNotSupported` if the key was decoded but found to be something
+///   other than an ECDSA P-256 key
+/// # Returns
+/// The decoded key
 pub fn public_key_from_cose(pk_cose: &[u8]) -> CryptoResult<types::PublicKeyBytes> {
     let parsed_value: serde_cbor::value::Value =
         serde_cbor::from_slice(pk_cose).map_err(|e| CryptoError::MalformedPublicKey {
@@ -282,7 +315,17 @@ fn ecdsa_sig_to_bytes(ecdsa_sig: EcdsaSig) -> CryptoResult<[u8; types::Signature
     Ok(bytes)
 }
 
-//#[cfg(test)]
+/// Sign a message using a secp256r1 private key
+///
+/// # Arguments
+/// * `msg` is the message to be signed
+/// * `sk` is the private key
+/// # Errors
+/// * `InvalidArgument` if signature generation failed
+/// * `MalformedSecretKey` if the private key seems to be invalid
+/// * `MalformedSignature` if OpenSSL generates an invalid signature
+/// # Returns
+/// The generated signature
 pub fn sign(msg: &[u8], sk: &types::SecretKeyBytes) -> CryptoResult<types::SignatureBytes> {
     let signing_key =
         EcKey::private_key_from_der(&sk.0).map_err(|_| CryptoError::MalformedSecretKey {
@@ -327,6 +370,19 @@ fn r_s_from_sig_bytes(sig_bytes: &types::SignatureBytes) -> CryptoResult<(BigNum
     Ok((r, s))
 }
 
+/// Verify a signature using a secp256r1 public key
+///
+/// # Arguments
+/// * `sig` is the signature to be verified
+/// * `msg` is the message
+/// * `pk` is the public key
+/// # Errors
+/// * `MalformedSignature` if the signature could not be parsed
+/// * `AlgorithmNotSupported` if an error occurred while invoking OpenSSL
+/// * `MalformedPublicKey` if the public key could not be parsed
+/// * `SignatureVerification` if the signature could not be verified
+/// # Returns
+/// `Ok(())` if the signature validated, or an error otherwise
 pub fn verify(
     sig: &types::SignatureBytes,
     msg: &[u8],

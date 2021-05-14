@@ -1,12 +1,15 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used)]
+//#![deny(missing_docs)]
+
+//! Interface for the cryptographic service provider
 
 pub mod api;
 pub mod crypto_lib;
 pub mod imported_test_utils;
 pub mod imported_utilities;
 pub mod public_key_store;
-pub mod remaining_conversions;
+mod remaining_conversions;
 pub mod secret_key_store;
 pub mod threshold;
 pub mod tls_stub;

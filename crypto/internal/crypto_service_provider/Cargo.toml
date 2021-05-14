@@ -1,7 +1,7 @@
 [package]
 name = "ic-crypto-internal-csp"
 description = "Secret key store and services"
-version = "0.1.0"
+version = "0.8.0"
 authors = ["The Internet Computer Project Developers"]
 edition = "2018"
 

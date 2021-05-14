@@ -1,4 +1,4 @@
-// Various data for testing.
+//! Various data for testing.
 
 // Ed25519 test vector "TEST 1" from https://tools.ietf.org/html/rfc8032#section-7.1
 pub const ED25519_SK_1_RFC8032_HEX: &str =

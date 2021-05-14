@@ -1,3 +1,5 @@
+//! X.509 certificate chain utilities
+
 use super::*;
 use openssl::stack::StackRef;
 use std::fmt::{self, Debug, Formatter};
@@ -66,6 +68,7 @@ impl CspCertificateChain {
     }
 }
 
+/// An error indicating that a certificate chain could not be created
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CspCertificateChainCreationError {
     ChainEmpty,

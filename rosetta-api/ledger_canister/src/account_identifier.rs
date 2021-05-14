@@ -25,12 +25,18 @@ pub struct AccountIdentifier {
     pub hash: [u8; 28],
 }
 
-impl From<proto::AccountIdentifier> for AccountIdentifier {
-    fn from(id: proto::AccountIdentifier) -> Self {
-        assert_eq!(id.hash.len(), 28);
-        AccountIdentifier {
-            hash: id.hash[..28].try_into().unwrap(),
-        }
+impl TryFrom<&proto::AccountIdentifier> for AccountIdentifier {
+    type Error = String;
+    fn try_from(id: &proto::AccountIdentifier) -> Result<Self, String> {
+        Ok(AccountIdentifier {
+            hash: id.hash.as_slice().try_into().map_err(|_| {
+                format!(
+                    "Received an invalid AccountIdentifier proto containing a \
+                    field 'hash' of length {} bytes instead of the expected 28.",
+                    id.hash.len()
+                )
+            })?,
+        })
     }
 }
 
@@ -284,4 +290,25 @@ fn check_encoding() {
     );
 
     assert_eq!(de2, ai, "And the value itself hasn't changed");
+}
+
+#[test]
+fn check_try_from() {
+    let too_short = proto::AccountIdentifier {
+        hash: b"123456789_123456789_1234567".to_vec(),
+    };
+    let too_short_msg = AccountIdentifier::try_from(&too_short).unwrap_err();
+    assert!(too_short_msg.to_lowercase().contains("invalid"));
+
+    let too_long = proto::AccountIdentifier {
+        hash: b"123456789_123456789_1234567_A".to_vec(),
+    };
+    let too_long_msg = AccountIdentifier::try_from(&too_long).unwrap_err();
+    assert!(too_long_msg.to_lowercase().contains("invalid"));
+
+    let just_right = proto::AccountIdentifier {
+        hash: b"123456789_123456789_12345678".to_vec(),
+    };
+    let acc_id = AccountIdentifier::try_from(&just_right).unwrap();
+    assert_eq!(just_right, acc_id.into());
 }

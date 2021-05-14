@@ -1,3 +1,5 @@
+//! Type conversion utilities
+
 use super::{
     CspDealing, CspDkgTranscript, CspPop, CspPublicCoefficients, CspPublicKey, CspSecretKey,
     CspSignature, MultiBls12_381_Signature, SigConverter, ThresBls12_381_Signature,
@@ -26,6 +28,7 @@ use openssl::sha::Sha256;
 #[cfg(test)]
 mod tests;
 
+/// Create a key identifier from the public coefficients
 // TODO (CRP-821): Tests - take the existing ones from classic DKG.
 // TODO (CRP-821): Remove classic DKG conversion.
 pub fn key_id_from_csp_pub_coeffs(csp_public_coefficients: &CspPublicCoefficients) -> KeyId {
@@ -128,6 +131,7 @@ impl TryFrom<&PublicKeyProto> for CspPop {
     }
 }
 
+/// A problem while reading PoP from a public key protobuf
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CspPopFromPublicKeyProtoError {
     NoPopForAlgorithm {
@@ -264,6 +268,7 @@ impl TryFrom<CspSecretKey> for threshold_types::SecretKeyBytes {
     }
 }
 
+/// Error while converting secret key
 pub enum CspSecretKeyConversionError {
     WrongSecretKeyType,
 }
@@ -342,6 +347,7 @@ impl From<&CspPop> for EncryptionPublicKeyPop {
     }
 }
 
+/// Decode the public coefficients from a transcript
 pub fn csp_pub_coeffs_from_transcript(transcript: &Transcript) -> CspPublicCoefficients {
     let csp_transcript = CspDkgTranscript::from(&transcript.transcript_bytes);
     CspPublicCoefficients::from(&csp_transcript)

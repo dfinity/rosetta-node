@@ -1,4 +1,4 @@
-//! Threshold signatures with a simple dealing mechanism
+//! Threshold signatures with a simple dealing mechanism.
 
 use super::types::{
     CombinedSignature, CombinedSignatureBytes, IndividualSignature, IndividualSignatureBytes,
@@ -29,6 +29,7 @@ use std::convert::TryFrom;
 const DOMAIN_HASH_MSG_TO_G1_BLS12381_SIG: &[u8; 43] =
     b"BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_";
 
+/// Hashes `msg` to a point in `G1`.
 pub fn hash_message_to_g1(msg: &[u8]) -> G1 {
     hash_to_g1(&DOMAIN_HASH_MSG_TO_G1_BLS12381_SIG[..], msg)
 }
@@ -36,15 +37,16 @@ pub fn hash_message_to_g1(msg: &[u8]) -> G1 {
 #[cfg(test)]
 pub mod tests;
 
-/// Every secret key has a public equivalent.
+/// Computes the public equivalent of a secret key.
 pub fn public_key_from_secret_key(secret_key: &SecretKey) -> PublicKey {
     PublicKey(scalar_multiply(G2::one(), *secret_key))
 }
 
+/// Yields the polynomial-evaluation point `x` given the `index` of the
+/// corresponding share.
+///
 /// The polynomial `f(x)` is computed at a value `x` for every share of a
 /// threshold key. Shares are ordered and numbered `0...N`.
-/// This function yields the evaluation point `x` given the `index` of the
-/// corresponding share.
 pub fn x_for_index(index: NodeIndex) -> Fr {
     // It is important that this is never zero and that values are unique.
     let value: [u64; 4] = [index as u64, 0, 0, 0];
@@ -55,8 +57,9 @@ pub fn x_for_index(index: NodeIndex) -> Fr {
     ans
 }
 
-/// Generate keys for a (t,n)-threshold signature scheme where at least
-/// `t=threshold` contributions out of `n` are required to combine
+/// Generates keys for a (t,n)-threshold signature scheme.
+///
+/// At least `t=threshold` contributions out of `n` are required to combine
 /// the individual signatures.
 ///
 /// The API supports dealing the n shares to a subset of N>=n actors by using a
@@ -68,6 +71,21 @@ pub fn x_for_index(index: NodeIndex) -> Fr {
 /// resulting from the scalar multiplication of the base point `G` with the
 /// coefficients `c_i` of the polynomial. We denote them as
 /// "public_coefficients".
+///
+/// # Arguments
+/// * `seed` - randomness used to seed the PRNG for generating the polynomial.
+///   It must be treated as a secret.
+/// * `threshold` - the minimum number of individual signatures that can be
+///   combined into a valid threshold signature.
+/// * `share_indices` - a vector with one entry per receiver.  The entry is true
+///   iff the receiver is eligible to receive a threshold key.
+///
+/// # Errors
+/// * `InvalidArgumentError` if
+///   - The number of share indices is too large to be stored as type
+///     `NumberOfNodes`.
+///   - The number of eligible receivers is below the threshold; under these
+///     circumstances the receivers could never generate a valid threshold key.
 pub fn keygen(
     seed: Randomness,
     threshold: NumberOfNodes,
@@ -79,12 +97,29 @@ pub fn keygen(
     Ok(keygen_from_polynomial(polynomial, share_indices))
 }
 
-/// Generate keys for a (t,n)-threshold signature scheme where at least
-/// `t=threshold` contributions out of `n` are required to combine
-/// the individual signatures.
+/// Generates keys for a (t,n)-threshold signature scheme, using an existing
+/// secret key.
 ///
 /// This method is identical to `keygen(..)` except that the threshold secret
-/// key is specified.
+/// key is specified (i.e. the constant term of the randomly-generated
+/// polynomial is set to `secret`).
+///
+/// # Arguments
+/// * `seed` - randomness used to seed the PRNG for generating the polynomial.
+///   It must be treated as a secret.
+/// * `threshold` - the minimum number of individual signatures that can be
+///   combined into a valid threshold signature.
+/// * `share_indices` - a vector with one entry per receiver.  The entry is true
+///   iff the receiver is eligible to receive a threshold key.
+/// * `secret` - an existing secret key, which is to be shared.
+///
+/// # Errors
+/// This returns an error if:
+/// * The number of share indices is too large to be stored as type
+///   NumberOfNodes.
+/// * The number of eligible receivers is below the threshold; under these
+///   circumstances the receivers could never generate a valid threshold key.
+/// * The `threshold` is `0`.
 #[allow(unused)]
 pub fn keygen_with_secret(
     seed: Randomness,
@@ -112,7 +147,7 @@ pub fn keygen_with_secret(
     Ok(keygen_from_polynomial(polynomial, share_indices))
 }
 
-/// Verifies that the keygen args are satisfiable
+/// Verifies that the keygen args are satisfiable.
 ///
 /// # Arguments
 /// * `share_indices` - a vector with one entry per receiver.  The entry is true
@@ -174,7 +209,7 @@ fn keygen_from_polynomial(
     (public_coefficients, shares)
 }
 
-/// Any observer can compute the public key of the n'th share from the
+/// Computes the public key of the `index`'th share from the given
 /// public coefficients of the polynomial.
 pub fn individual_public_key(
     public_coefficients: &PublicCoefficients,
@@ -183,10 +218,12 @@ pub fn individual_public_key(
     PublicKey(public_coefficients.evaluate_at(&x_for_index(index)))
 }
 
-/// When signatures are combined, they yield the same result as the single
-/// signature with secret key polynomial.evaluated_at(0), i.e. the constant term
-/// of the polynomial.  The corresponding public key is the first element of the
-/// public coefficients.
+/// Computes the public key used to verify combined signatures.
+///
+/// When signatures are combined, they yield the same result as a single
+/// signature with the secret key `polynomial.evaluated_at(0)`, i.e. the
+/// constant term of the polynomial.  The corresponding public key is the first
+/// element of the public coefficients.
 ///
 /// Note: polynomial.evaluated_at(0) != polynomial.evaluated_at(x_for_index(0)).
 #[allow(unused)]
@@ -194,7 +231,7 @@ pub fn combined_public_key(public_coefficients: &PublicCoefficients) -> PublicKe
     PublicKey::from(public_coefficients)
 }
 
-/// Sign a message with the given secret key.
+/// Signs a message with the given secret key.
 ///
 /// Note:  As the whole message needs to be provided, this is unsuitable for
 /// signing large chunks of data or streaming data.  For large chunks of data
@@ -206,13 +243,17 @@ pub fn sign_message(message: &[u8], secret_key: &SecretKey) -> Signature {
     signature
 }
 
-/// Deduce the signature at x=0.
+/// Combines signature shares (i.e. evaluates the signature at `x=0`).
 ///
 /// Note: The threshold signatories are indexed from `0` to `num_signatories-1`.
 /// The index of each signatory defines the x-value at which the the signature
 /// is computed, so is needed along with the signature for the signature to be
 /// useful.  Signatures are given in the same order as the signatories.  Missing
-/// signatures are represented by None.
+/// signatures are represented by `None`.
+///
+/// # Errors
+/// * `CryptoError::InvalidArgument` if the given signature shares are lower
+///   than the given threshold.
 pub fn combine_signatures(
     signatures: &[Option<Signature>],
     threshold: NumberOfNodes,
@@ -237,7 +278,11 @@ pub fn combine_signatures(
     Ok(PublicCoefficients::interpolate(&signatures).expect("Duplicate indices"))
 }
 
-/// Verify an individual signature against the provided public key.
+/// Verifies an individual signature against the provided public key.
+///
+/// # Returns
+/// * OK, if `signature` is a valid BLS signature on `message`
+/// * Err, otherwise
 pub fn verify_individual_sig(
     message: &[u8],
     signature: IndividualSignature,
@@ -251,7 +296,11 @@ pub fn verify_individual_sig(
     })
 }
 
-/// Verify a combined signature against the provided public key.
+/// Verifies a combined signature against the provided public key.
+///
+/// # Returns
+/// * OK, if `signature` is a valid BLS signature on `message`
+/// * Err, otherwise
 pub fn verify_combined_sig(
     message: &[u8],
     signature: CombinedSignature,
@@ -265,7 +314,8 @@ pub fn verify_combined_sig(
     })
 }
 
-/// Verify an individual or combined signature against the provided public key.
+/// Verifies an individual or combined signature against the provided public
+/// key.
 // TODO(DFN-1408): Optimize signature verification by combining the miller
 // loops inside the pairings, thus performing only a single final
 // exponentiation.
@@ -278,7 +328,8 @@ fn verify(message: &[u8], signature: Signature, public_key: PublicKey) -> Result
     }
 }
 
-/// Verifies that a threshold secret key is consistent with public coefficients
+/// Verifies that a threshold secret key is consistent with the given public
+/// coefficients.
 ///
 /// # Returns
 /// true iff the threshold secret key is consistent, i.e. if the public key

@@ -1,3 +1,4 @@
+//! Interfaces for saving and retrieving public keys
 use prost::Message;
 use std::fs;
 use std::path::Path;
@@ -7,6 +8,7 @@ use std::io::Write;
 
 const PK_DATA_FILENAME: &str = "public_keys.pb";
 
+/// Error while reading or writing public keys
 #[derive(Clone, Debug)]
 pub enum PublicKeyStoreError {
     ParsingError(String),
@@ -14,6 +16,7 @@ pub enum PublicKeyStoreError {
     IOError(String),
 }
 
+/// Write the node public keys to local storage
 pub fn store_node_public_keys(
     crypto_root: &Path,
     node_pks: &NodePublicKeys,
@@ -27,6 +30,7 @@ pub fn store_node_public_keys(
     }
 }
 
+/// Read the node public keys from local storage
 pub fn read_node_public_keys(crypto_root: &Path) -> Result<NodePublicKeys, PublicKeyStoreError> {
     let pk_file = crypto_root.join(PK_DATA_FILENAME);
     match fs::read(pk_file) {

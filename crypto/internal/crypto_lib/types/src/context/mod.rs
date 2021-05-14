@@ -1,12 +1,16 @@
+//! Domain separation context types for hashing.
 use std::convert::TryFrom;
 
 #[cfg(test)]
 mod tests;
 
+/// A domain separation context that can be represented as bytes.
 pub trait Context {
     fn as_bytes(&self) -> &[u8];
 }
 
+/// A domain separation context based on a `String` to separate domains when
+/// hashing.
 #[derive(Debug)]
 pub struct DomainSeparationContext {
     domain: String,
@@ -35,6 +39,7 @@ impl DomainSeparationContext {
         DomainSeparationContext { domain, bytes }
     }
 
+    /// Returns the domain as string.
     #[allow(dead_code)]
     pub fn domain(&self) -> &String {
         &self.domain

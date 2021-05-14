@@ -1,3 +1,4 @@
+//!DER conversion utilities for basic signatures.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used)]
 
@@ -6,8 +7,11 @@ use simple_asn1::{ASN1Block, ASN1Class, BigInt, BigUint, OID};
 #[cfg(test)]
 mod tests;
 
-/// Encodes the given `bytes` according to
-/// https://tools.ietf.org/html/rfc8410#section-4 as follows:
+/// Encodes the given `key` according to
+/// [RFC 8410](https://tools.ietf.org/html/rfc8410#section-4).
+///
+/// The encoding is as follows:
+/// ```text
 /// SubjectPublicKeyInfo  ::=  SEQUENCE  {
 ///    algorithm         AlgorithmIdentifier,
 ///    subjectPublicKey  BIT STRING
@@ -16,6 +20,10 @@ mod tests;
 ///    algorithm   OBJECT IDENTIFIER,
 ///    parameters  ANY DEFINED BY algorithm OPTIONAL
 /// }
+/// ```
+///
+/// # Errors
+/// * `Err(String)` if the DER encoding failed.
 pub fn subject_public_key_info_der(algorithm: OID, key: &[u8]) -> Result<Vec<u8>, String> {
     let algorithm = ASN1Block::Sequence(0, vec![ASN1Block::ObjectIdentifier(0, algorithm)]);
     let subject_public_key = ASN1Block::BitString(0, key.len() * 8, key.to_vec());
@@ -24,15 +32,25 @@ pub fn subject_public_key_info_der(algorithm: OID, key: &[u8]) -> Result<Vec<u8>
         .map_err(|e| format!("failed to encode as DER: {}", e))
 }
 
+/// The provided DER-encoded bytes are malformed.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct KeyDerParsingError {
     pub internal_error: String,
 }
 
-/// Parses `pk_der` as DER-wrapped COSE public key (OID
-/// 1.3.6.1.4.1.56387.1.1), and returns the unwrapped COSE public key bytes. See
-/// * https://sdk.dfinity.org/docs/interface-spec/index.html#webauthn
-/// * https://tools.ietf.org/html/rfc8410#section-4
+/// Parses a DER-wrapped COSE public key, and returns the public key.
+///
+/// See [the Interface Spec](https://sdk.dfinity.org/docs/interface-spec/index.html#signatures)
+/// and [RFC 8410](https://tools.ietf.org/html/rfc8410#section-4).
+///
+/// # Returns
+/// COSE-encoded public key bytes
+///
+/// # Errors:
+/// * `KeyDerParsingError` if:
+///   - `pk_der` is malformed ASN.1
+///   - `pk_der` is *not* the expected ASN.1 structure
+///   - The OID specified in `pk_der` is *not* 1.3.6.1.4.1.56387.1.1
 pub fn public_key_bytes_from_der_wrapped_cose(
     pk_der: &[u8],
 ) -> Result<Vec<u8>, KeyDerParsingError> {
@@ -41,8 +59,18 @@ pub fn public_key_bytes_from_der_wrapped_cose(
     Ok(pk_bytes)
 }
 
-/// Parses `pk_der` as DER-encoded public key, and returns the resulting
-/// components (see https://tools.ietf.org/html/rfc8410#section-4).
+/// Parses a DER-wrapped COSE public key, and returns the OID and the public
+/// key.
+///
+/// See [RFC 8410](https://tools.ietf.org/html/rfc8410#section-4).
+///
+/// # Returns
+/// The `OID` and COSE-encoded public key bytes
+///
+/// # Errors:
+/// * `KeyDerParsingError` if:
+///   - `pk_der` is malformed ASN.1
+///   - `pk_der` is *not* the expected ASN.1 structure
 pub fn oid_and_public_key_bytes_from_der(
     pk_der: &[u8],
 ) -> Result<(OID, Vec<u8>), KeyDerParsingError> {
@@ -50,19 +78,27 @@ pub fn oid_and_public_key_bytes_from_der(
     der_parser.get_oid_and_public_key_bytes()
 }
 
+/// The secret and public keys as bytes, as well as the OID.
 pub struct SecretKeyData {
     pub oid: OID,
     pub sk_bytes: Vec<u8>,
     pub pk_bytes: Option<Vec<u8>>,
 }
 
-/// Parses `sk_der` as DER-encoded secret key, and returns the resulting
-/// components (see https://tools.ietf.org/html/rfc8410#section-7).
+/// Parses a DER-wrapped secret key, and returns the OID and the keypair.
+///
+/// See [RFC 8410](see https://tools.ietf.org/html/rfc8410#section-7).
+///
+/// # Errors:
+/// * `KeyDerParsingError` if:
+///   - `sk_der` is malformed ASN.1
+///   - `sk_der` is *not* the expected ASN.1 structure
 pub fn oid_and_key_pair_bytes_from_der(sk_der: &[u8]) -> Result<SecretKeyData, KeyDerParsingError> {
     let der_parser = KeyDerParser::new(sk_der);
     der_parser.get_oid_and_key_pair_bytes()
 }
 
+/// Returns an error if `oid` is *not* the OID for an IC public key.
 fn ensure_der_wrapped_cose_oid(oid: simple_asn1::OID) -> Result<(), KeyDerParsingError> {
     if oid != simple_asn1::oid!(1, 3, 6, 1, 4, 1, 56387, 1, 1) {
         return Err(KeyDerParsingError {
@@ -72,7 +108,7 @@ fn ensure_der_wrapped_cose_oid(oid: simple_asn1::OID) -> Result<(), KeyDerParsin
     Ok(())
 }
 
-// Parser for DER-encoded keys.
+/// Parser for DER-encoded keys.
 struct KeyDerParser {
     key_der: Vec<u8>,
 }
@@ -133,7 +169,7 @@ impl KeyDerParser {
         })
     }
 
-    // Retrieves OID from the given ASN1Block.
+    /// Retrieves OID from the given ASN1Block.
     fn oid(&self, oid_seq: ASN1Block) -> Result<OID, KeyDerParsingError> {
         if let ASN1Block::Sequence(_offset_oid, mut oid_parts) = oid_seq {
             if oid_parts.len() != 1 {
@@ -149,6 +185,7 @@ impl KeyDerParser {
         }
     }
 
+    /// Attempts to parse the given ASN1Block as an explicitly tagged type
     fn unwrap_explicitly_tagged_block(
         &self,
         wrapped: ASN1Block,
@@ -160,7 +197,7 @@ impl KeyDerParser {
         }
     }
 
-    // Retrieves raw public key bytes from the given ASN1Block.
+    /// Retrieves raw public key bytes from the given ASN1Block.
     fn public_key_bytes(&self, key_part: ASN1Block) -> Result<Vec<u8>, KeyDerParsingError> {
         if let ASN1Block::BitString(_offset, bits_count, key_bytes) = key_part {
             if bits_count != key_bytes.len() * 8 {
@@ -172,7 +209,7 @@ impl KeyDerParser {
         }
     }
 
-    // Retrieves raw secret key bytes from the given ASN1Block.
+    /// Retrieves raw secret key bytes from the given ASN1Block.
     fn secret_key_bytes(&self, key_part: ASN1Block) -> Result<Vec<u8>, KeyDerParsingError> {
         if let ASN1Block::OctetString(_offset, key_bytes_string) = key_part {
             let mut key_bytes_block = simple_asn1::from_der(&key_bytes_string).map_err(|e| {
@@ -188,20 +225,22 @@ impl KeyDerParser {
         Err(self.parsing_error("Expected octet string."))
     }
 
+    /// Converts `msg` into a `KeyDerParsingError`.
     fn parsing_error(&self, msg: &str) -> KeyDerParsingError {
         KeyDerParsingError {
             internal_error: msg.to_string(),
         }
     }
 
-    // parses the entire DER-string provided upon construction.
+    /// parses the entire DER-string provided upon construction.
     fn parse_pk(&self) -> Result<Vec<ASN1Block>, KeyDerParsingError> {
         simple_asn1::from_der(&self.key_der)
             .map_err(|e| self.parsing_error(&*format!("Error in DER encoding: {}", e.to_string())))
     }
 
-    // Verifies that the specified `parts` contain exactly one ASN1Block, and that
-    // this block is an ASN1 Sequence. Returns the contents of that Sequence.
+    /// Verifies that the specified `parts` contain exactly one ASN1Block, and
+    /// that this block is an ASN1 Sequence. Returns the contents of that
+    /// Sequence.
     fn ensure_single_asn1_sequence(
         &self,
         mut parts: Vec<ASN1Block>,

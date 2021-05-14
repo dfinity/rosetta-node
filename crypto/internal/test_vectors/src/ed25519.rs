@@ -1,3 +1,4 @@
+//! Test vectors for Ed25519 signatures.
 use crate::unhex::*;
 use strum_macros::EnumIter;
 

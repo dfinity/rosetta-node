@@ -1,7 +1,9 @@
+//! Data types for threshold public keys.
 use crate::sign::threshold_sig::ni_dkg::CspNiDkgTranscript;
 use serde::{Deserialize, Serialize};
 use std::hash::Hash;
 
+/// A threshold signature public key.
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialOrd, Ord, PartialEq, Serialize, Deserialize)]
 pub enum CspThresholdSigPublicKey {
     ThresBls12_381(bls12_381::PublicKeyBytes),
@@ -41,6 +43,7 @@ impl From<bls12_381::PublicKeyBytes> for CspThresholdSigPublicKey {
 }
 
 pub mod bls12_381 {
+    //! Data types for BLS12-381 threshold signature public keys.
     use super::*;
     use std::cmp::Ordering;
     use std::convert::TryFrom;
@@ -49,6 +52,7 @@ pub mod bls12_381 {
 
     use thiserror::Error;
 
+    /// A BLS12-381 public key as bytes.
     #[derive(Copy, Clone)]
     pub struct PublicKeyBytes(pub [u8; PublicKeyBytes::SIZE]);
     crate::derive_serde!(PublicKeyBytes, PublicKeyBytes::SIZE);
@@ -106,7 +110,7 @@ pub mod bls12_381 {
         }
     }
 
-    /// May occur when converting threshold signature public keys to bytes.
+    /// Converting a threshold signature public key to bytes failed.
     #[derive(Clone, Debug, PartialEq, Eq, Hash, Error)]
     pub enum ThresholdSigPublicKeyBytesConversionError {
         #[error("malformed threshold signature public key: {internal_error}")]

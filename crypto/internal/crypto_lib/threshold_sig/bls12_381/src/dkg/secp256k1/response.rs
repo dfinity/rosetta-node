@@ -1,4 +1,5 @@
-//! CSP Threshold Distributed Key Generation
+//! (deprecated) Response creation/verification for interactive distributed key
+//! generation.
 
 use super::complaint;
 use crate::api::dkg_errors::{

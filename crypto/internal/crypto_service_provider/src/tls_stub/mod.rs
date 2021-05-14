@@ -1,3 +1,5 @@
+//! TLS utilities
+
 use crate::api::tls_errors::{CspTlsClientHandshakeError, CspTlsServerHandshakeError};
 use crate::keygen::tls_registry_cert_hash_as_key_id;
 use crate::secret_key_store::SecretKeyStore;

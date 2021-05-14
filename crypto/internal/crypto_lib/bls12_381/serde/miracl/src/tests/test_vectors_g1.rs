@@ -3,7 +3,9 @@ use crate::{miracl_g1_from_bytes, miracl_g1_to_bytes};
 use ic_crypto_internal_types::curves::bls12_381::conversions::g1_bytes_from_vec;
 use ic_crypto_internal_types::curves::bls12_381::G1;
 use ic_crypto_internal_types::curves::test_vectors::bls12_381 as test_vectors;
+use miracl_core::bls12381::big::BIG;
 use miracl_core::bls12381::ecp::ECP;
+use miracl_core::bls12381::rom::CURVE_ORDER;
 
 /// When much of this was written, ECP lacked Debug, pretty-printing,
 /// and Eq, and Miracl's `.equals` took mutable arguments.
@@ -156,4 +158,44 @@ fn too_large_x_should_fail_to_parse() {
             hex::encode(&bytes[..])
         );
     }
+}
+
+#[test]
+fn miracl_g1_from_bytes_checks_subgroup_order() {
+    // BLS12-381 uses Y^2 = X^3 + 4, hence P = (0, 2) is a point.
+    // The tangent at P is Y = 2, thus 2P = (0, -2) and 3P = O, that is, P has order
+    // 3. Thus nP is not O, where n is the subgroup order (which must be a large
+    // enough prime to defeat generic discrete log attacks).
+    //
+    // Miracl comments mention calculating y from x but neglect to specify which
+    // sign is chosen. The Miracl library used when this test was first written
+    // happened to return (0, 2). But it's irrelevant since P and -P behave
+    // similarly.
+    use crate::miracl_g1_from_bytes_unchecked;
+    let p = ECP::new_big(&BIG::new_int(0));
+    assert!(
+        !p.is_infinity(),
+        "BUG! Unable to solve Y^2 = X^3 + 4 for Y when X = 0."
+    );
+    assert!(
+        p.mul(&BIG::new_int(3)).is_infinity(),
+        "BUG! (0, 2) should have order 3"
+    );
+    let subgroup_order = BIG::new_ints(&CURVE_ORDER);
+    assert!(
+        !p.mul(&subgroup_order).is_infinity(),
+        "BUG! 3 divides the subgroup order?!"
+    );
+    let bad_g1 = miracl_g1_to_bytes(&p);
+    let unchecked = miracl_g1_from_bytes_unchecked(&bad_g1.as_bytes())
+        .expect("BUG! cannot deserialize what was just serialized");
+    assert!(
+        !unchecked.mul(&subgroup_order).is_infinity(),
+        "BUG! 3 divides the subgroup order?!"
+    );
+    let checked = miracl_g1_from_bytes(&bad_g1.as_bytes());
+    assert!(
+        !checked.is_ok(),
+        "Deserializing a point outside subgroup should fail"
+    );
 }

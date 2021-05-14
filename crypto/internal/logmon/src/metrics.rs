@@ -3,15 +3,16 @@
 use ic_metrics::MetricsRegistry;
 use prometheus::HistogramVec;
 
+/// Metrics exported by crypto.
 pub struct Metrics {
+    /// Histogram of crypto lock acquisition times. The 'access' label
+    /// is either 'read' or 'write'.
     pub ic_crypto_lock_acquisition_duration_seconds: HistogramVec,
 }
 
 impl Metrics {
     pub fn new(r: &MetricsRegistry) -> Self {
         Self {
-            /// Histogram of crypto lock acquisition times. The 'access' label
-            /// is either 'read' or 'write'.
             ic_crypto_lock_acquisition_duration_seconds: r.histogram_vec(
                 "ic_crypto_lock_acquisition_duration_seconds",
                 "Histogram of crypto lock acquisition times",

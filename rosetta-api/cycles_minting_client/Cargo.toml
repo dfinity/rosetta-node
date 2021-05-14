@@ -1,6 +1,6 @@
 [package]
 name = "cycles_minting_client"
-version = "0.0.1"
+version = "0.8.0"
 authors = ["The Internet Computer Project Developers"]
 description = "Helper functions for transferring cycles to canisters"
 edition = "2018"

@@ -1,3 +1,8 @@
+//! Non-interactive distributed key generation
+//!
+//! Based on "Non-interactive distributed key generation and key resharing",
+//! Jens Groth <https://eprint.iacr.org/2021/339>
+
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used)]
 

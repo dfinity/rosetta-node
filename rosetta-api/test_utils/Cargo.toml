@@ -1,11 +1,11 @@
 [package]
 name = "ic-rosetta-test-utils"
-version = "0.1.0"
+version = "0.8.0"
 authors = ["The Internet Computer Project Developers"]
 edition = "2018"
 
 [[bin]]
-name = "zondex-gen"
+name = "zondax-gen"
 path = "src/zondax_gen.rs"
 
 [dependencies]

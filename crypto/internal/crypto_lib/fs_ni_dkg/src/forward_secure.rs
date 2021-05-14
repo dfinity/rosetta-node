@@ -34,14 +34,27 @@ mod tests;
 
 const FP12_SIZE: usize = 12 * big::MODBYTES;
 
-pub const MESSAGE_BYTES: usize = 32; // We assume that the ciphertext is an element of Fr.
-pub const CHUNK_BYTES: usize = 2; // We assume an integer number of bytes
-pub const CHUNK_SIZE: isize = 1 << (CHUNK_BYTES << 3); // Number of distinct chunks
-pub const CHUNK_MIN: isize = 0;
-pub const CHUNK_MAX: isize = CHUNK_MIN + CHUNK_SIZE - 1;
-pub const NUM_CHUNKS: usize = (MESSAGE_BYTES + CHUNK_BYTES - 1) / CHUNK_BYTES;
-pub const DOMAIN_CIPHERTEXT_NODE: &str = "ic-fs-encryption/binary-tree-node";
+/// The ciphertext is an element of Fr which is 256-bits
+pub const MESSAGE_BYTES: usize = 32;
 
+/// The size in bytes of a chunk
+pub const CHUNK_BYTES: usize = 2;
+
+/// The maximum value of a chunk
+pub const CHUNK_SIZE: isize = 1 << (CHUNK_BYTES << 3); // Number of distinct chunks
+
+/// The minimum range of a chunk
+pub const CHUNK_MIN: isize = 0;
+
+/// The maximum range of a chunk
+pub const CHUNK_MAX: isize = CHUNK_MIN + CHUNK_SIZE - 1;
+
+/// NUM_CHUNKS is simply the number of chunks needed to hold a message (element
+/// of Fr)
+pub const NUM_CHUNKS: usize = (MESSAGE_BYTES + CHUNK_BYTES - 1) / CHUNK_BYTES;
+const DOMAIN_CIPHERTEXT_NODE: &str = "ic-fs-encryption/binary-tree-node";
+
+/// Type for a single bit
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Bit {
     Zero = 0,
@@ -144,6 +157,7 @@ impl zeroize::Zeroize for BTENode {
     }
 }
 
+/// A BIG that cann be zeroized
 pub struct ZeroizedBIG {
     pub big: BIG,
 }
@@ -154,14 +168,16 @@ impl zeroize::Zeroize for ZeroizedBIG {
     }
 }
 
-/// A forward-secure secret key is a list of BTE nodes. We can derive the keys
-/// of any descendant of any node in the list.
-/// We obtain forward security by maintaining the list so that
-/// we can derive current and future private keys, but none of the past keys.
+/// A forward-secure secret key is a list of BTE nodes.
+///
+/// We can derive the keys of any descendant of any node in the list.
+/// We obtain forward security by maintaining the list so that we can
+/// derive current and future private keys, but none of the past keys.
 pub struct SecretKey {
     pub bte_nodes: LinkedList<BTENode>,
 }
 
+/// A public key and its associated proof of possession
 #[derive(Clone)]
 pub struct PublicKeyWithPop {
     pub key_value: ECP,
@@ -224,6 +240,7 @@ impl std::fmt::Debug for PublicKeyWithPop {
     }
 }
 
+/// NI-DKG system parameters
 pub struct SysParam {
     pub lambda_t: usize,
     pub lambda_h: usize,
@@ -384,7 +401,7 @@ impl SecretKey {
     ///
     /// An alternative is to only store the root nodes of the subtrees that
     /// cover the remaining valid keys. Thus the first epoch, the private
-    /// key would simply be [0], and would only change to [1, 01, 001, 0001,
+    /// key would simply be \[0\], and would only change to [1, 01, 001, 0001,
     /// 00001] after the first update. Generally, some computations
     /// happen one epoch later than they would with our current scheme. However,
     /// key update is a bit fiddlier.
@@ -694,6 +711,10 @@ fn unecp2(buf: &[u8], cur: &mut usize) -> ECP2 {
     a
 }
 
+/// A forward secure ciphertext
+///
+/// This is the (C,R,S,Z) tuple of Dec in section 5.2 of
+/// <https://eprint.iacr.org/2021/339.pdf>
 pub struct SingleCiphertext {
     pub cc: ECP,
     pub rr: ECP,
@@ -756,6 +777,10 @@ pub fn dec_single(dks: &mut SecretKey, ct: &SingleCiphertext, sys: &SysParam) ->
     baby_giant(&x, &base, 0, CHUNK_SIZE).expect("Invalid ciphertext")
 }
 
+/// Forward secure ciphertexts
+///
+/// This is (C,R,S,Z) tuple of section 5.2, with multiple C values,
+/// one for each recipent.
 pub struct CRSZ {
     pub cc: Vec<Vec<ECP>>,
     pub rr: Vec<ECP>,
@@ -873,7 +898,7 @@ pub fn enc_chunks(
     Some((CRSZ { cc, rr, ss, zz }, ToxicWaste { spec_r, s }))
 }
 
-pub fn is_prefix(xs: &[Bit], ys: &[Bit]) -> bool {
+fn is_prefix(xs: &[Bit], ys: &[Bit]) -> bool {
     // isPrefix [] _ = True
     // isPrefix _ [] = False
     // isPrefix (x:xt) (y:yt) = x == y && isPrefix xt yt
@@ -888,7 +913,7 @@ pub fn is_prefix(xs: &[Bit], ys: &[Bit]) -> bool {
     true
 }
 
-pub fn find_prefix<'a>(dks: &'a SecretKey, tau: &[Bit]) -> Option<&'a BTENode> {
+fn find_prefix<'a>(dks: &'a SecretKey, tau: &[Bit]) -> Option<&'a BTENode> {
     for node in dks.bte_nodes.iter() {
         if is_prefix(&node.tau, tau) {
             return Some(node);
@@ -897,8 +922,9 @@ pub fn find_prefix<'a>(dks: &'a SecretKey, tau: &[Bit]) -> Option<&'a BTENode> {
     None
 }
 
-/// Solves discrete log problem with baby-step giant-step. Returns:
+/// Solves discrete log problem with baby-step giant-step.
 ///
+/// Returns:
 ///   find (\x -> base^x == tgt) [lo..lo + range - 1]
 ///
 /// using an O(sqrt(N)) approach rather than a naive O(N) search.
@@ -960,6 +986,7 @@ pub fn baby_giant(tgt: &FP12, base: &FP12, lo: isize, range: isize) -> Option<is
     None
 }
 
+/// Error while decrypting
 #[derive(Debug)]
 pub enum DecErr {
     ExpiredKey,
@@ -1069,9 +1096,12 @@ pub fn dec_chunks(
     Ok(redundant)
 }
 
-// Part of DVfy of Section 7.1.
-// In addition to verifying the proofs of chunking and sharing,
-// we must also verify ciphertext integrity.
+/// Verify ciphertext integrity
+///
+/// Part of DVfy of Section 7.1 of <https://eprint.iacr.org/2021/339.pdf>
+//
+/// In addition to verifying the proofs of chunking and sharing,
+/// we must also verify ciphertext integrity.
 pub fn verify_ciphertext_integrity(
     crsz: &CRSZ,
     tau: &[Bit],
@@ -1198,12 +1228,23 @@ fn ftau_partial(tau: &[Bit], sys: &SysParam) -> Option<ECP2> {
     Some(id)
 }
 
-/// An FS key upgrade can take up to 2 * LAMBDA_T * LAMBDA_H point
-/// multiplications. This is tolerable in practice for LAMBDA_T = 32, but in
-/// tests, smaller values are preferable.
-pub const LAMBDA_T: usize = 32;
-pub const LAMBDA_H: usize = 256;
+// An FS key upgrade can take up to 2 * LAMBDA_T * LAMBDA_H point
+// multiplications. This is tolerable in practice for LAMBDA_T = 32, but in
+// tests, smaller values are preferable.
 
+/// Constant which controls the upper limit of epochs
+///
+/// Specifically 2**LAMBDA_T NI-DKG epochs cann occur
+///
+/// See Section 7.1 of <https://eprint.iacr.org/2021/339.pdf>
+pub const LAMBDA_T: usize = 32;
+
+/// The size of the hash function used during encryption
+///
+/// See Section 7.1 of <https://eprint.iacr.org/2021/339.pdf>
+const LAMBDA_H: usize = 256;
+
+/// Return NI-DKG system parameters
 pub fn mk_sys_params() -> SysParam {
     let mut f = Vec::new();
     let dst = b"DFX01-with-BLS12381G2_XMD:SHA-256_SSWU_RO_";
@@ -1227,9 +1268,11 @@ pub fn mk_sys_params() -> SysParam {
     }
 }
 
-// Miracl's documentation cautions against using BIG to hold negative integers.
-// However, sometimes our code produces negative isize values representing
-// elements of Z_r (where r is the order of G1).
+/// Create a BIG from an isize
+///
+/// Miracl's documentation cautions against using BIG to hold negative integers.
+/// However, sometimes our code produces negative isize values representing
+/// elements of Z_r (where r is the order of G1).
 pub fn negative_safe_new_int(n: isize) -> BIG {
     if n < 0 {
         let mut tmp = BIG::new_int(-n);
@@ -1240,10 +1283,11 @@ pub fn negative_safe_new_int(n: isize) -> BIG {
     }
 }
 
-// Brute-forces a discrete log for a malicious DKG participant whose NIZK
-// chunking proof checks out.
-// For some Delta in [1..E - 1] the answer s satisfies (Delta * s) in [1 - Z..Z
-// - 1].
+/// Brute-forces a discrete log for a malicious DKG participant whose NIZK
+/// chunking proof checks out.
+///
+/// For some Delta in [1..E - 1] the answer s satisfies (Delta * s) in
+/// [1 - Z..Z - 1].
 pub fn solve_cheater_log(spec_n: usize, spec_m: usize, target: &FP12) -> Option<BIG> {
     use miracl_core::bls12381::pair;
     let bb_constant = CHUNK_SIZE as usize;

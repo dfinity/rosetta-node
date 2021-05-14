@@ -7,8 +7,9 @@ pub mod store;
 use crate::convert::account_from_public_key;
 use crate::convert::operations;
 use crate::convert::{
-    from_arg, from_hex, from_model_account_identifier, from_public_key, internal_error, into_error,
-    make_read_state_from_update, to_model_account_identifier, transaction_id,
+    from_arg, from_hex, from_model_account_identifier, from_model_transaction_identifier,
+    from_public_key, internal_error, into_error, make_read_state_from_update,
+    to_model_account_identifier, transaction_id,
 };
 use crate::ledger_client::LedgerAccess;
 
@@ -183,9 +184,7 @@ impl RosettaRequestHandler {
         let b_id = convert::block_id(&hb)?;
         let parent_id = create_parent_block_id(&blocks, &hb)?;
 
-        let txn = block.transaction;
-        let t_id = convert::transaction_identifier(&txn.hash());
-        let transactions = vec![convert::transaction(&txn.transfer, t_id)?];
+        let transactions = vec![convert::transaction(&hb)?];
         let block = Some(models::Block::new(
             b_id,
             parent_id,
@@ -211,14 +210,8 @@ impl RosettaRequestHandler {
             hash: Some(msg.block_identifier.hash),
         });
         let hb = get_block(&blocks, b_id)?;
-        let b = hb
-            .block
-            .decode()
-            .map_err(|err| internal_error(format!("Cannot decode block: {}", err)))?;
 
-        let txn = b.transaction;
-        let t_id = convert::transaction_identifier(&txn.hash());
-        let transaction = convert::transaction(&txn.transfer, t_id)?;
+        let transaction = convert::transaction(&hb)?;
 
         Ok(BlockTransactionResponse::new(transaction))
     }
@@ -807,78 +800,50 @@ impl RosettaRequestHandler {
         msg: models::SearchTransactionsRequest,
     ) -> Result<SearchTransactionsResponse, ApiError> {
         verify_network_id(self.ledger.ledger_canister_id(), &msg.network_identifier)?;
-        let blocks = self.ledger.read_blocks().await;
-        let last_index = match blocks.last_verified()? {
-            Some(hb) => hb.index,
-            None => 0,
-        };
+        let opt_msg_tid = msg
+            .transaction_identifier
+            .clone()
+            .and_then(|tid| from_model_transaction_identifier(&tid).ok());
         let opt_msg_acc = msg
             .account_identifier
             .and_then(|aid| from_model_account_identifier(&aid).ok());
-        // Start from latest block and go downwards, since clients are most
-        // likely interested in recent blocks only. WARNING: if we host a public
-        // node, we may want to restrict iterations here to prevent DoS attacks.
-        let mut txs = Vec::new();
-        for i in (0..=last_index).rev() {
-            let hb = blocks.get_verified_at(i)?;
-            let b = hb
-                .block
-                .decode()
-                .map_err(|err| internal_error(format!("Cannot decode block: {}", err)))?;
-            let txn = b.transaction;
-            let t_id = convert::transaction_identifier(&txn.hash());
-
-            let tid_res = match &msg.transaction_identifier {
-                Some(msg_tid) => Some(t_id == *msg_tid),
-                None => None,
-            };
-
-            let acc_res = match &opt_msg_acc {
-                Some(msg_acc) => match txn.transfer {
-                    ledger_canister::Transfer::Burn { from, .. } => Some(from == *msg_acc),
-                    ledger_canister::Transfer::Mint { to, .. } => Some(to == *msg_acc),
-                    ledger_canister::Transfer::Send { from, to, .. } => {
-                        Some(from == *msg_acc || to == *msg_acc)
-                    }
-                },
-                None => None,
-            };
-
-            match (tid_res, acc_res) {
-                (Some(true), Some(true)) | (Some(true), None) => {
-                    // transaction_identifier matches, account_identifier
-                    // matches or not queried. Push the result and stop
-                    // searching since we're confident no other blocks will
-                    // match.
-                    txs.push(BlockTransaction::new(
-                        convert::block_id(&hb)?,
-                        convert::transaction(&txn.transfer, t_id)?,
-                    ));
-                    break;
+        let blocks = self.ledger.read_blocks().await;
+        let mut heights: Vec<BlockHeight> = Vec::new();
+        match opt_msg_tid {
+            Some(msg_tid) => blocks
+                .tx_hash_location
+                .get(&msg_tid)
+                .into_iter()
+                .for_each(|h| heights.push(*h)),
+            None => {
+                if let Some(msg_acc) = opt_msg_acc {
+                    blocks
+                        .account_location
+                        .get(&msg_acc)
+                        .into_iter()
+                        .for_each(|v| heights = v.clone());
                 }
-                (None, Some(true)) => {
-                    // transaction_identifier not queried, account_identifier
-                    // matches. Push the result and continue searching, there
-                    // may be other blocks that match the query.
-                    txs.push(BlockTransaction::new(
-                        convert::block_id(&hb)?,
-                        convert::transaction(&txn.transfer, t_id)?,
-                    ));
-                }
-                (None, None) => {
-                    // Neither transaction_identifier nor account_identifier is
-                    // queried. The most natural behavior would be "return all
-                    // blocks" but I don't think anyone's going to do such a
-                    // request, let's return an empty result.
-                    break;
-                }
-                _ => {
-                    // Other cases: the block doesn't match the query, continue
-                    // searching.
-                }
-            };
+            }
         }
-        txs.reverse();
+        let mut txs: Vec<BlockTransaction> = Vec::new();
+        let first_idx = blocks
+            .first_verified()?
+            .ok_or(ApiError::BlockchainEmpty(true, None))?
+            .index;
+        let last_idx = blocks
+            .last_verified()?
+            .ok_or(ApiError::BlockchainEmpty(true, None))?
+            .index;
+        for i in heights {
+            if i < first_idx || i > last_idx {
+                continue;
+            }
+            let hb = blocks.get_verified_at(i)?;
+            txs.push(BlockTransaction::new(
+                convert::block_id(&hb)?,
+                convert::transaction(&hb)?,
+            ));
+        }
         let total_count = txs.len() as i64;
         Ok(SearchTransactionsResponse::new(txs, total_count))
     }

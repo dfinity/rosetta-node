@@ -1,4 +1,4 @@
-//! Error types used in the Dkg API
+//! Error types used in the public DKG API.
 //!
 //! This defines two types of errors:
 //! * Individual error conditions;
@@ -8,8 +8,8 @@ pub use ic_types::crypto::error::{
     InvalidArgumentError, KeyNotFoundError, MalformedDataError, MalformedPublicKeyError,
 };
 use ic_types::crypto::{AlgorithmId, CryptoError};
-pub mod conversions;
-pub mod imported_conversions;
+mod conversions;
+mod imported_conversions;
 
 #[cfg(test)]
 mod tests;
@@ -36,12 +36,14 @@ pub struct SizeError {
     pub message: String,
 }
 
+/// Creation of an ephemeral key failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DkgCreateEphemeralError {
     /// There is an incompatible preexisting key for this DKG.
     MalformedSecretKeyError(MalformedSecretKeyError),
 }
 
+/// Verification of an ephemeral key failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DkgVerifyEphemeralError {
     /// The public key could not be parsed.
@@ -52,6 +54,7 @@ pub enum DkgVerifyEphemeralError {
     InvalidPopError(MalformedPopError),
 }
 
+/// Dealing of shares during DKG failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DkgCreateDealingError {
     /// Precondition error: The ephemeral secret key was not in the secret key
@@ -69,6 +72,7 @@ pub enum DkgCreateDealingError {
     SizeError(SizeError),
 }
 
+/// Verification of a dealing during DKG failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DkgVerifyDealingError {
     /// Precondition error: One of the receiver public keys is malformed.  This
@@ -83,6 +87,7 @@ pub enum DkgVerifyDealingError {
     SizeError(SizeError),
 }
 
+/// Creation of a DKG response failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DkgCreateResponseError {
     /// Precondition error: The ephemeral secret key was not in the secret key
@@ -102,6 +107,7 @@ pub enum DkgCreateResponseError {
     SizeError(SizeError),
 }
 
+/// Verification of a DKG response failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DkgVerifyResponseError {
     /// Precondition error: One of the public keys is malformed.
@@ -122,6 +128,7 @@ pub enum DkgVerifyResponseError {
     SizeError(SizeError),
 }
 
+/// Creation of a DKG transcript failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DkgCreateTranscriptError {
     /// Precondition error: One of the public keys is malformed.
@@ -140,6 +147,7 @@ pub enum DkgCreateTranscriptError {
     InsufficientDataError(InvalidArgumentError),
 }
 
+/// Loading of a private key from a DKG transcript failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DkgLoadPrivateKeyError {
     /// Precondition error: The ephemeral key was not found.
@@ -153,6 +161,7 @@ pub enum DkgLoadPrivateKeyError {
     InvalidTranscriptError(InvalidArgumentError),
 }
 
+/// Creation of a DKG resharing failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DkgCreateReshareDealingError {
     /// Precondition error: The ephemeral secret key was not in the secret key
@@ -192,6 +201,7 @@ impl From<DkgCreateDealingError> for DkgCreateReshareDealingError {
     }
 }
 
+/// Verification of a DKG resharing failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DkgVerifyReshareDealingError {
     /// Precondition error: One of the receiver public keys is malformed.  This
@@ -227,6 +237,7 @@ impl From<DkgVerifyDealingError> for DkgVerifyReshareDealingError {
     }
 }
 
+/// Creation of a DKG transcript from a resharing failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DkgCreateReshareTranscriptError {
     /// Precondition error: One of the public keys is malformed.

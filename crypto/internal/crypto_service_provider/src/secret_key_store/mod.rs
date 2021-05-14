@@ -1,3 +1,5 @@
+//! Interfaces for saving and retrieving secret keys
+
 use crate::types::CspSecretKey;
 pub use ic_crypto_internal_types::scope;
 use ic_types::crypto::KeyId;
@@ -94,6 +96,7 @@ pub trait SecretKeyStore: Send + Sync {
     }
 }
 
+/// Errors that can occur while interacting with the secret key store
 #[derive(Clone, Debug)]
 pub enum SecretKeyStoreError {
     DuplicateKeyId(KeyId),

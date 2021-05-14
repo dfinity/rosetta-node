@@ -1,3 +1,4 @@
+//! In-memory secret key store (for testing)
 use crate::secret_key_store::{Scope, SecretKeyStore, SecretKeyStoreError};
 use crate::types::CspSecretKey;
 use ic_types::crypto::KeyId;

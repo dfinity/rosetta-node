@@ -3,7 +3,10 @@ use crate::{miracl_g2_from_bytes, miracl_g2_to_bytes};
 use ic_crypto_internal_types::curves::bls12_381::conversions::g2_bytes_from_vec;
 use ic_crypto_internal_types::curves::bls12_381::G2;
 use ic_crypto_internal_types::curves::test_vectors::bls12_381 as test_vectors;
+use miracl_core::bls12381::big::BIG;
 use miracl_core::bls12381::ecp2::ECP2;
+use miracl_core::bls12381::fp2::FP2;
+use miracl_core::bls12381::rom::CURVE_ORDER;
 
 /// When much of this was written, ECP lacked Debug, pretty-printing,
 /// and Eq, and Miracl's `.equals` took mutable arguments.
@@ -173,4 +176,31 @@ fn too_large_x0_should_fail_to_parse() {
             hex::encode(&bytes[..])
         );
     }
+}
+
+#[test]
+fn miracl_g2_from_bytes_checks_subgroup_order() {
+    use crate::miracl_g2_from_bytes_unchecked;
+    // BLS12-381 uses Y^2 = X^3 + 4.
+    // For G2, we twist: Y^2 = X^3 + 4(1 + i).
+    // This has a point with X = 2, which happens to be outside the subgroup.
+    let p = ECP2::new_fp2(&FP2::new_int(2), 1);
+    assert!(!p.is_infinity(), "BUG! Unable to find G2 point with X = 2");
+    let subgroup_order = BIG::new_ints(&CURVE_ORDER);
+    assert!(
+        !p.mul(&subgroup_order).is_infinity(),
+        "BUG! P is in subgroup"
+    );
+    let bad_g2 = miracl_g2_to_bytes(&p);
+    let unchecked = miracl_g2_from_bytes_unchecked(&bad_g2.as_bytes())
+        .expect("BUG! cannot deserialize what was just serialized");
+    assert!(
+        !unchecked.mul(&subgroup_order).is_infinity(),
+        "BUG! deserilized P lies in subgroup"
+    );
+    let checked = miracl_g2_from_bytes(&bad_g2.as_bytes());
+    assert!(
+        !checked.is_ok(),
+        "Deserializing a point outside subgroup should fail"
+    );
 }

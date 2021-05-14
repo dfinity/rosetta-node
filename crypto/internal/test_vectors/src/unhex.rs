@@ -1,3 +1,4 @@
+//! Hexadecimal conversion utilities.
 #![allow(clippy::unwrap_used)]
 use hex::FromHex;
 

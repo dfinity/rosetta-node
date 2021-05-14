@@ -1,8 +1,13 @@
 use structopt::StructOpt;
 
+use ic_crypto_internal_threshold_sig_bls12381 as bls12_381;
 use ic_crypto_utils_threshold_sig::parse_threshold_sig_key;
 use ic_rosetta_api::rosetta_server::RosettaApiServer;
-use ic_rosetta_api::{ledger_client, RosettaRequestHandler};
+use ic_rosetta_api::{
+    ledger_client::{self, StoreType},
+    RosettaRequestHandler,
+};
+use ic_types::crypto::threshold_sig::ThresholdSigPublicKey;
 use ic_types::{CanisterId, PrincipalId};
 use std::{path::PathBuf, str::FromStr, sync::Arc};
 
@@ -38,11 +43,28 @@ struct Opt {
     exit_on_sync: bool,
     #[structopt(long = "offline")]
     offline: bool,
+    #[structopt(long = "mainnet", about = "Connect to the Internet Computer Mainnet")]
+    mainnet: bool,
+    #[structopt(long = "not-whitelisted")]
+    not_whitelisted: bool,
+    #[structopt(long = "in-memory-store")]
+    in_memory_store: bool,
+    #[structopt(long = "disable-fsync")]
+    disable_fsync: bool,
 }
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     let opt = Opt::from_args();
+
+    if !opt.mainnet {
+        // Ensure you're not connecting to the mainnet without using the flag
+        if opt.ic_canister_id == ic_nns_constants::LEDGER_CANISTER_ID.to_string() {
+            log::error!("You cannot connect to the mainnet without using the --mainnet flag");
+            return Ok(());
+        }
+    }
+
     if let Err(e) = log4rs::init_file(opt.log_config_file.as_path(), Default::default()) {
         panic!(
             "rosetta-api failed to load log configuration file: {}, error: {}. (current_dir is: {:?})",
@@ -58,30 +80,57 @@ async fn main() -> std::io::Result<()> {
         build::PKG_VERSION,
     );
 
-    let root_key = match opt.root_key {
-        Some(root_key_path) => Some(parse_threshold_sig_key(root_key_path.as_path())?),
-        None => {
-            if opt.ic_canister_id == ic_nns_constants::LEDGER_CANISTER_ID.to_string() {
-                log::error!("Root key is required when connecting to the mainnet");
-                return Ok(());
-            } else {
-                log::warn!("Data certificate will not be verified due to missing root key");
-            }
-            None
-        }
-    };
     log::info!("Listening on {}:{}", opt.listen_address, opt.listen_port);
     let addr = format!("{}:{}", opt.listen_address, opt.listen_port);
 
-    let canister_id =
-        CanisterId::new(PrincipalId::from_str(&opt.ic_canister_id[..]).unwrap()).unwrap();
+    let (root_key, canister_id, url) = if opt.mainnet {
+        // The mainnet root key
+        let root_key_text = r#"MIGCMB0GDSsGAQQBgtx8BQMBAgEGDCsGAQQBgtx8BQMCAQNhAIFMDm7HH6tYOwi9gTc8JVw8NxsuhIY8mKTx4It0I10U+12cDNVG2WhfkToMCyzFNBWDv0tDkuRn25bWW5u0y3FxEvhHLg1aTRRQX/10hLASkQkcX4e5iINGP5gJGguqrg=="#;
+        let decoded = base64::decode(root_key_text).unwrap();
+        let pubkey_bytes = bls12_381::api::public_key_from_der(&decoded).unwrap();
+        let root_key = ThresholdSigPublicKey::from(pubkey_bytes);
 
-    let url = url::Url::parse(&opt.ic_url[..]).unwrap();
+        let canister_id = ic_nns_constants::LEDGER_CANISTER_ID;
+
+        let url = if opt.not_whitelisted {
+            url::Url::parse("https://ic0.dev").unwrap()
+        } else {
+            url::Url::parse("https://rosetta.dfinity.network").unwrap()
+        };
+
+        (Some(root_key), canister_id, url)
+    } else {
+        let root_key = match opt.root_key {
+            Some(root_key_path) => Some(parse_threshold_sig_key(root_key_path.as_path())?),
+            None => {
+                log::warn!("Data certificate will not be verified due to missing root key");
+                None
+            }
+        };
+
+        let canister_id =
+            CanisterId::new(PrincipalId::from_str(&opt.ic_canister_id[..]).unwrap()).unwrap();
+
+        let url = url::Url::parse(&opt.ic_url[..]).unwrap();
+        (root_key, canister_id, url)
+    };
+
+    let store_type = if opt.in_memory_store {
+        log::info!("Using in-memory block store");
+        StoreType::InMemory
+    } else {
+        let fsync = !opt.disable_fsync;
+        log::info!(
+            "Using on-disk block store with fsync {}",
+            if fsync { "enabled" } else { "disabled" }
+        );
+        StoreType::OnDisk(opt.store_location, fsync)
+    };
 
     let client = ledger_client::LedgerClient::create_on_disk(
         url,
         canister_id,
-        &opt.store_location,
+        store_type,
         opt.store_max_blocks,
         opt.offline,
         root_key,

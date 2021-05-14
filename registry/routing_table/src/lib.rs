@@ -183,8 +183,6 @@ impl CanisterIdRanges {
             }
         }
 
-        // TODO: we could (and probably should) also require that the
-        // sequence is gap free.
         Ok(())
     }
 
@@ -317,9 +315,6 @@ impl RoutingTable {
             previous_end = Some(range.end);
         }
 
-        // TODO: we could (and probably should) also require that
-        // adjacent ranges don't specify the same subnet ID, as the
-        // ranges ought to be merged in this case.
         Ok(())
     }
 

@@ -21,7 +21,13 @@ mod tests;
 mod acceptor {
     use super::*;
 
-    /// Builds the server side TLS acceptor
+    /// Builds a TLS acceptor to establish TLS connections on the server side.
+    ///
+    /// For the exact configuration details, see the documentation of the
+    /// `TlsHandshake` trait in the `ic-crypto-tls-interfaces` crate.
+    ///
+    /// # Errors
+    /// * `CreateTlsAcceptorError` if the creation of the acceptor failed
     pub fn tls_acceptor(
         private_key: &PKey<Private>,
         server_cert: &X509,
@@ -59,6 +65,7 @@ mod acceptor {
         builder.set_verify(SslVerifyMode::PEER);
     }
 
+    /// A TLS acceptor couldn't be created.
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct CreateTlsAcceptorError {
         pub description: String,
@@ -80,7 +87,13 @@ mod acceptor {
 mod connector {
     use super::*;
 
-    /// Builds the client side TLS connector
+    /// Builds a TLS connector to establish TLS connections on the client side.
+    ///
+    /// For the exact configuration details, see the documentation of the
+    /// `TlsHandshake` trait in the `ic-crypto-tls-interfaces` crate.
+    ///
+    /// # Errors
+    /// * `CreateTlsConnectorError` if the creation of the connector failed
     pub fn tls_connector(
         private_key: &PKey<Private>,
         client_cert: &X509,
@@ -115,6 +128,7 @@ mod connector {
         })
     }
 
+    /// A TLS connector couldn't be created.
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct CreateTlsConnectorError {
         pub description: String,

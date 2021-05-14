@@ -1,3 +1,4 @@
+//! Functionality to generate key material to be used for TLS connections.
 use openssl::asn1::Asn1Integer;
 use openssl::{
     asn1::Asn1Time,
@@ -15,6 +16,8 @@ use zeroize::Zeroize;
 #[cfg(test)]
 mod tests;
 
+/// The raw bytes of a DER-encoded X.509 certificate containing an Ed25519
+/// public key.
 pub struct TlsEd25519CertificateDerBytes {
     pub bytes: Vec<u8>,
 }
@@ -28,11 +31,14 @@ impl TryFrom<&TlsEd25519CertificateDerBytes> for X509 {
     }
 }
 
+/// The parsing of the DER representation of an X.509 certificate with an
+/// Ed25519 key failed.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub enum TlsEd25519CertificateDerBytesParseError {
     CertificateParsingError,
 }
 
+/// The raw bytes of a DER-encoded Ed25519 secret key.
 #[derive(Clone, Eq, PartialEq, Zeroize, Deserialize, Serialize)]
 pub struct TlsEd25519SecretKeyDerBytes {
     #[serde(with = "serde_bytes")]
