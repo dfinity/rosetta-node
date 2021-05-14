@@ -146,8 +146,8 @@ impl LedgerAccess for TestLedger {
         &self.canister_id
     }
 
-    fn testnet_url(&self) -> &Url {
-        panic!("Testnet url not available");
+    fn network_url(&self) -> &Url {
+        panic!("Network url not available");
     }
 
     async fn submit(
