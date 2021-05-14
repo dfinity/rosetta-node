@@ -41,7 +41,7 @@ pub trait LedgerAccess {
     async fn read_blocks<'a>(&'a self) -> Box<dyn Deref<Target = Blocks> + 'a>;
     async fn sync_blocks(&self, stopped: Arc<AtomicBool>) -> Result<(), ApiError>;
     fn ledger_canister_id(&self) -> &CanisterId;
-    fn testnet_url(&self) -> &Url;
+    fn network_url(&self) -> &Url;
     async fn submit(
         &self,
         _envelopes: Envelopes,
@@ -53,7 +53,7 @@ pub struct LedgerClient {
     blockchain: RwLock<Blocks>,
     canister_id: CanisterId,
     canister_access: Option<CanisterAccess>,
-    testnet_url: Url,
+    network_url: Url,
     store_max_blocks: Option<u64>,
     offline: bool,
     root_key: Option<ThresholdSigPublicKey>,
@@ -66,7 +66,7 @@ pub enum StoreType {
 
 impl LedgerClient {
     pub async fn create_on_disk(
-        testnet_url: Url,
+        network_url: Url,
         canister_id: CanisterId,
         store_type: StoreType,
         store_max_blocks: Option<u64>,
@@ -90,7 +90,7 @@ impl LedgerClient {
         } else {
             let http_client = HttpClient::new();
             let canister_access =
-                CanisterAccess::new(testnet_url.clone(), canister_id, http_client);
+                CanisterAccess::new(network_url.clone(), canister_id, http_client);
             Self::verify_store(&blocks, &canister_access).await?;
 
             Some(canister_access)
@@ -119,7 +119,7 @@ impl LedgerClient {
             blockchain: RwLock::new(blocks),
             canister_id,
             canister_access,
-            testnet_url,
+            network_url,
             store_max_blocks,
             offline,
             root_key,
@@ -436,8 +436,8 @@ impl LedgerAccess for LedgerClient {
         &self.canister_id
     }
 
-    fn testnet_url(&self) -> &Url {
-        &self.testnet_url
+    fn network_url(&self) -> &Url {
+        &self.network_url
     }
 
     async fn submit(
@@ -479,7 +479,7 @@ impl LedgerAccess for LedgerClient {
         };
 
         let request_id = MessageId::from(submit_request.content.representation_independent_hash());
-        let txn_id = transaction_id(&submit_request);
+        let txn_id = transaction_id(&submit_request)?;
 
         let http_body = SignedRequestBytes::try_from(submit_request).map_err(|e| {
             internal_error(format!(
@@ -497,22 +497,11 @@ impl LedgerAccess for LedgerClient {
             })?;
 
         let url = self
-            .testnet_url
+            .network_url
             .join(&ic_canister_client::update_path(canister_id))
             .expect("URL join failed");
 
         let http_client = reqwest::Client::new();
-        let (body, status) =
-            send_post_request(&http_client, url.as_str(), http_body.into(), TIMEOUT)
-                .await
-                .map_err(internal_error)?;
-
-        if !status.is_success() {
-            let body = String::from_utf8(body).map_err(internal_error)?;
-            return Err(ic_error(status.as_u16(), body));
-        }
-
-        // Cut&paste from canister_client Agent.
 
         // Exponential backoff from 100ms to 10s with a multiplier of 1.3.
         const MIN_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -522,77 +511,38 @@ impl LedgerAccess for LedgerClient {
         let mut poll_interval = MIN_POLL_INTERVAL;
 
         while Instant::now() + poll_interval < deadline {
-            debug!("Waiting {} ms for response", poll_interval.as_millis());
-            actix_rt::time::delay_for(poll_interval).await;
-
             let wait_timeout = TIMEOUT - start_time.elapsed();
 
-            let url = self
-                .testnet_url
-                .join(&ic_canister_client::read_state_path(canister_id))
-                .expect("URL join failed");
-
-            let (body, status) = send_post_request(
+            match send_post_request(
                 &http_client,
                 url.as_str(),
-                read_state_http_body.clone().into(),
+                http_body.clone().into(),
                 wait_timeout,
             )
             .await
-            .map_err(internal_error)?;
-
-            if status.is_success() {
-                let cbor: serde_cbor::Value = serde_cbor::from_slice(&body).map_err(|err| {
-                    internal_error(format!("While parsing the status body: {}", err))
-                })?;
-
-                let status = ic_canister_client::parse_read_state_response(&request_id, cbor)
-                    .map_err(|err| {
-                        internal_error(format!("While parsing the read state response: {}", err))
-                    })?;
-
-                debug!("Read state response: {:?}", status);
-
-                match status.status.as_ref() {
-                    "replied" => match status.reply {
-                        Some(bytes) => {
-                            let block_index: BlockHeight =
-                                ProtoBuf::from_bytes(bytes).map(|c| c.0).map_err(|err| {
-                                    internal_error(format!(
-                                        "While parsing the reply of the send call: {}",
-                                        err
-                                    ))
-                                })?;
-                            return txn_id.map(|id| (id, Some(block_index)));
-                        }
-                        None => {
-                            return Err(internal_error("Send returned with no result.".to_owned()));
-                        }
-                    },
-                    "unknown" | "received" | "processing" => {}
-                    "rejected" => {
-                        return Err(ApiError::TransactionRejected(
-                            false,
-                            into_error(
-                                status
-                                    .reject_message
-                                    .unwrap_or_else(|| "(no message)".to_owned()),
-                            ),
-                        ));
+            {
+                Err(err) => {
+                    // Retry client-side errors.
+                    error!("Error while submitting transaction: {}.", err);
+                }
+                Ok((body, status)) => {
+                    if status.is_success() {
+                        break;
                     }
-                    _ => {
-                        return Err(internal_error(format!(
-                            "Send returned unexpected result: {:?} - {:?}",
-                            status.status, status.reject_message
-                        )))
+
+                    // Retry on 5xx errors. We don't want to retry on
+                    // e.g. authentication errors.
+                    let body =
+                        String::from_utf8(body).unwrap_or_else(|_| "<undecodable>".to_owned());
+                    if status.is_server_error() {
+                        error!(
+                            "HTTP error {} while submitting transaction: {}.",
+                            status, body
+                        );
+                    } else {
+                        return Err(ic_error(status.as_u16(), body));
                     }
                 }
-            } else {
-                let body = String::from_utf8(body).map_err(internal_error)?;
-                error!(
-                    "HTTP error {} while reading the IC state: {}.",
-                    status, body
-                );
             }
 
             // Bump the poll interval and compute the next poll time (based on current wall
@@ -602,13 +552,131 @@ impl LedgerAccess for LedgerClient {
                 .min(MAX_POLL_INTERVAL);
         }
 
-        // We didn't get a response in 30 seconds. Let the client handle it.
-        error!(
-            "Block submission took longer than {:?} to complete.",
-            TIMEOUT
-        );
+        let wait_for_result = || {
+            async {
+                // Cut&paste from canister_client Agent.
 
-        txn_id.map(|id| (id, None))
+                let mut poll_interval = MIN_POLL_INTERVAL;
+
+                while Instant::now() + poll_interval < deadline {
+                    debug!("Waiting {} ms for response", poll_interval.as_millis());
+                    actix_rt::time::delay_for(poll_interval).await;
+
+                    let wait_timeout = TIMEOUT - start_time.elapsed();
+
+                    let url = self
+                        .network_url
+                        .join(&ic_canister_client::read_state_path(canister_id))
+                        .expect("URL join failed");
+
+                    match send_post_request(
+                        &http_client,
+                        url.as_str(),
+                        read_state_http_body.clone().into(),
+                        wait_timeout,
+                    )
+                    .await
+                    {
+                        Err(err) => {
+                            // Retry client-side errors.
+                            error!("Error while reading the IC state: {}.", err);
+                        }
+                        Ok((body, status)) => {
+                            if status.is_success() {
+                                let cbor: serde_cbor::Value = serde_cbor::from_slice(&body)
+                                    .map_err(|err| {
+                                        format!("While parsing the status body: {}", err)
+                                    })?;
+
+                                let status = ic_canister_client::parse_read_state_response(
+                                    &request_id,
+                                    cbor,
+                                )
+                                .map_err(|err| {
+                                    format!("While parsing the read state response: {}", err)
+                                })?;
+
+                                debug!("Read state response: {:?}", status);
+
+                                match status.status.as_ref() {
+                                    "replied" => match status.reply {
+                                        Some(bytes) => {
+                                            let block_index: BlockHeight =
+                                                ProtoBuf::from_bytes(bytes).map(|c| c.0).map_err(
+                                                    |err| {
+                                                        format!(
+                                                    "While parsing the reply of the send call: {}",
+                                                    err
+                                                )
+                                                    },
+                                                )?;
+                                            return Ok(Ok(block_index));
+                                        }
+                                        None => {
+                                            return Err("Send returned with no result.".to_owned());
+                                        }
+                                    },
+                                    "unknown" | "received" | "processing" => {}
+                                    "rejected" => {
+                                        return Ok(Err(ApiError::TransactionRejected(
+                                            false,
+                                            into_error(
+                                                status
+                                                    .reject_message
+                                                    .unwrap_or_else(|| "(no message)".to_owned()),
+                                            ),
+                                        )));
+                                    }
+                                    _ => {
+                                        return Err(format!(
+                                            "Send returned unexpected result: {:?} - {:?}",
+                                            status.status, status.reject_message
+                                        ))
+                                    }
+                                }
+                            } else {
+                                let body = String::from_utf8(body)
+                                    .unwrap_or_else(|_| "<undecodable>".to_owned());
+                                let err = format!(
+                                    "HTTP error {} while reading the IC state: {}.",
+                                    status, body
+                                );
+                                if status.is_server_error() {
+                                    // Retry on 5xx errors.
+                                    error!("{}", err);
+                                } else {
+                                    return Err(err);
+                                }
+                            }
+                        }
+                    };
+
+                    // Bump the poll interval and compute the next poll time (based on current wall
+                    // time, so we don't spin without delay after a slow poll).
+                    poll_interval = poll_interval
+                        .mul_f32(POLL_INTERVAL_MULTIPLIER)
+                        .min(MAX_POLL_INTERVAL);
+                }
+
+                // We didn't get a response in 30 seconds. Let the client handle it.
+                return Err(format!(
+                    "Block submission took longer than {:?} to complete.",
+                    TIMEOUT
+                ));
+            }
+        };
+
+        /* Only return a non-200 result in case of an error from the
+         * ledger canister. Otherwise just log the error and return a
+         * 200 result with no block index. */
+        match wait_for_result().await {
+            Ok(Ok(block_index)) => Ok((txn_id, Some(block_index))),
+            Ok(Err(err)) => Err(err),
+            Err(err) => {
+                error!("Error submitting transaction {:?}: {}.", txn_id, err);
+                Ok((txn_id, None))
+            }
+        }
     }
 
     async fn chain_length(&self) -> BlockHeight {
