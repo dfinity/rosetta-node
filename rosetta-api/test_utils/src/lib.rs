@@ -1,35 +1,41 @@
 use ic_rosetta_api::convert::{
-    amount_, from_hex, from_operations, from_public_key, operations, signed_amount, to_hex,
-    to_model_account_identifier,
+    amount_, from_hex, from_model_account_identifier, from_operations, from_public_key, operations,
+    principal_id_from_public_key, signed_amount, to_hex, to_model_account_identifier,
 };
+use ic_rosetta_api::models::Error as RosettaError;
 use ic_rosetta_api::models::{
     ConstructionCombineResponse, ConstructionPayloadsResponse, CurveType, PublicKey, Signature,
-    SignatureType,
+    SignatureType, TransactionIdentifier,
 };
-use ic_rosetta_api::models::{Error as RosettaError, TransactionIdentifier};
-use ic_types::{time, PrincipalId};
+use ic_types::{messages::Blob, time, PrincipalId};
 
 use ledger_canister::{AccountIdentifier, BlockHeight, ICPTs, Transfer};
 
 pub use ed25519_dalek::Keypair as EdKeypair;
 use log::debug;
 use rand::{rngs::StdRng, seq::SliceRandom, thread_rng, SeedableRng};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 pub mod rosetta_api_serv;
 pub mod sample_data;
-pub mod zondax_gen;
 
 use rosetta_api_serv::RosettaApiHandle;
+use std::path::Path;
+
+pub fn to_public_key(keypair: &EdKeypair) -> PublicKey {
+    PublicKey {
+        hex_bytes: to_hex(&keypair.public.to_bytes()),
+        // This is a guess
+        curve_type: CurveType::Edwards25519,
+    }
+}
 
 pub fn make_user(seed: u64) -> (AccountIdentifier, EdKeypair, PublicKey, PrincipalId) {
     let mut rng = StdRng::seed_from_u64(seed);
     let keypair = EdKeypair::generate(&mut rng);
 
-    let public_key = PublicKey {
-        hex_bytes: to_hex(&keypair.public.to_bytes()),
-        // This is a guess
-        curve_type: CurveType::EDWARDS25519,
-    };
+    let public_key = to_public_key(&keypair);
 
     let public_key_der =
         ic_canister_client::ed25519_public_key_to_der(keypair.public.to_bytes().to_vec());
@@ -56,42 +62,60 @@ pub fn acc_id(seed: u64) -> AccountIdentifier {
     PrincipalId::new_self_authenticating(&public_key_der).into()
 }
 
-pub async fn prepare_txn(
+pub struct TransferInfo {
+    pub transfer: Transfer,
+    pub sender_keypair: Arc<EdKeypair>,
+}
+
+pub async fn prepare_multiple_txn(
     ros: &RosettaApiHandle,
-    trans: Transfer,
-    sender_public_key: PublicKey,
+    transfers: &[TransferInfo],
     accept_suggested_fee: bool,
     ingress_end: Option<u64>,
     created_at_time: Option<u64>,
 ) -> Result<(ConstructionPayloadsResponse, ICPTs), RosettaError> {
-    let (sender_acc, fee) = match trans.clone() {
-        Transfer::Send { from, fee, .. } => (from, fee),
-        _ => panic!("Only Send supported here"),
-    };
-    let trans_fee_amount = amount_(fee).unwrap();
-
-    let mut ops = operations(&trans, false).unwrap();
-
-    // first ask for the fee
+    let mut all_ops = Vec::new();
     let mut dry_run_ops = Vec::new();
-    let mut fee_found = false;
-    for o in &ops {
-        if o._type == "FEE" {
-            fee_found = true;
-        } else {
-            dry_run_ops.push(o.clone());
+    let mut all_sender_account_ids = Vec::new();
+    let mut all_sender_pks = Vec::new();
+    let mut trans_fee_amount = None;
+
+    for transfer in transfers {
+        let (sender_acc, fee) = match transfer.transfer.clone() {
+            Transfer::Send { from, fee, .. } => (from, fee),
+            _ => panic!("Only Send supported here"),
+        };
+        trans_fee_amount = Some(amount_(fee).unwrap());
+
+        let ops = operations(&transfer.transfer, false).unwrap();
+
+        all_sender_pks.push(to_public_key(&transfer.sender_keypair));
+        all_sender_account_ids.push(to_model_account_identifier(&sender_acc));
+
+        // first ask for the fee
+        let mut fee_found = false;
+        for o in ops {
+            if o._type == "FEE" {
+                fee_found = true;
+            } else {
+                dry_run_ops.push(o.clone());
+            }
+            all_ops.push(o);
         }
+
+        // just a sanity check
+        assert!(fee_found, "There should be a fee op in operations");
     }
-    // just a sanity check
-    assert!(fee_found, "There should be a fee op in operations");
+
     let pre_res = ros.construction_preprocess(dry_run_ops).await.unwrap()?;
     assert_eq!(
         pre_res.required_public_keys.unwrap(),
-        vec![to_model_account_identifier(&sender_acc)],
-        "Preprocess should report that sender's pk is required"
+        all_sender_account_ids,
+        "Preprocess should report that senders' pks are required"
     );
+
     let metadata_res = ros
-        .construction_metadata(pre_res.options, Some(vec![sender_public_key.clone()]))
+        .construction_metadata(pre_res.options, Some(all_sender_pks.clone()))
         .await
         .unwrap()?;
     let mut suggested_fee = metadata_res.suggested_fee.unwrap();
@@ -100,7 +124,7 @@ pub async fn prepare_txn(
     let fee_icpts = ICPTs::from_e8s(dry_run_suggested_fee.value.parse().unwrap());
 
     if accept_suggested_fee {
-        for o in &mut ops {
+        for o in &mut all_ops {
             if o._type == "FEE" {
                 o.amount = Some(signed_amount(-(fee_icpts.get_e8s() as i128)));
             }
@@ -108,18 +132,21 @@ pub async fn prepare_txn(
     } else {
         // we assume here that we've got a correct transaction; double check that the
         // fee really is what it should be.
-        assert_eq!(dry_run_suggested_fee, trans_fee_amount);
+        assert_eq!(dry_run_suggested_fee, trans_fee_amount.unwrap());
     }
 
     // now try with operations containing the correct fee
-    let pre_res = ros.construction_preprocess(ops.clone()).await.unwrap()?;
+    let pre_res = ros
+        .construction_preprocess(all_ops.clone())
+        .await
+        .unwrap()?;
     assert_eq!(
         pre_res.required_public_keys.unwrap(),
-        vec![to_model_account_identifier(&sender_acc)],
+        all_sender_account_ids,
         "Preprocess should report that sender's pk is required"
     );
     let metadata_res = ros
-        .construction_metadata(pre_res.options, Some(vec![sender_public_key.clone()]))
+        .construction_metadata(pre_res.options, Some(all_sender_pks.clone()))
         .await
         .unwrap()?;
     let mut suggested_fee = metadata_res.suggested_fee.clone().unwrap();
@@ -131,8 +158,8 @@ pub async fn prepare_txn(
 
     ros.construction_payloads(
         Some(metadata_res.metadata.clone()),
-        ops,
-        Some(vec![sender_public_key]),
+        all_ops,
+        Some(all_sender_pks),
         ingress_end,
         created_at_time,
     )
@@ -141,25 +168,61 @@ pub async fn prepare_txn(
     .map(|resp| (resp, fee_icpts))
 }
 
+pub async fn prepare_txn(
+    ros: &RosettaApiHandle,
+    transfer: Transfer,
+    sender_keypair: Arc<EdKeypair>,
+    accept_suggested_fee: bool,
+    ingress_end: Option<u64>,
+    created_at_time: Option<u64>,
+) -> Result<(ConstructionPayloadsResponse, ICPTs), RosettaError> {
+    prepare_multiple_txn(
+        ros,
+        &[TransferInfo {
+            transfer,
+            sender_keypair,
+        }],
+        accept_suggested_fee,
+        ingress_end,
+        created_at_time,
+    )
+    .await
+}
+
 pub async fn sign_txn(
     ros: &RosettaApiHandle,
-    keypair: &EdKeypair,
-    public_key: &PublicKey,
+    keypairs: &[Arc<EdKeypair>],
     payloads: ConstructionPayloadsResponse,
 ) -> Result<ConstructionCombineResponse, RosettaError> {
     use ed25519_dalek::Signer;
+
+    let mut keypairs_map = HashMap::new();
+    for kp in keypairs {
+        let pid = principal_id_from_public_key(&to_public_key(&kp)).unwrap();
+        let acc = AccountIdentifier::from(pid);
+        keypairs_map.insert(acc, Arc::clone(kp));
+    }
 
     let mut signatures: Vec<Signature> = payloads
         .payloads
         .into_iter()
         .map(|p| {
+            // Note: if we can't find the right key pair, just use the first one. This is
+            // necessary for test_wrong_key().
+            let keypair = keypairs_map
+                .get(
+                    &from_model_account_identifier(&p.account_identifier.as_ref().unwrap())
+                        .unwrap(),
+                )
+                .map(|x| Arc::clone(x))
+                .unwrap_or_else(|| Arc::clone(&keypairs[0]));
             let bytes = from_hex(&p.hex_bytes).unwrap();
             let signature_bytes = keypair.sign(&bytes).to_bytes();
             let hex_bytes = to_hex(&signature_bytes);
             Signature {
                 signing_payload: p,
-                public_key: public_key.clone(),
-                signature_type: SignatureType::ED25519,
+                public_key: to_public_key(&keypair),
+                signature_type: SignatureType::Ed25519,
                 hex_bytes,
             }
         })
@@ -180,8 +243,7 @@ pub async fn sign_txn(
 // created matches the one requested.
 pub async fn do_txn(
     ros: &RosettaApiHandle,
-    keypair: &ed25519_dalek::Keypair,
-    public_key: &PublicKey,
+    sender_keypair: Arc<EdKeypair>,
     transfer: Transfer,
     accept_suggested_fee: bool,
     ingress_end: Option<u64>,
@@ -194,10 +256,36 @@ pub async fn do_txn(
     ),
     RosettaError,
 > {
-    let (payloads, charged_fee) = prepare_txn(
+    do_multiple_txn(
         ros,
-        transfer.clone(),
-        public_key.clone(),
+        &[TransferInfo {
+            transfer,
+            sender_keypair,
+        }],
+        accept_suggested_fee,
+        ingress_end,
+        created_at_time,
+    )
+    .await
+}
+
+pub async fn do_multiple_txn(
+    ros: &RosettaApiHandle,
+    transfers: &[TransferInfo],
+    accept_suggested_fee: bool,
+    ingress_end: Option<u64>,
+    created_at_time: Option<u64>,
+) -> Result<
+    (
+        TransactionIdentifier,
+        Option<BlockHeight>,
+        ICPTs, // charged fee
+    ),
+    RosettaError,
+> {
+    let (payloads, charged_fee) = prepare_multiple_txn(
+        ros,
+        transfers,
         accept_suggested_fee,
         ingress_end,
         created_at_time,
@@ -210,10 +298,8 @@ pub async fn do_txn(
         .unwrap()?;
 
     if !accept_suggested_fee {
-        assert_eq!(
-            vec![transfer.clone()],
-            from_operations(parse_res.operations, false).unwrap()
-        );
+        let ts: Vec<_> = transfers.iter().map(|t| t.transfer.clone()).collect();
+        assert_eq!(ts, from_operations(&parse_res.operations, false).unwrap());
     }
 
     // check that we got enough unsigned messages
@@ -223,7 +309,12 @@ pub async fn do_txn(
         assert!(payloads.payloads.len() as u64 + 2 >= intervals * 2);
     }
 
-    let signed = sign_txn(ros, &keypair, &public_key, payloads).await?;
+    let keypairs: Vec<_> = transfers
+        .iter()
+        .map(|t| t.sender_keypair.to_owned())
+        .collect();
+
+    let signed = sign_txn(ros, &keypairs, payloads).await?;
 
     let parse_res = ros
         .construction_parse(true, signed.signed_transaction.clone())
@@ -231,10 +322,8 @@ pub async fn do_txn(
         .unwrap()?;
 
     if !accept_suggested_fee {
-        assert_eq!(
-            vec![transfer.clone()],
-            from_operations(parse_res.operations, false).unwrap()
-        );
+        let ts: Vec<_> = transfers.iter().map(|t| t.transfer.clone()).collect();
+        assert_eq!(ts, from_operations(&parse_res.operations, false).unwrap());
     }
 
     let hash_res = ros
@@ -243,7 +332,7 @@ pub async fn do_txn(
         .unwrap()?;
 
     let submit_res = ros
-        .construction_submit(signed.signed_transaction.clone())
+        .construction_submit(signed.signed_transaction().unwrap())
         .await
         .unwrap()?;
 
@@ -254,7 +343,7 @@ pub async fn do_txn(
 
     // check idempotency
     let submit_res2 = ros
-        .construction_submit(signed.signed_transaction.clone())
+        .construction_submit(signed.signed_transaction().unwrap())
         .await
         .unwrap()?;
     assert_eq!(submit_res, submit_res2);
@@ -268,7 +357,7 @@ pub async fn do_txn(
 
 pub async fn send_icpts(
     ros: &RosettaApiHandle,
-    keypair: &ed25519_dalek::Keypair,
+    keypair: Arc<EdKeypair>,
     dst: AccountIdentifier,
     amount: ICPTs,
 ) -> Result<
@@ -284,7 +373,7 @@ pub async fn send_icpts(
 
 pub async fn send_icpts_with_window(
     ros: &RosettaApiHandle,
-    keypair: &ed25519_dalek::Keypair,
+    keypair: Arc<EdKeypair>,
     dst: AccountIdentifier,
     amount: ICPTs,
     ingress_end: Option<u64>,
@@ -297,12 +386,6 @@ pub async fn send_icpts_with_window(
     ),
     RosettaError,
 > {
-    let public_key = PublicKey {
-        hex_bytes: to_hex(&keypair.public.to_bytes()),
-        // This is a guess
-        curve_type: CurveType::EDWARDS25519,
-    };
-
     let public_key_der =
         ic_canister_client::ed25519_public_key_to_der(keypair.public.to_bytes().to_vec());
 
@@ -315,16 +398,7 @@ pub async fn send_icpts_with_window(
         fee: ICPTs::ZERO,
     };
 
-    do_txn(
-        ros,
-        keypair,
-        &public_key,
-        t,
-        true,
-        ingress_end,
-        created_at_time,
-    )
-    .await
+    do_txn(ros, keypair, t, true, ingress_end, created_at_time).await
 }
 
 pub fn assert_ic_error(err: &RosettaError, code: u32, ic_http_status: u64, text: &str) {
@@ -352,6 +426,22 @@ pub fn assert_canister_error(err: &RosettaError, code: u32, text: &str) {
             .as_str()
             .unwrap()
             .contains(text),
-        format!("rosetta error {:?} does not contain '{}'", err, text)
+        "rosetta error {:?} does not contain '{}'",
+        err,
+        text
     );
+}
+
+pub fn store_threshold_sig_pk<P: AsRef<Path>>(pk: &Blob, path: P) {
+    let mut bytes = vec![];
+    bytes.extend_from_slice(b"-----BEGIN PUBLIC KEY-----\r\n");
+    for chunk in base64::encode(&pk[..]).as_bytes().chunks(64) {
+        bytes.extend_from_slice(chunk);
+        bytes.extend_from_slice(b"\r\n");
+    }
+    bytes.extend_from_slice(b"-----END PUBLIC KEY-----\r\n");
+
+    let path = path.as_ref();
+    std::fs::write(path, bytes)
+        .unwrap_or_else(|e| panic!("failed to store public key to {}: {}", path.display(), e));
 }

@@ -1,5 +1,5 @@
+use crate::balance_book::BalanceBook;
 use crate::convert::{internal_error, invalid_block_id};
-use crate::ledger_client::Balances;
 use crate::models::ApiError;
 
 use ledger_canister::{AccountIdentifier, BlockHeight, EncodedBlock, HashOf, ICPTs};
@@ -7,8 +7,10 @@ use log::{debug, error, trace};
 use serde::{Deserialize, Serialize};
 
 use std::collections::VecDeque;
+use std::convert::TryInto;
 use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 #[derive(candid::CandidType, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct HashedBlock {
@@ -44,6 +46,7 @@ impl From<BlockStoreError> for ApiError {
     fn from(e: BlockStoreError) -> Self {
         match e {
             BlockStoreError::NotFound(idx) => invalid_block_id(format!("Block not found: {}", idx)),
+            // TODO Add a new error type (ApiError::BlockPruned or something like that)
             BlockStoreError::NotAvailable(idx) => {
                 internal_error(format!("Block not available for query: {}", idx))
             }
@@ -55,11 +58,249 @@ impl From<BlockStoreError> for ApiError {
 pub trait BlockStore {
     fn get_at(&self, index: BlockHeight) -> Result<HashedBlock, BlockStoreError>;
     fn push(&mut self, block: HashedBlock) -> Result<(), BlockStoreError>;
-    fn prune(&mut self, hb: &HashedBlock, balances: &Balances) -> Result<(), String>;
-    fn first_snapshot(&self) -> Option<&(HashedBlock, Balances)>;
+    fn prune(&mut self, hb: &HashedBlock, balances: &BalanceBook) -> Result<(), String>;
+    fn first_snapshot(&self) -> Option<&(HashedBlock, BalanceBook)>;
     fn first(&self) -> Result<Option<HashedBlock>, BlockStoreError>;
     fn last_verified(&self) -> Option<BlockHeight>;
     fn mark_last_verified(&mut self, h: BlockHeight) -> Result<(), BlockStoreError>;
+}
+
+pub struct SQLiteStore {
+    location: PathBuf,
+    connection: Mutex<rusqlite::Connection>,
+    base_idx: u64,
+    first_block_snapshot: Option<(HashedBlock, BalanceBook)>,
+}
+
+impl SQLiteStore {
+    pub fn new(
+        location: PathBuf,
+        connection: rusqlite::Connection,
+    ) -> Result<Self, BlockStoreError> {
+        let mut store = Self {
+            location,
+            connection: Mutex::new(connection),
+            base_idx: 0,
+            first_block_snapshot: None,
+        };
+        store.first_block_snapshot = store
+            .read_oldest_block_snapshot()
+            .map_err(BlockStoreError::Other)?;
+
+        if let Some((first_block, _)) = &store.first_block_snapshot {
+            store.base_idx = first_block.index;
+        }
+
+        Ok(store)
+    }
+
+    pub fn create_tables(&self) -> Result<(), rusqlite::Error> {
+        let connection = self.connection.lock().unwrap();
+        connection.execute(
+            r#"CREATE TABLE IF NOT EXISTS blocks (
+      hash BLOB NOT NULL,
+      block BLOB NOT NULL,
+      parent_hash BLOB,
+      idx INTEGER NOT NULL PRIMARY KEY,
+      verified BOOLEAN)"#,
+            [],
+        )?;
+        Ok(())
+    }
+
+    fn oldest_block_snapshot_file_name(&self) -> Box<Path> {
+        self.location.join("oldest_block_snapshot.json").into()
+    }
+
+    fn read_oldest_block_snapshot(&self) -> Result<Option<(HashedBlock, BalanceBook)>, String> {
+        let file_name = self.oldest_block_snapshot_file_name();
+        let file = OpenOptions::new().read(true).open(file_name);
+        match file.map_err(|e| e.kind()) {
+            Ok(f) => {
+                debug!("Loading oldest block snapshot");
+                let (hb, bal, icpt_pool): (
+                    HashedBlock,
+                    Vec<(AccountIdentifier, usize, ICPTs)>,
+                    ICPTs,
+                ) = serde_json::from_reader(f).map_err(|e| {
+                    format!(
+                        "Loading balances snapshot failed with error: {}. \
+                    Possibly the snapshot format changed and a full resync \
+                    on a clean block store is required.",
+                        e.to_string()
+                    )
+                })?;
+                let mut balance_book = BalanceBook::default();
+                for (acc, num_pruned, amount) in &bal {
+                    balance_book.store.insert(*acc, hb.index, *amount);
+                    balance_book
+                        .store
+                        .acc_to_hist
+                        .get_mut(acc)
+                        .unwrap()
+                        .num_pruned_transactions = *num_pruned;
+                }
+                balance_book.icpt_pool = icpt_pool;
+                Ok(Some((hb, balance_book)))
+            }
+            Err(std::io::ErrorKind::NotFound) => {
+                debug!("No oldest block snapshot present");
+                Ok(None)
+            }
+            Err(e) => Err(format!("Reading file failed: {:?}", e)),
+        }
+    }
+
+    fn write_oldest_block_snapshot(
+        &mut self,
+        hb: &HashedBlock,
+        balances: &BalanceBook,
+    ) -> Result<(), String> {
+        debug!("Writing oldest block snapshot. Block height: {}", hb.index);
+        let file_name = self.oldest_block_snapshot_file_name();
+        let file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&file_name)
+            .map_err(|e| e.to_string())?;
+
+        if let Ok(Some(b)) = self.first() {
+            // this check is made in upper levels, but for readability:
+            assert!(b.index <= hb.index);
+        }
+
+        let mut balances_snapshot = BalanceBook::default();
+        let bal: Vec<_> = balances
+            .store
+            .acc_to_hist
+            .iter()
+            .map(|(acc, hist)| {
+                let amount = hist.get_at(hb.index).unwrap(); //won't fail if first.idx <= hb.idx
+                balances_snapshot.icpt_pool -= amount;
+                balances_snapshot.store.insert(*acc, hb.index, amount);
+                (acc, hist.num_pruned_transactions, amount)
+            })
+            .collect();
+        serde_json::to_writer(&file, &(hb, bal, balances_snapshot.icpt_pool))
+            .map_err(|e| e.to_string())?;
+        self.first_block_snapshot = Some((hb.clone(), balances_snapshot));
+        Ok(())
+    }
+}
+
+fn vec_into_array(v: Vec<u8>) -> [u8; 32] {
+    let ba: Box<[u8; 32]> = match v.into_boxed_slice().try_into() {
+        Ok(ba) => ba,
+        Err(v) => panic!("Expected a Vec of length 32 but it was {}", v.len()),
+    };
+    *ba
+}
+
+impl BlockStore for SQLiteStore {
+    fn get_at(&self, index: BlockHeight) -> Result<HashedBlock, BlockStoreError> {
+        if 0 < index && index < self.base_idx {
+            return Err(BlockStoreError::NotAvailable(index));
+        }
+
+        let connection = self.connection.lock().unwrap();
+        let mut stmt = connection
+            .prepare("SELECT hash, block, parent_hash, idx FROM blocks WHERE idx = ?")
+            .map_err(|e| BlockStoreError::Other(e.to_string()))?;
+        let mut blocks = stmt
+            .query_map(rusqlite::params![index], |row| {
+                Ok(HashedBlock {
+                    hash: row.get(0).map(|bytes| HashOf::new(vec_into_array(bytes)))?,
+                    block: row
+                        .get(1)
+                        .map(|bytes: Vec<u8>| EncodedBlock::from(bytes.into_boxed_slice()))?,
+                    parent_hash: row.get(2).map(|opt_bytes: Option<Vec<u8>>| {
+                        opt_bytes.map(|bytes| HashOf::new(vec_into_array(bytes)))
+                    })?,
+                    index: row.get(3)?,
+                })
+            })
+            .map_err(|e| BlockStoreError::Other(e.to_string()))?;
+        blocks
+            .next()
+            .ok_or(BlockStoreError::NotFound(index))
+            .map(|block| block.unwrap())
+    }
+
+    fn push(&mut self, hb: HashedBlock) -> Result<(), BlockStoreError> {
+        let hash = hb.hash.into_bytes().to_vec();
+        let parent_hash = hb.parent_hash.map(|ph| ph.into_bytes().to_vec());
+        let connection = self.connection.lock().unwrap();
+        connection
+            .execute(
+                "INSERT INTO blocks (hash, block, parent_hash, idx, verified) VALUES (?1, ?2, ?3, ?4, FALSE)",
+                rusqlite::params![hash, hb.block.0, parent_hash, hb.index],
+            )
+            .map_err(|e| BlockStoreError::Other(e.to_string()))?;
+        Ok(())
+    }
+
+    // FIXME: Make `prune` return `BlockStoreError` on error
+    fn prune(&mut self, hb: &HashedBlock, balances: &BalanceBook) -> Result<(), String> {
+        self.write_oldest_block_snapshot(hb, balances)?;
+        let connection = self.connection.lock().unwrap();
+        connection
+            .execute(
+                "DELETE FROM blocks WHERE idx > 0 AND idx < ?",
+                rusqlite::params![hb.index],
+            )
+            .map_err(|e| e.to_string())?;
+        self.base_idx = hb.index;
+        Ok(())
+    }
+
+    fn first_snapshot(&self) -> Option<&(HashedBlock, BalanceBook)> {
+        self.first_block_snapshot.as_ref()
+    }
+
+    fn first(&self) -> Result<Option<HashedBlock>, BlockStoreError> {
+        let connection = self.connection.lock().unwrap();
+        let mut stmt = connection
+            .prepare("SELECT hash, block, parent_hash, idx FROM blocks LIMIT 1")
+            .map_err(|e| BlockStoreError::Other(e.to_string()))?;
+        let mut blocks = stmt
+            .query_map([], |row| {
+                Ok(HashedBlock {
+                    hash: row.get(0).map(|bytes| HashOf::new(vec_into_array(bytes)))?,
+                    block: row
+                        .get(1)
+                        .map(|bytes: Vec<u8>| EncodedBlock::from(bytes.into_boxed_slice()))?,
+                    parent_hash: row.get(2).map(|opt_bytes: Option<Vec<u8>>| {
+                        opt_bytes.map(|bytes| HashOf::new(vec_into_array(bytes)))
+                    })?,
+                    index: row.get(3)?,
+                })
+            })
+            .map_err(|e| BlockStoreError::Other(e.to_string()))?;
+        Ok(blocks.next().map(|block| block.unwrap()))
+    }
+
+    // FIXME: Change the return type to Result<Option<BlockHeight>, BlockStoreError>
+    fn last_verified(&self) -> Option<BlockHeight> {
+        let connection = self.connection.lock().unwrap();
+        let mut stmt = connection
+            .prepare("SELECT idx FROM blocks WHERE verified = TRUE ORDER BY idx DESC LIMIT 1")
+            .map_err(|e| BlockStoreError::Other(e.to_string()))
+            .unwrap();
+        let mut rows = stmt.query([]).unwrap();
+
+        rows.next().unwrap().map(|row| row.get(0).unwrap())
+    }
+
+    fn mark_last_verified(&mut self, block_height: BlockHeight) -> Result<(), BlockStoreError> {
+        let connection = self.connection.lock().unwrap();
+        let mut stmt = connection
+            .prepare("UPDATE blocks SET verified = TRUE WHERE idx = ?")
+            .map_err(|e| BlockStoreError::Other(e.to_string()))?;
+        stmt.execute(rusqlite::params![block_height])
+            .map_err(|e| BlockStoreError::Other(e.to_string()))?;
+        Ok(())
+    }
 }
 
 pub struct InMemoryStore {
@@ -90,10 +331,7 @@ impl BlockStore for InMemoryStore {
     fn get_at(&self, index: u64) -> Result<HashedBlock, BlockStoreError> {
         if index < self.base_idx {
             if index == 0 {
-                return self
-                    .genesis
-                    .clone()
-                    .ok_or_else(|| BlockStoreError::NotFound(0));
+                return self.genesis.clone().ok_or(BlockStoreError::NotFound(0));
             }
             return Err(BlockStoreError::NotAvailable(index));
         }
@@ -108,7 +346,7 @@ impl BlockStore for InMemoryStore {
         Ok(())
     }
 
-    fn prune(&mut self, hb: &HashedBlock, _balances: &Balances) -> Result<(), String> {
+    fn prune(&mut self, hb: &HashedBlock, _balances: &BalanceBook) -> Result<(), String> {
         if self.genesis.is_none() {
             self.genesis = self.inner.front().cloned();
         }
@@ -119,7 +357,7 @@ impl BlockStore for InMemoryStore {
         Ok(())
     }
 
-    fn first_snapshot(&self) -> Option<&(HashedBlock, Balances)> {
+    fn first_snapshot(&self) -> Option<&(HashedBlock, BalanceBook)> {
         None
     }
 
@@ -144,7 +382,7 @@ impl BlockStore for InMemoryStore {
 
 pub struct OnDiskStore {
     location: PathBuf,
-    first_block_snapshot: Option<(HashedBlock, Balances)>,
+    first_block_snapshot: Option<(HashedBlock, BalanceBook)>,
     last_verified_idx: Option<BlockHeight>,
     fsync: bool,
 }
@@ -199,19 +437,36 @@ impl OnDiskStore {
         }
     }
 
-    fn read_oldest_block_snapshot(&self) -> Result<Option<(HashedBlock, Balances)>, String> {
+    fn read_oldest_block_snapshot(&self) -> Result<Option<(HashedBlock, BalanceBook)>, String> {
         let file_name = self.oldest_block_snapshot_file_name();
         let file = OpenOptions::new().read(true).open(file_name);
         match file.map_err(|e| e.kind()) {
             Ok(f) => {
                 debug!("Loading oldest block snapshot");
-                let (hb, bal, icpt_pool): (HashedBlock, Vec<(AccountIdentifier, ICPTs)>, ICPTs) =
-                    serde_json::from_reader(f).map_err(|e| e.to_string())?;
-                let mut balances = Balances::default();
-                balances.icpt_pool = icpt_pool;
-                balances.store.0 = immutable_chunkmap::map::Map::new()
-                    .insert_many(bal.iter().map(|(k, v)| (*k, *v)));
-                Ok(Some((hb, balances)))
+                let (hb, bal, icpt_pool): (
+                    HashedBlock,
+                    Vec<(AccountIdentifier, usize, ICPTs)>,
+                    ICPTs,
+                ) = serde_json::from_reader(f).map_err(|e| {
+                    format!(
+                        "Loading balances snapshot failed with error: {}. \
+                    Possibly the snapshot format changed and a full resync \
+                    on a clean block store is required.",
+                        e.to_string()
+                    )
+                })?;
+                let mut balance_book = BalanceBook::default();
+                for (acc, num_pruned, amount) in &bal {
+                    balance_book.store.insert(*acc, hb.index, *amount);
+                    balance_book
+                        .store
+                        .acc_to_hist
+                        .get_mut(acc)
+                        .unwrap()
+                        .num_pruned_transactions = *num_pruned;
+                }
+                balance_book.icpt_pool = icpt_pool;
+                Ok(Some((hb, balance_book)))
             }
             Err(std::io::ErrorKind::NotFound) => {
                 debug!("No oldest block snapshot present");
@@ -224,7 +479,7 @@ impl OnDiskStore {
     fn write_oldest_block_snapshot(
         &mut self,
         hb: &HashedBlock,
-        balances: &Balances,
+        balances: &BalanceBook,
     ) -> Result<(), String> {
         debug!("Writing oldest block snapshot. Block height: {}", hb.index);
         let file_name = self.oldest_block_snapshot_file_name();
@@ -235,10 +490,25 @@ impl OnDiskStore {
             .open(&file_name)
             .map_err(|e| e.to_string())?;
 
-        // TODO implement Serialize for Balances
-        let b = balances.store.0.clone();
-        let bal: Vec<_> = b.into_iter().collect();
-        serde_json::to_writer(&file, &(hb, bal, balances.icpt_pool)).map_err(|e| e.to_string())?;
+        if let Ok(Some(b)) = self.first() {
+            // this check is made in upper levels, but for readability:
+            assert!(b.index <= hb.index);
+        }
+
+        let mut balances_snapshot = BalanceBook::default();
+        let bal: Vec<_> = balances
+            .store
+            .acc_to_hist
+            .iter()
+            .map(|(acc, hist)| {
+                let amount = hist.get_at(hb.index).unwrap(); //won't fail if first.idx <= hb.idx
+                balances_snapshot.icpt_pool -= amount;
+                balances_snapshot.store.insert(*acc, hb.index, amount);
+                (acc, hist.num_pruned_transactions, amount)
+            })
+            .collect();
+        serde_json::to_writer(&file, &(hb, bal, balances_snapshot.icpt_pool))
+            .map_err(|e| e.to_string())?;
 
         if self.fsync {
             file.sync_data().map_err(|e| {
@@ -251,7 +521,7 @@ impl OnDiskStore {
             })?;
         }
 
-        self.first_block_snapshot = Some((hb.clone(), balances.clone()));
+        self.first_block_snapshot = Some((hb.clone(), balances_snapshot));
         Ok(())
     }
 }
@@ -303,7 +573,7 @@ impl BlockStore for OnDiskStore {
         Ok(())
     }
 
-    fn prune(&mut self, hb: &HashedBlock, balances: &Balances) -> Result<(), String> {
+    fn prune(&mut self, hb: &HashedBlock, balances: &BalanceBook) -> Result<(), String> {
         let prune_start_idx = self
             .first_block_snapshot
             .as_ref()
@@ -324,7 +594,7 @@ impl BlockStore for OnDiskStore {
         Ok(())
     }
 
-    fn first_snapshot(&self) -> Option<&(HashedBlock, Balances)> {
+    fn first_snapshot(&self) -> Option<&(HashedBlock, BalanceBook)> {
         self.first_block_snapshot.as_ref()
     }
 

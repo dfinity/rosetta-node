@@ -18,7 +18,7 @@ enum Trans {
 }
 
 pub struct Scribe {
-    accounts: VecDeque<AccountIdentifier>,
+    pub accounts: VecDeque<AccountIdentifier>,
     pub balance_book: BTreeMap<AccountIdentifier, ICPTs>,
     pub blockchain: VecDeque<HashedBlock>,
     transactions: VecDeque<Trans>,

@@ -1,4 +1,5 @@
 use rand::seq::SliceRandom;
+use std::time::Duration;
 use url::Url;
 
 use ic_canister_client::{Agent, Sender};
@@ -21,7 +22,18 @@ pub struct RegistryCanister {
 }
 
 impl RegistryCanister {
-    pub fn new(url: Vec<Url>) -> RegistryCanister {
+    pub fn new(url: Vec<Url>) -> Self {
+        Self::new_with_agent_transformer(url, |a| a)
+    }
+
+    pub fn new_with_query_timeout(url: Vec<Url>, t: Duration) -> Self {
+        Self::new_with_agent_transformer(url, |a| a.with_query_timeout(t))
+    }
+
+    fn new_with_agent_transformer<F>(url: Vec<Url>, f: F) -> Self
+    where
+        F: FnMut(Agent) -> Agent,
+    {
         assert!(
             !url.is_empty(),
             "empty list of URLs passed to RegistryCanister::new()"
@@ -32,6 +44,7 @@ impl RegistryCanister {
             agent: url
                 .iter()
                 .map(|url| Agent::new(url.clone(), Sender::Anonymous))
+                .map(f)
                 .collect(),
         }
     }

@@ -1,16 +1,26 @@
 //! ECDSA signature methods
 use super::types;
+use ic_crypto_internal_basic_sig_der_utils::PkixAlgorithmIdentifier;
 use ic_types::crypto::{AlgorithmId, CryptoError, CryptoResult};
 use openssl::bn::{BigNum, BigNumContext};
 use openssl::ec::{EcGroup, EcKey, EcPoint};
 use openssl::ecdsa::EcdsaSig;
 use openssl::nid::Nid;
 use openssl::pkey::PKey;
+use simple_asn1::{oid, BigUint, OID};
 
 #[cfg(test)]
 mod tests;
 
 const CURVE_NAME: Nid = Nid::SECP256K1;
+
+/// Return the algorithm identifier associated with ECDSA secp256k1
+pub fn algorithm_identifier() -> PkixAlgorithmIdentifier {
+    PkixAlgorithmIdentifier::new_with_oid_param(
+        oid!(1, 2, 840, 10045, 2, 1),
+        oid!(1, 3, 132, 0, 10),
+    )
+}
 
 // NOTE: both `new_keypair()` and `sign()` are marked as `#[cfg(test)]`
 // because the focus is on the signature verification (rather than creation),
@@ -133,6 +143,22 @@ pub fn public_key_from_der(pk_der: &[u8]) -> CryptoResult<types::PublicKeyBytes>
             key_bytes: Some(Vec::from(pk_der)),
             internal_error: e.to_string(),
         })?;
+    // Check pk_der is in canonical form (uncompressed).
+    let canon =
+        public_key_to_der(&types::PublicKeyBytes::from(pk_bytes.clone())).map_err(|_e| {
+            CryptoError::MalformedPublicKey {
+                algorithm: AlgorithmId::EcdsaSecp256k1,
+                key_bytes: Some(Vec::from(pk_der)),
+                internal_error: "cannot encode decoded key".to_string(),
+            }
+        })?;
+    if canon != pk_der {
+        return Err(CryptoError::MalformedPublicKey {
+            algorithm: AlgorithmId::EcdsaSecp256k1,
+            key_bytes: Some(Vec::from(pk_der)),
+            internal_error: "non-canonical encoding".to_string(),
+        });
+    }
     Ok(types::PublicKeyBytes::from(pk_bytes))
 }
 

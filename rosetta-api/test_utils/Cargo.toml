@@ -4,11 +4,8 @@ version = "0.8.0"
 authors = ["The Internet Computer Project Developers"]
 edition = "2018"
 
-[[bin]]
-name = "zondax-gen"
-path = "src/zondax_gen.rs"
-
 [dependencies]
+base64 = "0.11"
 ed25519-dalek = "1.0.1"
 hex = "0.4.2"
 ic-canister-client = { path = "../../canister_client" }
@@ -23,7 +20,7 @@ serde = { version = "1.0.99", features = ["derive", "rc"] }
 serde_json = "1.0"
 serde_cbor = "0.11"
 tempfile = "3.1.0"
-reqwest = "0.10.10"
-tokio = {version = "0.2.22", features = ["full"]}
+reqwest = "0.11.1"
+tokio = {version = "1.2.0", features = ["full"]}
 url = "2.1.1"
 ic-nns-constants = { path = "../../nns/constants" }

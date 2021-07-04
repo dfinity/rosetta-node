@@ -1,8 +1,11 @@
-use ic_types::messages::{
-    HttpCanisterUpdate, HttpReadContent, HttpRequestEnvelope, HttpSubmitContent,
+use crate::convert::{from_hex, invalid_request};
+use ic_types::{
+    messages::{HttpCanisterUpdate, HttpReadContent, HttpRequestEnvelope, HttpSubmitContent},
+    CanisterId,
 };
 use ledger_canister::BlockHeight;
 use serde::{Deserialize, Serialize, Serializer};
+use std::convert::{TryFrom, TryInto};
 
 // This file is generated from https://github.com/coinbase/rosetta-specifications using openapi-generator
 // Then heavily tweaked because openapi-generator no longer generates valid rust
@@ -394,16 +397,16 @@ impl Coin {
 #[cfg_attr(feature = "conversion", derive(LabelledGenericEnum))]
 pub enum CoinAction {
     #[serde(rename = "coin_created")]
-    CREATED,
+    Created,
     #[serde(rename = "coin_spent")]
-    SPENT,
+    Spent,
 }
 
 impl ::std::fmt::Display for CoinAction {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         match *self {
-            CoinAction::CREATED => write!(f, "coin_created"),
-            CoinAction::SPENT => write!(f, "coin_spent"),
+            CoinAction::Created => write!(f, "coin_created"),
+            CoinAction::Spent => write!(f, "coin_spent"),
         }
     }
 }
@@ -412,8 +415,8 @@ impl ::std::str::FromStr for CoinAction {
     type Err = ();
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "coin_created" => Ok(CoinAction::CREATED),
-            "coin_spent" => Ok(CoinAction::SPENT),
+            "coin_created" => Ok(CoinAction::Created),
+            "coin_spent" => Ok(CoinAction::Spent),
             _ => Err(()),
         }
     }
@@ -489,6 +492,12 @@ impl ConstructionCombineRequest {
             signatures,
         }
     }
+
+    pub fn unsigned_transaction(&self) -> Result<UnsignedTransaction, ApiError> {
+        serde_cbor::from_slice(&from_hex(&self.unsigned_transaction)?).map_err(|e| {
+            invalid_request(format!("Could not deserialize unsigned transaction: {}", e))
+        })
+    }
 }
 
 /// ConstructionCombineResponse is returned by `/construction/combine`. The
@@ -497,21 +506,39 @@ impl ConstructionCombineRequest {
 #[cfg_attr(feature = "conversion", derive(LabelledGeneric))]
 pub struct ConstructionCombineResponse {
     #[serde(rename = "signed_transaction")]
-    pub signed_transaction: String, // = CBOR+hex-encoded 'Envelopes'
+    pub signed_transaction: String, // = CBOR+hex-encoded 'SignedTransaction'
 }
 
 impl ConstructionCombineResponse {
     pub fn new(signed_transaction: String) -> ConstructionCombineResponse {
         ConstructionCombineResponse { signed_transaction }
     }
+
+    pub fn signed_transaction(&self) -> Result<SignedTransaction, ApiError> {
+        serde_cbor::from_slice(&from_hex(&self.signed_transaction)?).map_err(|e| {
+            invalid_request(format!(
+                "Cannot deserialize signed transaction in /construction/combine response: {}",
+                e
+            ))
+        })
+    }
 }
 
 /// The type (encoded as CBOR) returned by /construction/combine, containing the
 /// IC calls to submit the transaction and to check the result.
-pub type Envelopes = Vec<(
-    HttpRequestEnvelope<HttpSubmitContent>,
-    HttpRequestEnvelope<HttpReadContent>,
-)>;
+pub type SignedTransaction = Vec<RequestEnvelopes>;
+
+/// A vector of update/read-state calls for different ingress windows
+/// of the same call.
+pub type RequestEnvelopes = Vec<EnvelopePair>;
+
+/// A signed IC update call and the corresponding read-state call for
+/// a particular ingress window.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EnvelopePair {
+    pub update: HttpRequestEnvelope<HttpSubmitContent>,
+    pub read_state: HttpRequestEnvelope<HttpReadContent>,
+}
 
 /// ConstructionDeriveRequest is passed to the `/construction/derive` endpoint.
 /// Network is provided in the request because some blockchains have different
@@ -595,6 +622,15 @@ impl ConstructionHashRequest {
             network_identifier,
             signed_transaction,
         }
+    }
+
+    pub fn signed_transaction(&self) -> Result<SignedTransaction, ApiError> {
+        serde_cbor::from_slice(&from_hex(&self.signed_transaction)?).map_err(|e| {
+            invalid_request(format!(
+                "Cannot deserialize the hash request in CBOR format because of: {}",
+                e
+            ))
+        })
     }
 }
 
@@ -684,6 +720,11 @@ pub struct ConstructionParseRequest {
     pub transaction: String,
 }
 
+pub enum ParsedTransaction {
+    Signed(SignedTransaction),
+    Unsigned(UnsignedTransaction),
+}
+
 impl ConstructionParseRequest {
     pub fn new(
         network_identifier: NetworkIdentifier,
@@ -694,6 +735,18 @@ impl ConstructionParseRequest {
             network_identifier,
             signed,
             transaction,
+        }
+    }
+
+    pub fn transaction(&self) -> Result<ParsedTransaction, ApiError> {
+        if self.signed {
+            Ok(ParsedTransaction::Signed(
+                serde_cbor::from_slice(&from_hex(&self.transaction)?).map_err(invalid_request)?,
+            ))
+        } else {
+            Ok(ParsedTransaction::Unsigned(
+                serde_cbor::from_slice(&from_hex(&self.transaction)?).map_err(invalid_request)?,
+            ))
         }
     }
 }
@@ -787,11 +840,11 @@ pub struct ConstructionPayloadsResponse {
 
 impl ConstructionPayloadsResponse {
     pub fn new(
-        unsigned_transaction: String,
+        unsigned_transaction: &UnsignedTransaction,
         payloads: Vec<SigningPayload>,
     ) -> ConstructionPayloadsResponse {
         ConstructionPayloadsResponse {
-            unsigned_transaction,
+            unsigned_transaction: hex::encode(serde_cbor::to_vec(unsigned_transaction).unwrap()),
             payloads,
         }
     }
@@ -799,7 +852,7 @@ impl ConstructionPayloadsResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UnsignedTransaction {
-    pub update: HttpCanisterUpdate,
+    pub updates: Vec<HttpCanisterUpdate>,
     pub ingress_expiries: Vec<u64>,
 }
 
@@ -896,18 +949,27 @@ pub struct ConstructionSubmitRequest {
     pub network_identifier: NetworkIdentifier,
 
     #[serde(rename = "signed_transaction")]
-    pub signed_transaction: String,
+    pub signed_transaction: String, // = CBOR+hex-encoded 'SignedTransaction'
 }
 
 impl ConstructionSubmitRequest {
     pub fn new(
         network_identifier: NetworkIdentifier,
-        signed_transaction: String,
+        signed_transaction: SignedTransaction,
     ) -> ConstructionSubmitRequest {
         ConstructionSubmitRequest {
             network_identifier,
-            signed_transaction,
+            signed_transaction: hex::encode(serde_cbor::to_vec(&signed_transaction).unwrap()),
         }
+    }
+
+    pub fn signed_transaction(&self) -> Result<SignedTransaction, ApiError> {
+        serde_cbor::from_slice(&from_hex(&self.signed_transaction)?).map_err(|e| {
+            invalid_request(format!(
+                "Cannot deserialize the submit request in CBOR format because of: {}",
+                e
+            ))
+        })
     }
 }
 
@@ -956,22 +1018,22 @@ impl Currency {
 #[cfg_attr(feature = "conversion", derive(LabelledGenericEnum))]
 pub enum CurveType {
     #[serde(rename = "secp256k1")]
-    SECP256K1,
+    Secp256K1,
     #[serde(rename = "secp256r1")]
-    SECP256R1,
+    Secp256R1,
     #[serde(rename = "edwards25519")]
-    EDWARDS25519,
+    Edwards25519,
     #[serde(rename = "tweedle")]
-    TWEEDLE,
+    Tweedle,
 }
 
 impl ::std::fmt::Display for CurveType {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         match *self {
-            CurveType::SECP256K1 => write!(f, "secp256k1"),
-            CurveType::SECP256R1 => write!(f, "secp256r1"),
-            CurveType::EDWARDS25519 => write!(f, "edwards25519"),
-            CurveType::TWEEDLE => write!(f, "tweedle"),
+            CurveType::Secp256K1 => write!(f, "secp256k1"),
+            CurveType::Secp256R1 => write!(f, "secp256r1"),
+            CurveType::Edwards25519 => write!(f, "edwards25519"),
+            CurveType::Tweedle => write!(f, "tweedle"),
         }
     }
 }
@@ -980,10 +1042,10 @@ impl ::std::str::FromStr for CurveType {
     type Err = ();
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "secp256k1" => Ok(CurveType::SECP256K1),
-            "secp256r1" => Ok(CurveType::SECP256R1),
-            "edwards25519" => Ok(CurveType::EDWARDS25519),
-            "tweedle" => Ok(CurveType::TWEEDLE),
+            "secp256k1" => Ok(CurveType::Secp256K1),
+            "secp256r1" => Ok(CurveType::Secp256R1),
+            "edwards25519" => Ok(CurveType::Edwards25519),
+            "tweedle" => Ok(CurveType::Tweedle),
             _ => Err(()),
         }
     }
@@ -1030,6 +1092,7 @@ impl Error {
             ApiError::InvalidAccountId(r, d) => (711, "Account not found", r, d),
             ApiError::InvalidBlockId(r, d) => (712, "Block not found", r, d),
             ApiError::InvalidPublicKey(r, d) => (713, "Invalid public key", r, d),
+            ApiError::InvalidTransactionId(r, d) => (714, "Invalid transaction id", r, d),
             ApiError::MempoolTransactionMissing(r, d) => {
                 (720, "Transaction not in the mempool", r, d)
             }
@@ -1065,6 +1128,7 @@ pub enum ApiError {
     InvalidAccountId(bool, Option<Object>),
     InvalidBlockId(bool, Option<Object>),
     InvalidPublicKey(bool, Option<Object>),
+    InvalidTransactionId(bool, Option<Object>),
     MempoolTransactionMissing(bool, Option<Object>),
     BlockchainEmpty(bool, Option<Object>),
     InvalidTransaction(bool, Option<Object>),
@@ -1077,6 +1141,20 @@ pub enum ApiError {
 impl serde::Serialize for ApiError {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         Error::new(self).serialize(s)
+    }
+}
+
+impl ApiError {
+    pub fn is_internal_error_403(&self) -> bool {
+        if let ApiError::InternalError(_, Some(err_obj)) = self {
+            err_obj
+                .get("error_message")
+                .map(|em| em.as_str().map(|e| e.contains("status: 403")))
+                .flatten()
+                .unwrap_or(false)
+        } else {
+            false
+        }
     }
 }
 
@@ -1186,6 +1264,21 @@ impl NetworkIdentifier {
             network,
             sub_network_identifier: None,
         }
+    }
+}
+
+impl TryInto<CanisterId> for &NetworkIdentifier {
+    type Error = ApiError;
+    fn try_into(self) -> Result<CanisterId, Self::Error> {
+        use crate::convert::into_error;
+        use ic_types::PrincipalId;
+
+        let principal_bytes = hex::decode(&self.network)
+            .map_err(|_| ApiError::InvalidNetworkId(false, into_error("not hex")))?;
+        let principal_id = PrincipalId::try_from(&principal_bytes)
+            .map_err(|_| ApiError::InvalidNetworkId(false, into_error("invalid principal id")))?;
+        CanisterId::try_from(principal_id)
+            .map_err(|_| ApiError::InvalidNetworkId(false, into_error("invalid canister id")))
     }
 }
 
@@ -1547,25 +1640,25 @@ impl Signature {
 #[cfg_attr(feature = "conversion", derive(LabelledGenericEnum))]
 pub enum SignatureType {
     #[serde(rename = "ecdsa")]
-    ECDSA,
+    Ecdsa,
     #[serde(rename = "ecdsa_recovery")]
-    ECDSA_RECOVERY,
+    EcdsaRecovery,
     #[serde(rename = "ed25519")]
-    ED25519,
+    Ed25519,
     #[serde(rename = "schnorr_1")]
-    SCHNORR_1,
+    Schnorr1,
     #[serde(rename = "schnorr_poseidon")]
-    SCHNORR_POSEIDON,
+    SchnorrPoseidon,
 }
 
 impl ::std::fmt::Display for SignatureType {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         match *self {
-            SignatureType::ECDSA => write!(f, "ecdsa"),
-            SignatureType::ECDSA_RECOVERY => write!(f, "ecdsa_recovery"),
-            SignatureType::ED25519 => write!(f, "ed25519"),
-            SignatureType::SCHNORR_1 => write!(f, "schnorr_1"),
-            SignatureType::SCHNORR_POSEIDON => write!(f, "schnorr_poseidon"),
+            SignatureType::Ecdsa => write!(f, "ecdsa"),
+            SignatureType::EcdsaRecovery => write!(f, "ecdsa_recovery"),
+            SignatureType::Ed25519 => write!(f, "ed25519"),
+            SignatureType::Schnorr1 => write!(f, "schnorr_1"),
+            SignatureType::SchnorrPoseidon => write!(f, "schnorr_poseidon"),
         }
     }
 }
@@ -1574,11 +1667,11 @@ impl ::std::str::FromStr for SignatureType {
     type Err = ();
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "ecdsa" => Ok(SignatureType::ECDSA),
-            "ecdsa_recovery" => Ok(SignatureType::ECDSA_RECOVERY),
-            "ed25519" => Ok(SignatureType::ED25519),
-            "schnorr_1" => Ok(SignatureType::SCHNORR_1),
-            "schnorr_poseidon" => Ok(SignatureType::SCHNORR_POSEIDON),
+            "ecdsa" => Ok(SignatureType::Ecdsa),
+            "ecdsa_recovery" => Ok(SignatureType::EcdsaRecovery),
+            "ed25519" => Ok(SignatureType::Ed25519),
+            "schnorr_1" => Ok(SignatureType::Schnorr1),
+            "schnorr_poseidon" => Ok(SignatureType::SchnorrPoseidon),
             _ => Err(()),
         }
     }
@@ -1815,6 +1908,29 @@ impl TransactionIdentifierResponse {
     }
 }
 
+/// Operator is used by query-related endpoints to determine how to apply
+/// conditions. If this field is not populated, the default and value will be
+/// used.
+#[allow(non_camel_case_types)]
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "conversion", derive(LabelledGenericEnum))]
+pub enum Operator {
+    #[serde(rename = "or")]
+    Or,
+    #[serde(rename = "and")]
+    And,
+}
+
+impl ::std::fmt::Display for Operator {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Operator::Or => write!(f, "or"),
+            Operator::And => write!(f, "and"),
+        }
+    }
+}
+
 /// SearchTransactionsRequest models a small subset of the /search/transactions
 /// endpoint. Currently we only support looking up a transaction given its hash;
 /// this functionality is desired by our crypto exchanges partners.
@@ -1824,6 +1940,22 @@ pub struct SearchTransactionsRequest {
     #[serde(rename = "network_identifier")]
     pub network_identifier: NetworkIdentifier,
 
+    #[serde(rename = "operator")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operator: Option<Operator>,
+
+    #[serde(rename = "max_block")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_block: Option<i64>,
+
+    #[serde(rename = "offset")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset: Option<i64>,
+
+    #[serde(rename = "limit")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<i64>,
+
     #[serde(rename = "transaction_identifier")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transaction_identifier: Option<TransactionIdentifier>,
@@ -1831,6 +1963,30 @@ pub struct SearchTransactionsRequest {
     #[serde(rename = "account_identifier")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub account_identifier: Option<AccountIdentifier>,
+
+    #[serde(rename = "coin_identifier")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coin_identifier: Option<CoinIdentifier>,
+
+    #[serde(rename = "currency")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub currency: Option<Currency>,
+
+    #[serde(rename = "status")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+
+    #[serde(rename = "type")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub _type: Option<String>,
+
+    #[serde(rename = "address")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+
+    #[serde(rename = "success")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub success: Option<bool>,
 }
 
 impl SearchTransactionsRequest {
@@ -1841,8 +1997,18 @@ impl SearchTransactionsRequest {
     ) -> SearchTransactionsRequest {
         SearchTransactionsRequest {
             network_identifier,
+            operator: None,
+            max_block: None,
+            offset: None,
+            limit: None,
             transaction_identifier,
             account_identifier,
+            coin_identifier: None,
+            currency: None,
+            status: None,
+            _type: None,
+            address: None,
+            success: None,
         }
     }
 }
@@ -1866,9 +2032,9 @@ impl BlockTransaction {
     }
 }
 
-/// SearchTransactionsResponse is the result of the /search/transactions
-/// endpoint. Currently we only return either 0 or 1 transactions, based on
-/// whether the given transaction hash is found.
+/// SearchTransactionsResponse contains an ordered collection of
+/// BlockTransactions that match the query in SearchTransactionsRequest. These
+/// BlockTransactions are sorted from most recent block to oldest block.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "conversion", derive(LabelledGeneric))]
 pub struct SearchTransactionsResponse {
@@ -1877,16 +2043,22 @@ pub struct SearchTransactionsResponse {
 
     #[serde(rename = "total_count")]
     pub total_count: i64,
+
+    #[serde(rename = "next_offset")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_offset: Option<i64>,
 }
 
 impl SearchTransactionsResponse {
     pub fn new(
         transactions: Vec<BlockTransaction>,
         total_count: i64,
+        next_offset: Option<i64>,
     ) -> SearchTransactionsResponse {
         SearchTransactionsResponse {
             transactions,
             total_count,
+            next_offset,
         }
     }
 }

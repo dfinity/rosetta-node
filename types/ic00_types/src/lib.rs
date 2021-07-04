@@ -23,7 +23,6 @@ pub enum Method {
     CreateCanister,
     DeleteCanister,
     DepositCycles,
-    DepositFunds,
     InstallCode,
     RawRand,
     SetController,

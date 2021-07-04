@@ -1,39 +1,33 @@
+use crate::balance_book::BalanceBook;
+use crate::certification::verify_block_hash;
 use crate::convert::{ic_error, internal_error, into_error, invalid_block_id, transaction_id};
-use crate::models::{ApiError, Envelopes, TransactionIdentifier};
+use crate::models::{ApiError, EnvelopePair, SignedTransaction, TransactionIdentifier};
 use crate::store::{BlockStore, BlockStoreError, HashedBlock, InMemoryStore, OnDiskStore};
 use async_trait::async_trait;
 use core::ops::Deref;
 use dfn_protobuf::{ProtoBuf, ToProto};
 use ic_canister_client::{Agent, HttpClient, Sender};
-use ic_crypto_tree_hash::{Digest, LabeledTree, MixedHashTree};
-use ic_crypto_utils_threshold_sig::verify_combined;
 use ic_types::messages::{HttpSubmitContent, MessageId};
 use ic_types::CanisterId;
-use ic_types::{
-    consensus::certification::CertificationContent,
-    crypto::{threshold_sig::ThresholdSigPublicKey, CombinedThresholdSigOf, CryptoHash},
-    messages::SignedRequestBytes,
-    CryptoHashOfPartialState, Time,
-};
+use ic_types::{crypto::threshold_sig::ThresholdSigPublicKey, messages::SignedRequestBytes};
 use ledger_canister::protobuf::ArchiveIndexResponse;
 use ledger_canister::{
-    protobuf::TipOfChainRequest, AccountIdentifier, BalancesStore, BlockArg, BlockHeight, BlockRes,
-    EncodedBlock, GetBlocksArgs, GetBlocksRes, HashOf, ICPTs, TipOfChainRes, Transaction,
+    protobuf::TipOfChainRequest, AccountIdentifier, BlockArg, BlockHeight, BlockRes, EncodedBlock,
+    GetBlocksArgs, GetBlocksRes, HashOf, ICPTs, TipOfChainRes, Transaction,
 };
 use log::{debug, error, info, trace};
 use on_wire::{FromWire, IntoWire};
-use serde::Deserialize;
-use std::collections::{BTreeMap, HashMap};
+
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
-use tree_deserializer::{types::Leb128EncodedU64, LabeledTreeDeserializer};
 use url::Url;
 
-pub type Balances = ledger_canister::Balances<ChunkmapBalancesStore>;
+const PRUNE_DELAY: u64 = 1000;
 
 #[async_trait]
 pub trait LedgerAccess {
@@ -41,57 +35,60 @@ pub trait LedgerAccess {
     async fn read_blocks<'a>(&'a self) -> Box<dyn Deref<Target = Blocks> + 'a>;
     async fn sync_blocks(&self, stopped: Arc<AtomicBool>) -> Result<(), ApiError>;
     fn ledger_canister_id(&self) -> &CanisterId;
-    fn network_url(&self) -> &Url;
-    async fn submit(
-        &self,
-        _envelopes: Envelopes,
-    ) -> Result<(TransactionIdentifier, Option<BlockHeight>), ApiError>;
-    async fn chain_length(&self) -> BlockHeight;
+    fn governance_canister_id(&self) -> &CanisterId;
+    async fn submit(&self, _envelopes: SignedTransaction) -> Result<Vec<SubmitResult>, ApiError>;
+}
+
+pub struct SubmitResult {
+    pub transaction_identifier: TransactionIdentifier,
+    pub block_index: Option<BlockHeight>,
 }
 
 pub struct LedgerClient {
     blockchain: RwLock<Blocks>,
     canister_id: CanisterId,
+    governance_canister_id: CanisterId,
     canister_access: Option<CanisterAccess>,
-    network_url: Url,
+    ic_url: Url,
     store_max_blocks: Option<u64>,
     offline: bool,
     root_key: Option<ThresholdSigPublicKey>,
 }
 
-pub enum StoreType {
-    InMemory,
-    OnDisk(PathBuf, bool),
-}
-
 impl LedgerClient {
-    pub async fn create_on_disk(
-        network_url: Url,
+    pub async fn new(
+        ic_url: Url,
         canister_id: CanisterId,
-        store_type: StoreType,
+        governance_canister_id: CanisterId,
+        block_store: Box<dyn BlockStore + Send + Sync>,
         store_max_blocks: Option<u64>,
         offline: bool,
         root_key: Option<ThresholdSigPublicKey>,
     ) -> Result<LedgerClient, ApiError> {
-        let mut blocks = match store_type {
-            StoreType::InMemory => Blocks::new_in_memory(),
-            StoreType::OnDisk(store_location, fsync) => {
-                let location = store_location.join("blocks");
-                std::fs::create_dir_all(&location)
-                    .map_err(|e| format!("{}", e))
-                    .map_err(internal_error)?;
-
-                Blocks::new_on_disk(location, fsync)?
-            }
-        };
-
+        let mut blocks = Blocks::new(block_store);
         let canister_access = if offline {
             None
         } else {
             let http_client = HttpClient::new();
-            let canister_access =
-                CanisterAccess::new(network_url.clone(), canister_id, http_client);
+            let canister_access = CanisterAccess::new(ic_url.clone(), canister_id, http_client);
             Self::verify_store(&blocks, &canister_access).await?;
+
+            if root_key.is_some() {
+                // verify if we have the right cerfiticate/we are connecting to the right
+                // canister
+                let TipOfChainRes {
+                    tip_index,
+                    certification,
+                } = canister_access.query_tip().await?;
+
+                let tip_block = canister_access
+                    .query_raw_block(tip_index)
+                    .await?
+                    .expect("Blockchain in the ledger canister is empty");
+
+                verify_block_hash(certification, tip_block.hash(), &root_key, &canister_id)
+                    .map_err(internal_error)?;
+            }
 
             Some(canister_access)
         };
@@ -112,14 +109,14 @@ impl LedgerClient {
                 .unwrap_or_else(|| "None".to_string())
         );
 
-        let prune_delay = 100;
-        blocks.try_prune(&store_max_blocks, prune_delay)?;
+        blocks.try_prune(&store_max_blocks, PRUNE_DELAY)?;
 
         Ok(Self {
             blockchain: RwLock::new(blocks),
             canister_id,
+            governance_canister_id,
             canister_access,
-            network_url,
+            ic_url,
             store_max_blocks,
             offline,
             root_key,
@@ -191,124 +188,6 @@ impl LedgerClient {
 
         Ok(())
     }
-
-    fn verify_tip(
-        &self,
-        cert: ledger_canister::Certification,
-        hash: HashOf<EncodedBlock>,
-    ) -> Result<(), String> {
-        match self.root_key {
-            Some(root_key) => {
-                let (from_cert, _) = check_certificate(
-                    &self.canister_id,
-                    &root_key,
-                    &*cert.ok_or("verify tip failed: no data certificate present")?,
-                )
-                .map_err(|e| format!("Certification error: {:?}", e))?;
-                if from_cert.as_bytes() != hash.into_bytes() {
-                    Err("verify tip failed".to_string())
-                } else {
-                    Ok(())
-                }
-            }
-            None => Ok(()),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum CertificationError {
-    /// Failed to deserialize some part of the response.
-    DeserError(String),
-    /// The signature verification failed.
-    InvalidSignature(String),
-    /// The value at path "/canister/<cid>/certified_data" doesn't match the
-    /// hash computed from the mixed hash tree with registry deltas.
-    CertifiedDataMismatch { certified: Digest, computed: Digest },
-    /// Parsing and signature verification was successful, but the list of
-    /// deltas doesn't satisfy postconditions of the method.
-    InvalidDeltas(String),
-    /// The hash tree in the response was not well-formed.
-    MalformedHashTree(String),
-}
-
-fn verify_combined_threshold_sig(
-    msg: &CryptoHashOfPartialState,
-    sig: &CombinedThresholdSigOf<CertificationContent>,
-    root_key: &ThresholdSigPublicKey,
-) -> Result<(), CertificationError> {
-    verify_combined(&CertificationContent::new(msg.clone()), sig, root_key)
-        .map_err(|e| CertificationError::InvalidSignature(e.to_string()))
-}
-
-fn check_certificate(
-    canister_id: &CanisterId,
-    nns_pk: &ThresholdSigPublicKey,
-    encoded_certificate: &[u8],
-) -> Result<(Digest, Time), CertificationError> {
-    #[derive(Deserialize)]
-    struct Certificate {
-        tree: MixedHashTree,
-        signature: CombinedThresholdSigOf<CertificationContent>,
-    }
-
-    #[derive(Deserialize)]
-    struct CanisterView {
-        certified_data: Digest,
-    }
-
-    #[derive(Deserialize)]
-    struct ReplicaState {
-        time: Leb128EncodedU64,
-        canister: BTreeMap<CanisterId, CanisterView>,
-    }
-
-    let certificate: Certificate = serde_cbor::from_slice(encoded_certificate).map_err(|err| {
-        CertificationError::DeserError(format!(
-            "failed to decode certificate from canister {}: {}",
-            canister_id, err
-        ))
-    })?;
-
-    let digest = CryptoHashOfPartialState::from(CryptoHash(certificate.tree.digest().to_vec()));
-
-    verify_combined_threshold_sig(&digest, &certificate.signature, nns_pk).map_err(|err| {
-        CertificationError::InvalidSignature(format!(
-            "failed to verify threshold signature: root_hash={:?}, sig={:?}, pk={:?}, error={:?}",
-            digest, certificate.signature, nns_pk, err
-        ))
-    })?;
-
-    let replica_labeled_tree =
-        LabeledTree::<Vec<u8>>::try_from(certificate.tree).map_err(|err| {
-            CertificationError::MalformedHashTree(format!(
-                "failed to convert hash tree to labeled tree: {:?}",
-                err
-            ))
-        })?;
-
-    let replica_state = ReplicaState::deserialize(LabeledTreeDeserializer::new(
-        &replica_labeled_tree,
-    ))
-    .map_err(|err| {
-        CertificationError::DeserError(format!(
-            "failed to unpack replica state from a labeled tree: {}",
-            err
-        ))
-    })?;
-
-    let time = Time::from_nanos_since_unix_epoch(replica_state.time.0);
-
-    replica_state
-        .canister
-        .get(canister_id)
-        .map(|canister| (canister.certified_data.clone(), time))
-        .ok_or_else(|| {
-            CertificationError::MalformedHashTree(format!(
-                "cannot find certified_data for canister {} in the tree",
-                canister_id
-            ))
-        })
 }
 
 async fn send_post_request(
@@ -414,7 +293,7 @@ impl LedgerAccess for LedgerClient {
             }
         }
         if let Some(last_hash) = last_block_hash {
-            self.verify_tip(certification, last_hash)
+            verify_block_hash(certification, last_hash, &self.root_key, &self.canister_id)
                 .map_err(internal_error)?;
             blockchain
                 .block_store
@@ -427,8 +306,7 @@ impl LedgerAccess for LedgerClient {
             );
         }
 
-        let prune_delay = 100;
-        blockchain.try_prune(&self.store_max_blocks, prune_delay)?;
+        blockchain.try_prune(&self.store_max_blocks, PRUNE_DELAY)?;
         Ok(())
     }
 
@@ -436,254 +314,271 @@ impl LedgerAccess for LedgerClient {
         &self.canister_id
     }
 
-    fn network_url(&self) -> &Url {
-        &self.network_url
+    fn governance_canister_id(&self) -> &CanisterId {
+        &self.governance_canister_id
     }
 
-    async fn submit(
-        &self,
-        envelopes: Envelopes,
-    ) -> Result<(TransactionIdentifier, Option<BlockHeight>), ApiError> {
+    async fn submit(&self, envelopes: SignedTransaction) -> Result<Vec<SubmitResult>, ApiError> {
         if self.offline {
             return Err(ApiError::NotAvailableOffline(false, None));
         }
 
-        // Pick the update/read-start message that is currently valid.
-        let now = ic_types::time::current_time();
-
-        let (submit_request, read_state_request) = envelopes
-            .into_iter()
-            .find(|(submit_request, _)| {
-                let ingress_expiry = ic_types::Time::from_nanos_since_unix_epoch(
-                    submit_request.content.ingress_expiry(),
-                );
-                let ingress_start = ingress_expiry
-                    - (ic_types::ingress::MAX_INGRESS_TTL - ic_types::ingress::PERMITTED_DRIFT);
-                ingress_start <= now && ingress_expiry > now
-            })
-            .ok_or_else(|| ApiError::TransactionExpired)?;
-
+        // Exponential backoff from 100ms to 10s with a multiplier of 1.3.
+        const MIN_POLL_INTERVAL: Duration = Duration::from_millis(100);
+        const MAX_POLL_INTERVAL: Duration = Duration::from_secs(10);
+        const POLL_INTERVAL_MULTIPLIER: f32 = 1.3;
         const TIMEOUT: Duration = Duration::from_secs(20);
 
         let start_time = Instant::now();
         let deadline = start_time + TIMEOUT;
-        let canister_id = match &submit_request.content {
-            HttpSubmitContent::Call { update } => {
-                CanisterId::try_from(update.canister_id.0.clone()).map_err(|e| {
-                    internal_error(format!(
-                        "Cannot parse canister ID found in submit call: {}",
-                        e
-                    ))
-                })?
-            }
-        };
 
-        let request_id = MessageId::from(submit_request.content.representation_independent_hash());
-        let txn_id = transaction_id(&submit_request)?;
+        let http_client = reqwest::Client::new();
 
-        let http_body = SignedRequestBytes::try_from(submit_request).map_err(|e| {
-            internal_error(format!(
-                "Cannot serialize the submit request in CBOR format because of: {}",
-                e
-            ))
-        })?;
+        let mut results = vec![];
 
-        let read_state_http_body =
-            SignedRequestBytes::try_from(read_state_request).map_err(|e| {
+        for request in envelopes {
+            // Pick the update/read-start message that is currently valid.
+            let now = ic_types::time::current_time();
+
+            let EnvelopePair { update, read_state } = request
+                .clone()
+                .into_iter()
+                .find(|EnvelopePair { update, .. }| {
+                    let ingress_expiry = ic_types::Time::from_nanos_since_unix_epoch(
+                        update.content.ingress_expiry(),
+                    );
+                    let ingress_start = ingress_expiry
+                        - (ic_types::ingress::MAX_INGRESS_TTL - ic_types::ingress::PERMITTED_DRIFT);
+                    ingress_start <= now && ingress_expiry > now
+                })
+                .ok_or(ApiError::TransactionExpired)?;
+
+            let canister_id = match &update.content {
+                HttpSubmitContent::Call { update } => {
+                    CanisterId::try_from(update.canister_id.0.clone()).map_err(|e| {
+                        internal_error(format!(
+                            "Cannot parse canister ID found in submit call: {}",
+                            e
+                        ))
+                    })?
+                }
+            };
+
+            let request_id = MessageId::from(update.content.representation_independent_hash());
+            let txn_id = transaction_id(&update)?;
+
+            let http_body = SignedRequestBytes::try_from(update).map_err(|e| {
+                internal_error(format!(
+                    "Cannot serialize the submit request in CBOR format because of: {}",
+                    e
+                ))
+            })?;
+
+            let read_state_http_body = SignedRequestBytes::try_from(read_state).map_err(|e| {
                 internal_error(format!(
                     "Cannot serialize the read state request in CBOR format because of: {}",
                     e
                 ))
             })?;
 
-        let url = self
-            .network_url
-            .join(&ic_canister_client::update_path(canister_id))
-            .expect("URL join failed");
+            let url = self
+                .ic_url
+                .join(&ic_canister_client::update_path(canister_id))
+                .expect("URL join failed");
 
-        let http_client = reqwest::Client::new();
+            // Submit the update call (with retry).
+            let mut poll_interval = MIN_POLL_INTERVAL;
 
-        // Exponential backoff from 100ms to 10s with a multiplier of 1.3.
-        const MIN_POLL_INTERVAL: Duration = Duration::from_millis(100);
-        const MAX_POLL_INTERVAL: Duration = Duration::from_secs(10);
-        const POLL_INTERVAL_MULTIPLIER: f32 = 1.3;
+            while Instant::now() + poll_interval < deadline {
+                let wait_timeout = TIMEOUT - start_time.elapsed();
 
-        let mut poll_interval = MIN_POLL_INTERVAL;
-
-        while Instant::now() + poll_interval < deadline {
-            let wait_timeout = TIMEOUT - start_time.elapsed();
-
-            match send_post_request(
-                &http_client,
-                url.as_str(),
-                http_body.clone().into(),
-                wait_timeout,
-            )
-            .await
-            {
-                Err(err) => {
-                    // Retry client-side errors.
-                    error!("Error while submitting transaction: {}.", err);
-                }
-                Ok((body, status)) => {
-                    if status.is_success() {
-                        break;
+                match send_post_request(
+                    &http_client,
+                    url.as_str(),
+                    http_body.clone().into(),
+                    wait_timeout,
+                )
+                .await
+                {
+                    Err(err) => {
+                        // Retry client-side errors.
+                        error!("Error while submitting transaction: {}.", err);
                     }
+                    Ok((body, status)) => {
+                        if status.is_success() {
+                            break;
+                        }
 
-                    // Retry on 5xx errors. We don't want to retry on
-                    // e.g. authentication errors.
-                    let body =
-                        String::from_utf8(body).unwrap_or_else(|_| "<undecodable>".to_owned());
-                    if status.is_server_error() {
-                        error!(
-                            "HTTP error {} while submitting transaction: {}.",
-                            status, body
-                        );
-                    } else {
-                        return Err(ic_error(status.as_u16(), body));
+                        // Retry on 5xx errors. We don't want to retry on
+                        // e.g. authentication errors.
+                        let body =
+                            String::from_utf8(body).unwrap_or_else(|_| "<undecodable>".to_owned());
+                        if status.is_server_error() {
+                            error!(
+                                "HTTP error {} while submitting transaction: {}.",
+                                status, body
+                            );
+                        } else {
+                            return Err(ic_error(status.as_u16(), body));
+                        }
                     }
                 }
+
+                // Bump the poll interval and compute the next poll time (based on current wall
+                // time, so we don't spin without delay after a slow poll).
+                poll_interval = poll_interval
+                    .mul_f32(POLL_INTERVAL_MULTIPLIER)
+                    .min(MAX_POLL_INTERVAL);
             }
 
-            // Bump the poll interval and compute the next poll time (based on current wall
-            // time, so we don't spin without delay after a slow poll).
-            poll_interval = poll_interval
-                .mul_f32(POLL_INTERVAL_MULTIPLIER)
-                .min(MAX_POLL_INTERVAL);
-        }
+            // Do read-state calls until the result becomes available.
+            let wait_for_result = || {
+                async {
+                    // Cut&paste from canister_client Agent.
 
-        let wait_for_result = || {
-            async {
-                // Cut&paste from canister_client Agent.
+                    let mut poll_interval = MIN_POLL_INTERVAL;
 
-                let mut poll_interval = MIN_POLL_INTERVAL;
+                    while Instant::now() + poll_interval < deadline {
+                        debug!("Waiting {} ms for response", poll_interval.as_millis());
+                        actix_rt::time::sleep(poll_interval).await;
 
-                while Instant::now() + poll_interval < deadline {
-                    debug!("Waiting {} ms for response", poll_interval.as_millis());
-                    actix_rt::time::delay_for(poll_interval).await;
+                        let wait_timeout = TIMEOUT - start_time.elapsed();
 
-                    let wait_timeout = TIMEOUT - start_time.elapsed();
+                        let url = self
+                            .ic_url
+                            .join(&ic_canister_client::read_state_path(canister_id))
+                            .expect("URL join failed");
 
-                    let url = self
-                        .network_url
-                        .join(&ic_canister_client::read_state_path(canister_id))
-                        .expect("URL join failed");
+                        match send_post_request(
+                            &http_client,
+                            url.as_str(),
+                            read_state_http_body.clone().into(),
+                            wait_timeout,
+                        )
+                        .await
+                        {
+                            Err(err) => {
+                                // Retry client-side errors.
+                                error!("Error while reading the IC state: {}.", err);
+                            }
+                            Ok((body, status)) => {
+                                if status.is_success() {
+                                    let cbor: serde_cbor::Value = serde_cbor::from_slice(&body)
+                                        .map_err(|err| {
+                                            format!("While parsing the status body: {}", err)
+                                        })?;
 
-                    match send_post_request(
-                        &http_client,
-                        url.as_str(),
-                        read_state_http_body.clone().into(),
-                        wait_timeout,
-                    )
-                    .await
-                    {
-                        Err(err) => {
-                            // Retry client-side errors.
-                            error!("Error while reading the IC state: {}.", err);
-                        }
-                        Ok((body, status)) => {
-                            if status.is_success() {
-                                let cbor: serde_cbor::Value = serde_cbor::from_slice(&body)
+                                    let status = ic_canister_client::parse_read_state_response(
+                                        &request_id,
+                                        cbor,
+                                    )
                                     .map_err(|err| {
-                                        format!("While parsing the status body: {}", err)
+                                        format!("While parsing the read state response: {}", err)
                                     })?;
 
-                                let status = ic_canister_client::parse_read_state_response(
-                                    &request_id,
-                                    cbor,
-                                )
-                                .map_err(|err| {
-                                    format!("While parsing the read state response: {}", err)
-                                })?;
+                                    debug!("Read state response: {:?}", status);
 
-                                debug!("Read state response: {:?}", status);
-
-                                match status.status.as_ref() {
-                                    "replied" => match status.reply {
-                                        Some(bytes) => {
-                                            let block_index: BlockHeight =
-                                                ProtoBuf::from_bytes(bytes).map(|c| c.0).map_err(
-                                                    |err| {
-                                                        format!(
-                                                    "While parsing the reply of the send call: {}",
-                                                    err
-                                                )
-                                                    },
-                                                )?;
-                                            return Ok(Ok(block_index));
+                                    match status.status.as_ref() {
+                                        "replied" => match status.reply {
+                                            Some(bytes) => {
+                                                let block_index: BlockHeight =
+                                                    ProtoBuf::from_bytes(bytes)
+                                                        .map(|c| c.0)
+                                                        .map_err(|err| {
+                                                            format!(
+                                                                "While parsing the reply of the send call: {}",
+                                                                err
+                                                            )
+                                                        })?;
+                                                return Ok(Ok(block_index));
+                                            }
+                                            None => {
+                                                return Err(
+                                                    "Send returned with no result.".to_owned()
+                                                );
+                                            }
+                                        },
+                                        "unknown" | "received" | "processing" => {}
+                                        "rejected" => {
+                                            return Ok(Err(ApiError::TransactionRejected(
+                                                false,
+                                                into_error(
+                                                    status.reject_message.unwrap_or_else(|| {
+                                                        "(no message)".to_owned()
+                                                    }),
+                                                ),
+                                            )));
                                         }
-                                        None => {
-                                            return Err("Send returned with no result.".to_owned());
+                                        _ => {
+                                            return Err(format!(
+                                                "Send returned unexpected result: {:?} - {:?}",
+                                                status.status, status.reject_message
+                                            ))
                                         }
-                                    },
-                                    "unknown" | "received" | "processing" => {}
-                                    "rejected" => {
-                                        return Ok(Err(ApiError::TransactionRejected(
-                                            false,
-                                            into_error(
-                                                status
-                                                    .reject_message
-                                                    .unwrap_or_else(|| "(no message)".to_owned()),
-                                            ),
-                                        )));
                                     }
-                                    _ => {
-                                        return Err(format!(
-                                            "Send returned unexpected result: {:?} - {:?}",
-                                            status.status, status.reject_message
-                                        ))
-                                    }
-                                }
-                            } else {
-                                let body = String::from_utf8(body)
-                                    .unwrap_or_else(|_| "<undecodable>".to_owned());
-                                let err = format!(
-                                    "HTTP error {} while reading the IC state: {}.",
-                                    status, body
-                                );
-                                if status.is_server_error() {
-                                    // Retry on 5xx errors.
-                                    error!("{}", err);
                                 } else {
-                                    return Err(err);
+                                    let body = String::from_utf8(body)
+                                        .unwrap_or_else(|_| "<undecodable>".to_owned());
+                                    let err = format!(
+                                        "HTTP error {} while reading the IC state: {}.",
+                                        status, body
+                                    );
+                                    if status.is_server_error() {
+                                        // Retry on 5xx errors.
+                                        error!("{}", err);
+                                    } else {
+                                        return Err(err);
+                                    }
                                 }
                             }
-                        }
-                    };
+                        };
 
-                    // Bump the poll interval and compute the next poll time (based on current wall
-                    // time, so we don't spin without delay after a slow poll).
-                    poll_interval = poll_interval
-                        .mul_f32(POLL_INTERVAL_MULTIPLIER)
-                        .min(MAX_POLL_INTERVAL);
+                        // Bump the poll interval and compute the next poll time (based on current
+                        // wall time, so we don't spin without delay after a
+                        // slow poll).
+                        poll_interval = poll_interval
+                            .mul_f32(POLL_INTERVAL_MULTIPLIER)
+                            .min(MAX_POLL_INTERVAL);
+                    }
+
+                    // We didn't get a response in 30 seconds. Let the client handle it.
+                    return Err(format!(
+                        "Block submission took longer than {:?} to complete.",
+                        TIMEOUT
+                    ));
                 }
+            };
 
-                // We didn't get a response in 30 seconds. Let the client handle it.
-                return Err(format!(
-                    "Block submission took longer than {:?} to complete.",
-                    TIMEOUT
-                ));
-            }
-        };
-
-        /* Only return a non-200 result in case of an error from the
-         * ledger canister. Otherwise just log the error and return a
-         * 200 result with no block index. */
-        match wait_for_result().await {
-            Ok(Ok(block_index)) => Ok((txn_id, Some(block_index))),
-            Ok(Err(err)) => Err(err),
-            Err(err) => {
-                error!("Error submitting transaction {:?}: {}.", txn_id, err);
-                Ok((txn_id, None))
+            /* Only return a non-200 result in case of an error from the
+             * ledger canister. Otherwise just log the error and return a
+             * 200 result with no block index. */
+            match wait_for_result().await {
+                // Success
+                Ok(Ok(block_index)) => {
+                    let res = SubmitResult {
+                        transaction_identifier: txn_id,
+                        block_index: Some(block_index),
+                    };
+                    results.push(res);
+                }
+                // Error from ledger canister
+                Ok(Err(err)) => return Err(err),
+                // Some other error, transaction might still be processed by the IC
+                Err(err) => {
+                    error!("Error submitting transaction {:?}: {}.", txn_id, err);
+                    // We can't continue with the next request since
+                    // we don't know if the previous one succeeded.
+                    let res = SubmitResult {
+                        transaction_identifier: txn_id,
+                        block_index: None,
+                    };
+                    results.push(res);
+                    return Ok(results);
+                }
             }
         }
-    }
 
-    async fn chain_length(&self) -> BlockHeight {
-        match self.blockchain.read().await.block_store.last_verified() {
-            None => 0,
-            Some(block_index) => block_index + 1,
-        }
+        Ok(results)
     }
 }
 
@@ -830,39 +725,10 @@ impl CanisterAccess {
     }
 }
 
-#[derive(Clone, Default, Debug, PartialEq, Eq)]
-pub struct ChunkmapBalancesStore(pub immutable_chunkmap::map::Map<AccountIdentifier, ICPTs>);
-
-impl BalancesStore for ChunkmapBalancesStore {
-    fn get_balance(&self, k: &AccountIdentifier) -> Option<&ICPTs> {
-        self.0.get(k)
-    }
-
-    fn update<F>(&mut self, k: AccountIdentifier, mut f: F)
-    where
-        F: FnMut(Option<&ICPTs>) -> ICPTs,
-    {
-        let (m, _) = self
-            .0
-            .update(k, ICPTs::ZERO /* dummy param */, |_, _, prev| {
-                let prev_v = prev.map(|x| x.1);
-                let new_v = f(prev_v);
-                if new_v != ICPTs::ZERO {
-                    Some((k, new_v))
-                } else {
-                    None
-                }
-            });
-
-        self.0 = m;
-    }
-}
-
 pub struct Blocks {
-    balances: HashMap<BlockHeight, Balances>,
+    pub balance_book: BalanceBook,
     hash_location: HashMap<HashOf<EncodedBlock>, BlockHeight>,
     pub tx_hash_location: HashMap<HashOf<Transaction>, BlockHeight>,
-    pub account_location: HashMap<AccountIdentifier, Vec<BlockHeight>>,
     pub block_store: Box<dyn BlockStore + Send + Sync>,
     last_hash: Option<HashOf<EncodedBlock>>,
 }
@@ -874,34 +740,32 @@ impl Default for Blocks {
 }
 
 impl Blocks {
-    pub fn new_in_memory() -> Self {
+    pub fn new(block_store: Box<dyn BlockStore + Send + Sync>) -> Self {
         Self {
-            balances: HashMap::default(),
+            balance_book: BalanceBook::default(),
             hash_location: HashMap::default(),
             tx_hash_location: HashMap::default(),
-            account_location: HashMap::default(),
-            block_store: Box::new(InMemoryStore::new()),
+            block_store,
             last_hash: None,
         }
     }
 
+    pub fn new_in_memory() -> Self {
+        Self::new(Box::new(InMemoryStore::new()))
+    }
+
     pub fn new_on_disk(location: PathBuf, fsync: bool) -> Result<Self, BlockStoreError> {
-        Ok(Blocks {
-            balances: HashMap::default(),
-            hash_location: HashMap::default(),
-            block_store: Box::new(OnDiskStore::new(location, fsync)?),
-            tx_hash_location: HashMap::default(),
-            account_location: HashMap::default(),
-            last_hash: None,
-        })
+        Ok(Self::new(Box::new(OnDiskStore::new(location, fsync)?)))
     }
 
     pub fn load_from_store(&mut self) -> Result<u64, ApiError> {
         assert!(self.last()?.is_none(), "Blocks is not empty");
-        assert!(self.balances.is_empty(), "Blocks is not empty");
+        assert!(
+            self.balance_book.store.acc_to_hist.is_empty(),
+            "Blocks is not empty"
+        );
         assert!(self.hash_location.is_empty(), "Blocks is not empty");
         assert!(self.tx_hash_location.is_empty(), "Blocks is not empty");
-        assert!(self.account_location.is_empty(), "Blocks is not empty");
 
         if let Ok(genesis) = self.block_store.get_at(0) {
             self.process_block(genesis)?;
@@ -909,36 +773,23 @@ impl Blocks {
             return Ok(0);
         }
 
-        if let Some((first, balances)) = self.block_store.first_snapshot().cloned() {
-            self.balances.insert(first.index, balances);
+        if let Some((first, balances_snapshot)) = self.block_store.first_snapshot().cloned() {
+            self.balance_book = balances_snapshot;
+
+            // sanity check
+            let mut sum_icpt = ICPTs::ZERO;
+            for acc in self.balance_book.store.acc_to_hist.keys() {
+                sum_icpt += self.get_balance(acc, first.index).unwrap();
+            }
+            assert_eq!(
+                (ICPTs::MAX - sum_icpt).unwrap(),
+                self.balance_book.icpt_pool
+            );
+
             self.hash_location.insert(first.hash, first.index);
 
             let tx = first.block.decode().unwrap().transaction;
             self.tx_hash_location.insert(tx.hash(), first.index);
-            match tx.transfer {
-                ledger_canister::Transfer::Burn { from, .. } => {
-                    self.account_location
-                        .entry(from)
-                        .or_insert_with(Vec::new)
-                        .push(first.index);
-                }
-                ledger_canister::Transfer::Mint { to, .. } => {
-                    self.account_location
-                        .entry(to)
-                        .or_insert_with(Vec::new)
-                        .push(first.index);
-                }
-                ledger_canister::Transfer::Send { from, to, .. } => {
-                    self.account_location
-                        .entry(from)
-                        .or_insert_with(Vec::new)
-                        .push(first.index);
-                    self.account_location
-                        .entry(to)
-                        .or_insert_with(Vec::new)
-                        .push(first.index);
-                }
-            };
             self.last_hash = Some(first.hash);
         }
 
@@ -975,19 +826,27 @@ impl Blocks {
         }
     }
 
-    pub fn get_balances_at(&self, index: BlockHeight) -> Result<Balances, ApiError> {
+    pub fn get_balance(&self, acc: &AccountIdentifier, h: BlockHeight) -> Result<ICPTs, ApiError> {
+        if let Ok(Some(b)) = self.first_verified() {
+            if h < b.index {
+                return Err(invalid_block_id(format!(
+                    "Block at height: {} not available for query",
+                    h
+                )));
+            }
+        }
         let last_verified_idx = self
             .block_store
             .last_verified()
             .map(|x| x as i128)
             .unwrap_or(-1);
-        if index as i128 > last_verified_idx {
-            Err(internal_error("Balances not found"))
+        if h as i128 > last_verified_idx {
+            Err(invalid_block_id(format!(
+                "Block not found at height: {}",
+                h
+            )))
         } else {
-            self.balances
-                .get(&index)
-                .cloned()
-                .ok_or_else(|| internal_error("Balances not found"))
+            self.balance_book.store.get_at(*acc, h)
         }
     }
 
@@ -995,7 +854,7 @@ impl Blocks {
         let index = *self
             .hash_location
             .get(&hash)
-            .ok_or_else(|| invalid_block_id(format!("Block number out of bounds {}", hash)))?;
+            .ok_or_else(|| invalid_block_id(format!("Block not found {}", hash)))?;
         self.get_at(index)
     }
 
@@ -1003,16 +862,8 @@ impl Blocks {
         let index = *self
             .hash_location
             .get(&hash)
-            .ok_or_else(|| invalid_block_id(format!("Block number out of bounds {}", hash)))?;
+            .ok_or_else(|| invalid_block_id(format!("Block not found {}", hash)))?;
         self.get_verified_at(index)
-    }
-
-    pub fn get_balances(&self, hash: HashOf<EncodedBlock>) -> Result<Balances, ApiError> {
-        let index = *self
-            .hash_location
-            .get(&hash)
-            .ok_or_else(|| invalid_block_id(format!("Block number out of bounds {}", hash)))?;
-        self.get_balances_at(index)
     }
 
     /// Add a block to the block_store data structure, the parent_hash must
@@ -1046,50 +897,16 @@ impl Blocks {
             None => assert_eq!(0, index),
         }
 
-        let mut new_balances = match last_index {
-            // This is the first block being added
-            None => Balances::default(),
-            Some(i) => self
-                .balances
-                .get(&i)
-                .ok_or_else(|| {
-                    internal_error("Balances must be populated for all hashes in Blocks")
-                })?
-                .clone(),
-        };
-
-        new_balances.add_payment(&block.transaction.transfer);
+        let mut bb = &mut self.balance_book;
+        bb.store.transaction_context = Some(index);
+        bb.add_payment(&block.transaction.transfer);
+        bb.store.transaction_context = None;
 
         self.hash_location.insert(hash, index);
 
         let tx = block.transaction;
         self.tx_hash_location.insert(tx.hash(), index);
-        match tx.transfer {
-            ledger_canister::Transfer::Burn { from, .. } => {
-                self.account_location
-                    .entry(from)
-                    .or_insert_with(Vec::new)
-                    .push(index);
-            }
-            ledger_canister::Transfer::Mint { to, .. } => {
-                self.account_location
-                    .entry(to)
-                    .or_insert_with(Vec::new)
-                    .push(index);
-            }
-            ledger_canister::Transfer::Send { from, to, .. } => {
-                self.account_location
-                    .entry(from)
-                    .or_insert_with(Vec::new)
-                    .push(index);
-                self.account_location
-                    .entry(to)
-                    .or_insert_with(Vec::new)
-                    .push(index);
-            }
-        };
 
-        self.balances.insert(index, new_balances);
         self.last_hash = Some(hb.hash);
 
         Ok(())
@@ -1145,14 +962,10 @@ impl Blocks {
             let last_idx = self.last()?.map(|hb| hb.index).unwrap_or(0);
             if first_idx + block_limit + prune_delay < last_idx {
                 let new_first_idx = last_idx - block_limit;
-                let balances = self
-                    .balances
-                    .get(&new_first_idx)
-                    .cloned()
-                    .ok_or_else(|| internal_error("Balances not found"))?;
                 let hb = self.block_store.get_at(new_first_idx)?;
+                self.balance_book.store.prune_at(hb.index);
                 self.block_store
-                    .prune(&hb, &balances)
+                    .prune(&hb, &self.balance_book)
                     .map_err(internal_error)?
             }
         }

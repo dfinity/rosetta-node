@@ -81,7 +81,6 @@ pub mod xnet;
 use crate::messages::CanisterInstallMode;
 pub use crate::replica_version::ReplicaVersion;
 pub use crate::time::Time;
-pub use funds::icp::{ICPError, ICP};
 pub use funds::*;
 use ic_base_types::NumSeconds;
 pub use ic_base_types::{
@@ -274,9 +273,9 @@ impl std::ops::Sub for QueryAllocation {
     }
 }
 
-impl Into<NumInstructions> for QueryAllocation {
-    fn into(self) -> NumInstructions {
-        NumInstructions::from(self.0)
+impl From<QueryAllocation> for NumInstructions {
+    fn from(val: QueryAllocation) -> Self {
+        NumInstructions::from(val.0)
     }
 }
 
@@ -354,33 +353,33 @@ impl Default for ComputeAllocation {
 /// [`ComputeAllocation`].
 #[derive(Clone, Debug)]
 pub struct InvalidComputeAllocationError {
-    min: u64,
-    max: u64,
-    given: u64,
+    min: candid::Nat,
+    max: candid::Nat,
+    given: candid::Nat,
 }
 
 const MIN_COMPUTE_ALLOCATION: u64 = 0;
 const MAX_COMPUTE_ALLOCATION: u64 = 100;
 
 impl InvalidComputeAllocationError {
-    pub fn new(given: u64) -> Self {
+    pub fn new(given: candid::Nat) -> Self {
         Self {
-            min: MIN_COMPUTE_ALLOCATION,
-            max: MAX_COMPUTE_ALLOCATION,
+            min: candid::Nat::from(MIN_COMPUTE_ALLOCATION),
+            max: candid::Nat::from(MAX_COMPUTE_ALLOCATION),
             given,
         }
     }
 
-    pub fn min(&self) -> u64 {
-        self.min
+    pub fn min(&self) -> candid::Nat {
+        self.min.clone()
     }
 
-    pub fn max(&self) -> u64 {
-        self.max
+    pub fn max(&self) -> candid::Nat {
+        self.max.clone()
     }
 
-    pub fn given(&self) -> u64 {
-        self.given
+    pub fn given(&self) -> candid::Nat {
+        self.given.clone()
     }
 }
 
@@ -395,7 +394,9 @@ impl TryFrom<u64> for ComputeAllocation {
     // the expected range.
     fn try_from(percent: u64) -> Result<Self, Self::Error> {
         if percent > MAX_COMPUTE_ALLOCATION {
-            return Err(InvalidComputeAllocationError::new(percent));
+            return Err(InvalidComputeAllocationError::new(candid::Nat::from(
+                percent,
+            )));
         }
         Ok(ComputeAllocation(percent))
     }
@@ -443,19 +444,19 @@ impl fmt::Display for MemoryAllocation {
 /// [`MemoryAllocation`].
 #[derive(Clone, Debug)]
 pub struct InvalidMemoryAllocationError {
-    pub min: NumBytes,
-    pub max: NumBytes,
-    pub given: NumBytes,
+    pub min: candid::Nat,
+    pub max: candid::Nat,
+    pub given: candid::Nat,
 }
 
 const MIN_MEMORY_ALLOCATION: NumBytes = NumBytes::new(0);
 const MAX_MEMORY_ALLOCATION: NumBytes = NumBytes::new(8 * 1024 * 1024 * 1024);
 
 impl InvalidMemoryAllocationError {
-    pub fn new(given: NumBytes) -> Self {
+    pub fn new(given: candid::Nat) -> Self {
         Self {
-            min: MIN_MEMORY_ALLOCATION,
-            max: MAX_MEMORY_ALLOCATION,
+            min: candid::Nat::from(MIN_MEMORY_ALLOCATION.get()),
+            max: candid::Nat::from(MAX_MEMORY_ALLOCATION.get()),
             given,
         }
     }
@@ -466,7 +467,9 @@ impl TryFrom<NumBytes> for MemoryAllocation {
 
     fn try_from(bytes: NumBytes) -> Result<Self, Self::Error> {
         if bytes > MAX_MEMORY_ALLOCATION {
-            return Err(InvalidMemoryAllocationError::new(bytes));
+            return Err(InvalidMemoryAllocationError::new(candid::Nat::from(
+                bytes.get(),
+            )));
         }
         Ok(MemoryAllocation(bytes))
     }
@@ -561,19 +564,26 @@ impl TryFrom<(PrincipalId, InstallCodeArgs)> for InstallCodeContext {
             ))
         })?;
         let compute_allocation = match args.compute_allocation {
-            Some(ca) => Some(ComputeAllocation::try_from(ca.0.to_u64().unwrap())?),
+            Some(ca) => Some(ComputeAllocation::try_from(ca.0.to_u64().ok_or_else(
+                || {
+                    InstallCodeContextError::ComputeAllocation(InvalidComputeAllocationError::new(
+                        ca,
+                    ))
+                },
+            )?)?),
             None => None,
         };
         let memory_allocation = match args.memory_allocation {
             Some(ma) => Some(MemoryAllocation::try_from(NumBytes::from(
-                ma.0.to_u64().unwrap(),
+                ma.0.to_u64().ok_or_else(|| {
+                    InstallCodeContextError::MemoryAllocation(InvalidMemoryAllocationError::new(ma))
+                })?,
             ))?),
             None => None,
         };
-        let query_allocation = match args.query_allocation {
-            Some(qa) => QueryAllocation::try_from(qa.0.to_u64().unwrap())?,
-            None => QueryAllocation::default(),
-        };
+
+        // TODO(EXE-294): Query allocations are not supported and should be deleted.
+        let query_allocation = QueryAllocation::default();
 
         Ok(InstallCodeContext {
             sender,
@@ -615,4 +625,28 @@ pub fn freeze_threshold_cycles(
             * freeze_threshold.get() as u128
             / one_gib,
     )
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn install_code_context_conversion_u128() {
+        let install_args = InstallCodeArgs {
+            mode: CanisterInstallMode::Install,
+            canister_id: PrincipalId::try_from([1, 2, 3].as_ref()).unwrap(),
+            wasm_module: vec![],
+            arg: vec![],
+            compute_allocation: Some(candid::Nat::from(u128::MAX)),
+            memory_allocation: Some(candid::Nat::from(u128::MAX)),
+            query_allocation: Some(candid::Nat::from(u128::MAX)),
+        };
+
+        assert!(InstallCodeContext::try_from((
+            PrincipalId::try_from([1, 2, 3].as_ref()).unwrap(),
+            install_args,
+        ))
+        .is_err());
+    }
 }

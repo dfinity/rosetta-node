@@ -5,7 +5,7 @@ use crate::threshold::ni_dkg::{NIDKG_FS_SCOPE, NIDKG_THRESHOLD_SCOPE};
 use crate::types::CspSecretKey;
 use ic_crypto_internal_threshold_sig_bls12381::ni_dkg::groth20_bls12_381::types::convert_keyset_to_keyset_with_pop;
 use ic_crypto_internal_threshold_sig_bls12381::ni_dkg::types::CspFsEncryptionKeySet;
-use ic_logger::{replica_logger::no_op_logger, warn, ReplicaLogger};
+use ic_logger::{info, replica_logger::no_op_logger, ReplicaLogger};
 use ic_types::crypto::KeyId;
 use parking_lot::RwLock;
 use prost::Message;
@@ -194,8 +194,10 @@ impl ProtoSecretKeyStore {
     }
 
     fn secret_keys_to_sks_proto(secret_keys: &SecretKeys) -> pb::SecretKeyStore {
-        let mut sks_proto = pb::SecretKeyStore::default();
-        sks_proto.version = CURRENT_SKS_VERSION;
+        let mut sks_proto = pb::SecretKeyStore {
+            version: CURRENT_SKS_VERSION,
+            ..Default::default()
+        };
         for (key_id, (csp_key, maybe_scope)) in secret_keys {
             let key_id_hex = key_id_to_hex(key_id);
             let key_as_cbor = serde_cbor::to_vec(&csp_key)
@@ -284,9 +286,8 @@ impl SecretKeyStore for ProtoSecretKeyStore {
     }
 
     fn get(&self, id: &KeyId) -> Option<CspSecretKey> {
-        with_read_lock(&self.keys, |keys| match keys.get(id) {
-            Some((csp_key, _)) => Some(csp_key.to_owned()),
-            None => None,
+        with_read_lock(&self.keys, |keys| {
+            keys.get(id).map(|(csp_key, _)| csp_key.to_owned())
         })
     }
 
@@ -318,9 +319,9 @@ impl SecretKeyStore for ProtoSecretKeyStore {
                 if maybe_scope != Some(scope) || filter(&key_id, &csp_key) {
                     keys.insert(key_id, (csp_key, maybe_scope));
                 } else {
-                    warn!(
+                    info!(
                         self.logger,
-                        "WARNING: deleting key with ID {} with scope {}", key_id, scope
+                        "Deleting key with ID {} with scope {}", key_id, scope
                     );
                 }
             }

@@ -1,25 +1,19 @@
 //! The execution environment public interface.
 mod errors;
 
-use crate::{messages::CanisterInputMessage, state_manager::StateManagerError};
+use crate::state_manager::StateManagerError;
 pub use errors::{CanisterHeartbeatError, MessageAcceptanceError};
 pub use errors::{HypervisorError, TrapCode};
-use ic_base_types::{NumBytes, SubnetId};
+use ic_base_types::NumBytes;
 use ic_registry_provisional_whitelist::ProvisionalWhitelist;
-use ic_registry_routing_table::RoutingTable;
-use ic_registry_subnet_type::SubnetType;
 use ic_types::{
     ingress::{IngressStatus, WasmResult},
     messages::{MessageId, SignedIngressContent, UserQuery},
     user_error::UserError,
-    Height, NumInstructions, Time,
+    ExecutionRound, Height, NumInstructions, Randomness, Time,
 };
-use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::BTreeMap,
-    sync::{Arc, RwLock},
-};
+use std::sync::{Arc, RwLock};
 
 /// Instance execution statistics. The stats are cumulative and
 /// contain measurements from the point in time when the instance was
@@ -73,86 +67,6 @@ impl SubnetAvailableMemory {
             })
         }
     }
-}
-
-/// ExecutionEnvironment is the component responsible for executing messages
-/// on the IC.
-pub trait ExecutionEnvironment: Sync + Send {
-    /// Type modelling the replicated state.
-    ///
-    /// Should typically be
-    /// `ic_replicated_state::ReplicatedState`.
-    // Note [Associated Types in Interfaces]
-    type State;
-
-    /// Type modelling the canister state.
-    ///
-    /// Should typically be
-    /// `ic_replicated_state::CanisterState`.
-    // Note [Associated Types in Interfaces]
-    type CanisterState;
-
-    /// Executes a message sent to a subnet.
-    //
-    // A deterministic cryptographically secure pseudo-random number generator
-    // is created per round and per thread and passed to this method to be used
-    // while responding to randomness requests (i.e. raw_rand). Using the type
-    // "&mut RngCore" imposes a problem with our usage of "mockall" library in
-    // the test_utilities. Mockall's doc states: "The only restrictions on
-    // mocking generic methods are that all generic parameters must be 'static,
-    // and generic lifetime parameters are not allowed." Hence, the type of the
-    // parameter is "&mut (dyn RngCore + 'static)".
-    #[allow(clippy::too_many_arguments)]
-    fn execute_subnet_message(
-        &self,
-        msg: CanisterInputMessage,
-        state: Self::State,
-        instructions_limit: NumInstructions,
-        rng: &mut (dyn RngCore + 'static),
-        provisional_whitelist: &ProvisionalWhitelist,
-        subnet_available_memory: SubnetAvailableMemory,
-    ) -> Self::State;
-
-    /// Executes a message sent to a canister.
-    #[allow(clippy::too_many_arguments)]
-    fn execute_canister_message(
-        &self,
-        canister_state: Self::CanisterState,
-        instructions_limit: NumInstructions,
-        msg: CanisterInputMessage,
-        time: Time,
-        routing_table: Arc<RoutingTable>,
-        subnet_records: Arc<BTreeMap<SubnetId, SubnetType>>,
-        subnet_available_memory: SubnetAvailableMemory,
-    ) -> ExecResult<ExecuteMessageResult<Self::CanisterState>>;
-
-    /// Asks the canister if it is willing to accept the provided ingress
-    /// message.
-    fn should_accept_ingress_message(
-        &self,
-        state: Arc<Self::State>,
-        provisional_whitelist: &ProvisionalWhitelist,
-        ingress: &SignedIngressContent,
-    ) -> Result<(), MessageAcceptanceError>;
-
-    /// Executes a heartbeat of a given canister.
-    fn execute_canister_heartbeat(
-        &self,
-        canister_state: Self::CanisterState,
-        instructions_limit: NumInstructions,
-        routing_table: Arc<RoutingTable>,
-        subnet_records: Arc<BTreeMap<SubnetId, SubnetType>>,
-        time: Time,
-        subnet_available_memory: SubnetAvailableMemory,
-    ) -> ExecResult<(
-        Self::CanisterState,
-        NumInstructions,
-        Result<NumBytes, CanisterHeartbeatError>,
-    )>;
-
-    /// Look up the current amount of memory available on the subnet.
-    /// EXC-185 will make this method obsolete.
-    fn subnet_available_memory(&self, state: &Self::State) -> NumBytes;
 }
 
 /// The data structure returned by
@@ -362,6 +276,25 @@ pub trait QueryHandler: Send + Sync {
     ) -> Result<WasmResult, UserError>;
 }
 
+/// Interface for the component to filter out ingress messages that
+/// the canister is not willing to accept.
+pub trait IngressMessageFilter: Send + Sync {
+    /// Type of state managed by StateReader.
+    ///
+    /// Should typically be `ic_replicated_state::ReplicatedState`.
+    // Note [Associated Types in Interfaces]
+    type State;
+
+    /// Asks the canister if it is willing to accept the provided ingress
+    /// message.
+    fn should_accept_ingress_message(
+        &self,
+        state: Arc<Self::State>,
+        provisional_whitelist: &ProvisionalWhitelist,
+        ingress: &SignedIngressContent,
+    ) -> Result<(), MessageAcceptanceError>;
+}
+
 /// Errors that can be returned when reading/writing from/to ingress history.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum IngressHistoryError {
@@ -419,14 +352,11 @@ pub trait SystemApi {
     /// Returns the reference to the execution error.
     fn get_execution_error(&self) -> Option<&HypervisorError>;
 
-    /// Returns the amount of available instructions.
-    fn get_available_num_instructions(&self) -> NumInstructions;
-
     /// Returns the stable memory delta that the canister produced
     fn get_stable_memory_delta_pages(&self) -> usize;
 
-    /// Sets the amount of available instructions.
-    fn set_available_num_instructions(&mut self, num_instructions: NumInstructions);
+    /// Returns the amount of instructions needed to copy `num_bytes`.
+    fn get_num_instructions_from_bytes(&self, num_bytes: NumBytes) -> NumInstructions;
 
     /// Copies `size` bytes starting from `offset` inside the opaque caller blob
     /// and copies them to heap[dst..dst+size]. The caller is the canister
@@ -754,4 +684,57 @@ pub trait SystemApi {
     ///
     /// Returns the amount of cycles added to the canister's balance.
     fn ic0_mint_cycles(&mut self, amount: u64) -> HypervisorResult<u64>;
+}
+
+pub trait Scheduler: Send {
+    /// Type modelling the replicated state.
+    ///
+    /// Should typically be
+    /// `ic_replicated_state::ReplicatedState`.
+    // Note [Associated Types in Interfaces]
+    type State;
+
+    /// Executes a list of messages. Triggered by the Coordinator as part of
+    /// processing a batch.
+    ///
+    /// # Configuration parameters that might affect a round's execution
+    ///
+    /// * `scheduler_cores`: number of concurrent threads that the scheduler can
+    ///   use during an execution round.
+    /// * `max_instructions_per_round`: max number of instructions a single
+    ///   round on a single thread can
+    /// consume.
+    /// * `max_instructions_per_message`: max number of instructions a single
+    ///   message execution can consume.
+    ///
+    /// # Walkthrough of a round
+    ///
+    /// The scheduler decides on a deterministic and fair order of canisters to
+    /// execute on each thread (not fully implemented yet).
+    /// For each thread we want to schedule **at least** a `pulse` for the first
+    /// canister. The canister's `pulse` can consume the entire round of the
+    /// thread if it has enough messages or, if not, we can give a `pulse` to
+    /// the next canister. Similarly, the second canister can use the rest
+    /// of the round of the thread if it has enough messages or we can give
+    /// a `pulse` to the next canister and so on.
+    ///
+    /// # Constraints
+    ///
+    /// * To be able to start a pulse for a canister we need to have at least
+    ///   `max_instructions_per_message` left in the current round (basically we
+    ///   need a guarantee that we are able to execute successfully at least one
+    ///   message).
+    /// * The round (and thus the first `pulse`) starts with a limit of
+    ///   `max_instructions_per_round`. When the `pulse` ends it returns how
+    ///   many instructions is left which is used to update the limit for the
+    ///   next `pulse` and if the above constraint is satisfied, we can start
+    ///   the `pulse`. And so on.
+    fn execute_round(
+        &self,
+        state: Self::State,
+        randomness: Randomness,
+        time_of_previous_batch: Time,
+        current_round: ExecutionRound,
+        provisional_whitelist: ProvisionalWhitelist,
+    ) -> Self::State;
 }

@@ -2,26 +2,21 @@ mod basic_tests;
 mod rosetta_cli_tests;
 mod store_tests;
 
-use lazy_static::lazy_static;
-use url::Url;
-
 use ic_rosetta_api::models::{
-    AccountBalanceRequest, AccountBalanceResponse, ApiError, Envelopes, NetworkListResponse,
-    NetworkRequest, PartialBlockIdentifier, TransactionIdentifier,
+    AccountBalanceRequest, AccountBalanceResponse, ApiError, EnvelopePair, NetworkListResponse,
+    NetworkRequest, PartialBlockIdentifier, SignedTransaction,
 };
 use ledger_canister::{self, AccountIdentifier, Block, BlockHeight, ICPTs, SendArgs, Transfer};
 use tokio::sync::RwLock;
 
-// TODO remove after disconnecting tests
 use async_trait::async_trait;
 use dfn_core::CanisterId;
-#[allow(unused_imports)]
+use ic_rosetta_api::balance_book::BalanceBook;
+
 use ic_rosetta_api::convert::{
-    from_arg, from_hash, from_hex, from_model_account_identifier, from_public_key, internal_error,
-    operations, to_arg, to_hash, to_hex, to_model_account_identifier, transaction_id,
-    transaction_identifier,
+    from_arg, internal_error, to_model_account_identifier, transaction_identifier,
 };
-use ic_rosetta_api::ledger_client::{Balances, Blocks, ChunkmapBalancesStore, LedgerAccess};
+use ic_rosetta_api::ledger_client::{Blocks, LedgerAccess, SubmitResult};
 use ic_rosetta_api::rosetta_server::RosettaApiServer;
 use ic_rosetta_api::{store::HashedBlock, RosettaRequestHandler};
 use ic_types::{
@@ -36,8 +31,7 @@ use std::str::FromStr;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use ic_rosetta_test_utils::acc_id;
-use ic_rosetta_test_utils::sample_data::Scribe;
+use ic_rosetta_test_utils::{acc_id, sample_data::Scribe};
 
 fn init_test_logger() {
     // Unfortunately cargo test doesn't capture stdout properly
@@ -55,15 +49,10 @@ fn create_tmp_dir() -> tempfile::TempDir {
         .unwrap()
 }
 
-lazy_static! {
-    static ref DUMMY_CAN_ID: CanisterId = {
-        CanisterId::new(PrincipalId::try_from(&[0, 0, 0, 0, 0, 0, 4, 210][..]).unwrap()).unwrap()
-    };
-}
-
 pub struct TestLedger {
     blockchain: RwLock<Blocks>,
     canister_id: CanisterId,
+    governance_canister_id: CanisterId,
     submit_queue: RwLock<Vec<HashedBlock>>,
 }
 
@@ -75,6 +64,19 @@ impl TestLedger {
                 PrincipalId::from_str("5v3p4-iyaaa-aaaaa-qaaaa-cai").unwrap(),
             )
             .unwrap(),
+            governance_canister_id: ic_nns_constants::GOVERNANCE_CANISTER_ID,
+            submit_queue: RwLock::new(Vec::new()),
+        }
+    }
+
+    pub fn from_blockchain(blocks: Blocks) -> Self {
+        Self {
+            blockchain: RwLock::new(blocks),
+            canister_id: CanisterId::new(
+                PrincipalId::from_str("5v3p4-iyaaa-aaaaa-qaaaa-cai").unwrap(),
+            )
+            .unwrap(),
+            governance_canister_id: ic_nns_constants::GOVERNANCE_CANISTER_ID,
             submit_queue: RwLock::new(Vec::new()),
         }
     }
@@ -146,78 +148,81 @@ impl LedgerAccess for TestLedger {
         &self.canister_id
     }
 
-    fn network_url(&self) -> &Url {
-        panic!("Network url not available");
+    fn governance_canister_id(&self) -> &CanisterId {
+        &self.governance_canister_id
     }
 
-    async fn submit(
-        &self,
-        envelopes: Envelopes,
-    ) -> Result<(TransactionIdentifier, Option<BlockHeight>), ApiError> {
-        let (submit_request, _read_state_request) = &envelopes[0];
+    async fn submit(&self, envelopes: SignedTransaction) -> Result<Vec<SubmitResult>, ApiError> {
+        let mut results = vec![];
 
-        let HttpCanisterUpdate { arg, sender, .. } = match submit_request.content.clone() {
-            HttpSubmitContent::Call { update } => update,
-        };
+        for request in &envelopes {
+            let EnvelopePair { update, .. } = &request[0];
 
-        let from = PrincipalId::try_from(sender.0).map_err(internal_error)?;
+            let HttpCanisterUpdate { arg, sender, .. } = match update.content.clone() {
+                HttpSubmitContent::Call { update } => update,
+            };
 
-        let SendArgs {
-            memo,
-            amount,
-            fee,
-            from_subaccount,
-            to,
-            created_at_time,
-        } = from_arg(arg.0).unwrap();
-        let created_at_time = created_at_time.unwrap();
+            let from = PrincipalId::try_from(sender.0).map_err(internal_error)?;
 
-        let from = ledger_canister::AccountIdentifier::new(from, from_subaccount);
+            let SendArgs {
+                memo,
+                amount,
+                fee,
+                from_subaccount,
+                to,
+                created_at_time,
+            } = from_arg(arg.0).unwrap();
+            let created_at_time = created_at_time.unwrap();
 
-        let transaction = Transfer::Send {
-            from,
-            to,
-            amount,
-            fee,
-        };
+            let from = ledger_canister::AccountIdentifier::new(from, from_subaccount);
 
-        let (parent_hash, index) = match self.last_submitted().await? {
-            None => (None, 0),
-            Some(hb) => (Some(hb.hash), hb.index + 1),
-        };
+            let transaction = Transfer::Send {
+                from,
+                to,
+                amount,
+                fee,
+            };
 
-        let block = Block::new(
-            None, /* FIXME */
-            transaction,
-            memo,
-            created_at_time,
-            dfn_core::api::now().into(),
-        )
-        .map_err(internal_error)?;
+            let (parent_hash, index) = match self.last_submitted().await? {
+                None => (None, 0),
+                Some(hb) => (Some(hb.hash), hb.index + 1),
+            };
 
-        let raw_block = block.clone().encode().map_err(internal_error)?;
+            let block = Block::new(
+                None, /* FIXME */
+                transaction,
+                memo,
+                created_at_time,
+                dfn_core::api::now().into(),
+            )
+            .map_err(internal_error)?;
 
-        let hb = HashedBlock::hash_block(raw_block, parent_hash, index);
+            let raw_block = block.clone().encode().map_err(internal_error)?;
 
-        self.submit_queue.write().await.push(hb.clone());
+            let hb = HashedBlock::hash_block(raw_block, parent_hash, index);
 
-        Ok((transaction_identifier(&block.transaction().hash()), None))
-    }
+            self.submit_queue.write().await.push(hb.clone());
 
-    async fn chain_length(&self) -> BlockHeight {
-        match self.blockchain.read().await.last_verified().unwrap() {
-            None => 0,
-            Some(hb) => hb.index + 1,
+            results.push(SubmitResult {
+                transaction_identifier: transaction_identifier(&block.transaction().hash()),
+                block_index: None,
+            });
         }
+
+        Ok(results)
     }
 }
 
-pub(crate) fn to_balances(b: BTreeMap<AccountIdentifier, ICPTs>) -> Balances {
-    use std::iter::FromIterator;
-    let mut balances = Balances::default();
-    let x = immutable_chunkmap::map::Map::<AccountIdentifier, ICPTs>::from_iter(b.into_iter());
-    balances.store = ChunkmapBalancesStore(x);
-    balances
+pub(crate) fn to_balances(
+    b: BTreeMap<AccountIdentifier, ICPTs>,
+    index: BlockHeight,
+) -> BalanceBook {
+    let mut balance_book = BalanceBook::default();
+    for (acc, amount) in b {
+        balance_book.icpt_pool -= amount;
+        balance_book.store.insert(acc, index, amount);
+    }
+    balance_book
 }
 
 pub async fn get_balance(
@@ -229,10 +234,8 @@ pub async fn get_balance(
         index: Some(h as i64),
         hash: None,
     });
-    let mut msg = AccountBalanceRequest::new(
-        req_handler.network_id(),
-        ic_rosetta_api::convert::to_model_account_identifier(&acc),
-    );
+    let mut msg =
+        AccountBalanceRequest::new(req_handler.network_id(), to_model_account_identifier(&acc));
     msg.block_identifier = block_id;
     let resp = req_handler.account_balance(msg).await?;
     Ok(ICPTs::from_e8s(resp.balances[0].value.parse().unwrap()))
@@ -267,7 +270,7 @@ async fn smoke_test_with_server() {
     let serv_run = serv.clone();
     actix_rt::spawn(async move {
         log::info!("Spawning server");
-        serv_run.run(false, false).await.unwrap();
+        serv_run.run(Default::default()).await.unwrap();
         log::info!("Server thread done");
     });
 
@@ -288,7 +291,7 @@ async fn smoke_test_with_server() {
 
     let msg = AccountBalanceRequest::new(
         req_handler.network_id(),
-        ic_rosetta_api::convert::to_model_account_identifier(&acc_id(0)),
+        to_model_account_identifier(&acc_id(0)),
     );
 
     let http_body = serde_json::to_vec(&msg).unwrap();

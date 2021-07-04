@@ -1,64 +1,77 @@
 use super::*;
-use ic_rosetta_api::store::{BlockStore, BlockStoreError, InMemoryStore, OnDiskStore};
+use ic_rosetta_api::store::{BlockStore, BlockStoreError, InMemoryStore, SQLiteStore};
+
+fn sqlite_in_memory_store(path: &std::path::Path) -> SQLiteStore {
+    let connection = rusqlite::Connection::open_in_memory()
+        .expect("Unable to open SQLite in-memory database connection");
+    let store = SQLiteStore::new(path.to_path_buf(), connection).expect("Unable to create store");
+    store
+        .create_tables()
+        .expect("Unable to create database tables");
+    store
+}
+
+fn on_disk_store(path: &std::path::Path) -> SQLiteStore {
+    let connection = rusqlite::Connection::open(path.join("db.sqlite"))
+        .expect("Unable to open SQLite in-memory database connection");
+    let store = SQLiteStore::new(path.to_path_buf(), connection).expect("Unable to create store");
+    store
+        .create_tables()
+        .expect("Unable to create database tables");
+    store
+}
 
 #[actix_rt::test]
 async fn in_memory_store_smoke_test() {
     init_test_logger();
-    let store = InMemoryStore::new();
-    store_smoke_test(store);
+    store_smoke_test(InMemoryStore::new());
 }
 
 #[actix_rt::test]
 async fn in_memory_store_prune_test() {
     init_test_logger();
-    let store = InMemoryStore::new();
-    store_prune_test(store);
+    store_prune_test(InMemoryStore::new());
 }
 
 #[actix_rt::test]
 async fn in_memory_store_prune_corner_cases_test() {
     init_test_logger();
-    let store = InMemoryStore::new();
-    store_prune_corner_cases_test(store);
+    store_prune_corner_cases_test(InMemoryStore::new());
 }
 
 #[actix_rt::test]
-async fn on_disk_store_smoke_test() {
+async fn sqlite_in_memory_store_smoke_test() {
     init_test_logger();
     let tmpdir = create_tmp_dir();
-    let store = OnDiskStore::new(tmpdir.path().into(), true).unwrap();
-    store_smoke_test(store);
+    store_smoke_test(sqlite_in_memory_store(tmpdir.path()));
 }
 
 #[actix_rt::test]
-async fn on_disk_store_prune_test() {
+async fn sqlite_in_memory_store_prune_test() {
     init_test_logger();
     let tmpdir = create_tmp_dir();
-    let store = OnDiskStore::new(tmpdir.path().into(), true).unwrap();
-    store_prune_test(store);
+    store_prune_test(sqlite_in_memory_store(tmpdir.path()));
 }
 
 #[actix_rt::test]
-async fn on_disk_store_prune_corner_cases_test() {
+async fn sqlite_in_memory_store_prune_corner_cases_test() {
     init_test_logger();
     let tmpdir = create_tmp_dir();
-    let store = OnDiskStore::new(tmpdir.path().into(), true).unwrap();
-    store_prune_corner_cases_test(store);
+    store_prune_corner_cases_test(sqlite_in_memory_store(tmpdir.path()));
 }
 
 #[actix_rt::test]
 async fn on_disk_store_prune_first_balance_test() {
     init_test_logger();
     let tmpdir = create_tmp_dir();
-    let store = OnDiskStore::new(tmpdir.path().into(), true).unwrap();
-    store_prune_first_balance_test(store);
+    store_prune_first_balance_test(on_disk_store(tmpdir.path()));
 }
 
 #[actix_rt::test]
 async fn on_disk_store_prune_and_load_test() {
     init_test_logger();
     let tmpdir = create_tmp_dir();
-    let mut store = OnDiskStore::new(tmpdir.path().into(), true).unwrap();
+    let mut store = on_disk_store(tmpdir.path());
 
     let scribe = Scribe::new_with_sample_data(10, 100);
 
@@ -76,7 +89,7 @@ async fn on_disk_store_prune_and_load_test() {
 
     drop(store);
     // Now reload from disk
-    let mut store = OnDiskStore::new(tmpdir.path().into(), true).unwrap();
+    let mut store = on_disk_store(tmpdir.path());
     verify_pruned(&scribe, &mut store, 20);
     verify_balance_snapshot(&scribe, &mut store, 20);
 
@@ -86,7 +99,7 @@ async fn on_disk_store_prune_and_load_test() {
 
     drop(store);
     // Reload once again
-    let mut store = OnDiskStore::new(tmpdir.path().into(), true).unwrap();
+    let mut store = on_disk_store(tmpdir.path());
     verify_pruned(&scribe, &mut store, 30);
     verify_balance_snapshot(&scribe, &mut store, 30);
 }
@@ -167,6 +180,7 @@ fn prune(scribe: &Scribe, store: &mut impl BlockStore, prune_at: u64) {
             .get(oldest_idx as usize)
             .unwrap()
             .clone(),
+        oldest_idx,
     );
 
     store.prune(oldest_block, &oldest_balance).unwrap();
@@ -204,6 +218,15 @@ fn verify_balance_snapshot(scribe: &Scribe, store: &mut impl BlockStore, prune_a
     assert_eq!(oldest_block, *scribe.blockchain.get(oldest_idx).unwrap());
     assert_eq!(
         balances.store,
-        to_balances(scribe.balance_history.get(oldest_idx).unwrap().clone(),).store
+        to_balances(
+            scribe.balance_history.get(oldest_idx).unwrap().clone(),
+            oldest_idx as u64
+        )
+        .store
     );
+    let mut sum_icpt = ICPTs::ZERO;
+    for amount in scribe.balance_history.get(oldest_idx).unwrap().values() {
+        sum_icpt += *amount;
+    }
+    assert_eq!((ICPTs::MAX - sum_icpt).unwrap(), balances.icpt_pool);
 }

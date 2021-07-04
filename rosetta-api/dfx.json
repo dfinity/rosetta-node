@@ -19,7 +19,7 @@
         "bind": "127.0.0.1:8080"
       },
       "ic": {
-          "providers": ["https://gw.dfinity.network"],
+          "providers": ["https://ic0.app"],
           "type": "persistent"
       },
       "exchanges": {
@@ -27,7 +27,7 @@
           "type": "persistent"
       },
       "mainnet-rosetta": {
-          "providers": ["https://rosetta.dfinity.network"],
+          "providers": ["https://rosetta-exchanges.ic0.app"],
           "type": "persistent"
       }
   }

@@ -52,7 +52,9 @@ mod keygen {
         assert!(pk_result.is_err());
         let err = pk_result.unwrap_err();
         assert!(err.is_malformed_public_key());
-        assert!(err.to_string().contains("Wrong OID:"));
+        assert!(err
+            .to_string()
+            .contains("Wrong algorithm identifier for Ed25519"));
     }
 
     #[test]

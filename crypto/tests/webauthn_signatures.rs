@@ -75,7 +75,7 @@ fn should_fail_parsing_corrupted_cose_pk() {
     let pk_cose = hex::decode(test_data::ECDSA_P256_PK_1_COSE_HEX).unwrap();
     let result = user_public_key_from_bytes(&pk_cose[1..]);
     assert!(result.is_err());
-    assert!(result.unwrap_err().is_algorithm_not_supported());
+    assert!(result.unwrap_err().is_malformed_public_key());
 }
 
 #[test]

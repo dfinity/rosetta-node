@@ -1,6 +1,6 @@
 [package]
 name = "ic-nns-common"
-version = "0.1.0"
+version = "0.8.0"
 edition = "2018"
 
 [lib]
@@ -28,6 +28,7 @@ sha2 = "0.9.1"
 serial_test = "0.5.0"
 
 [build-dependencies]
+ic-base-types = { path = "../../types/base_types" }
 ic-nns-constants = { path = "../constants" }
 ic-types = { path = "../../types/types" }
 prost-build = "0.7.0"

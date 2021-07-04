@@ -5,13 +5,16 @@ use ic_types::CanisterId;
 
 use ledger_canister::{AccountIdentifier, BlockHeight};
 
+use crate::store_threshold_sig_pk;
+use ic_types::messages::Blob;
 use rand::{seq::SliceRandom, thread_rng};
 use reqwest::Client as HttpClient;
 use reqwest::StatusCode as HttpStatusCode;
 use std::convert::TryFrom;
+use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
-use tokio::time::delay_for;
+use tokio::time::sleep;
 use url::Url;
 
 fn to_rosetta_response<T: serde::de::DeserializeOwned>(
@@ -42,6 +45,7 @@ pub struct RosettaApiHandle {
     http_client: HttpClient,
     api_url: String,
     ledger_can_id: CanisterId,
+    governance_can_id: CanisterId,
     workspace: tempfile::TempDir,
 }
 
@@ -50,8 +54,9 @@ impl RosettaApiHandle {
         node_url: Url,
         port: u16,
         ledger_can_id: CanisterId,
+        governance_can_id: CanisterId,
         workspace_path: String,
-        root_key_file_path: &std::path::Path,
+        root_key_blob: Option<&Blob>,
     ) -> Self {
         let log_conf_file = format!("{}/ic_rosetta_api_log_config.yml", workspace_path);
 
@@ -64,23 +69,39 @@ impl RosettaApiHandle {
         let api_port = format!("{}", port);
         let api_url = format!("{}:{}", api_addr, api_port);
 
+        let mut args = Vec::new();
+        args.push("--ic-url".to_string());
+        args.push(node_url.to_string());
+
+        args.push("--canister-id".to_string());
+        args.push(ledger_can_id.get().to_string());
+
+        args.push("--governance-canister-id".to_string());
+        args.push(governance_can_id.get().to_string());
+
+        args.push("--address".to_string());
+        args.push(api_addr.to_string());
+
+        args.push("--port".to_string());
+        args.push(api_port);
+
+        args.push("--log-config-file".to_string());
+        args.push(log_conf_file);
+
+        args.push("--store-location".to_string());
+        args.push(format!("{}/data", workspace.path().display()));
+
+        if let Some(root_key) = root_key_blob {
+            let root_key_file_path =
+                std::path::PathBuf::from(format!("{}/root_key.pub", workspace.path().display()));
+            store_threshold_sig_pk(&root_key, &root_key_file_path);
+
+            args.push("--root-key".to_string());
+            args.push(String::from(root_key_file_path.to_str().unwrap()));
+        }
+
         let process = std::process::Command::new("ic-rosetta-api")
-            .args(&[
-                "--ic-url",
-                node_url.as_str(),
-                "--canister-id",
-                &ledger_can_id.get().to_string(),
-                "--address",
-                api_addr,
-                "--port",
-                &api_port,
-                "--log-config-file",
-                &log_conf_file,
-                "--store-location",
-                &format!("{}/data", workspace.path().display()),
-                "--root-key",
-                root_key_file_path.to_str().unwrap(),
-            ])
+            .args(&args)
             .stdout(std::process::Stdio::inherit())
             .stderr(std::process::Stdio::inherit())
             .spawn()
@@ -93,6 +114,7 @@ impl RosettaApiHandle {
             http_client,
             api_url,
             ledger_can_id,
+            governance_can_id,
             workspace,
         };
 
@@ -105,7 +127,7 @@ impl RosettaApiHandle {
     }
 
     // I have hoped to avoid generating configs on the fly, but...
-    pub fn generate_rosetta_cli_config(&self, cli_json: &PathBuf, cli_ros: &PathBuf) -> String {
+    pub fn generate_rosetta_cli_config(&self, cli_json: &Path, cli_ros: &Path) -> String {
         use std::fs::write;
 
         let ic_address = hex::encode(&self.ledger_can_id);
@@ -124,20 +146,32 @@ impl RosettaApiHandle {
         dst_dir.join("ros_cli.json").to_str().unwrap().to_string()
     }
 
+    /// Returns the identifier of the ICP network.
     pub fn network_id(&self) -> NetworkIdentifier {
-        let net_id = hex::encode(self.ledger_can_id.get().into_vec());
+        let net_id = hex::encode(self.ledger_can_id.get().as_slice());
         NetworkIdentifier::new("Internet Computer".to_string(), net_id)
+    }
+
+    /// Returns the identifier of the neuron network.
+    pub fn neuron_network_id(&self) -> NetworkIdentifier {
+        let net_id = hex::encode(self.governance_can_id.get().as_slice());
+        NetworkIdentifier::new("Internet Computer".to_string(), net_id)
+    }
+
+    /// Returns the account address shared by all neuron subaccounts.
+    pub fn neuron_account(&self) -> String {
+        self.governance_can_id.to_string()
     }
 
     async fn wait_for_startup(&self) {
         let now = std::time::SystemTime::now();
-        let timeout = std::time::Duration::from_secs(5);
+        let timeout = std::time::Duration::from_secs(10);
 
         while now.elapsed().unwrap() < timeout {
             if self.network_list().await.is_ok() {
                 return;
             }
-            delay_for(Duration::from_millis(100)).await;
+            sleep(Duration::from_millis(100)).await;
         }
         panic!("Rosetta_api failed to start in {} secs", timeout.as_secs());
     }
@@ -164,11 +198,12 @@ impl RosettaApiHandle {
         Ok((resp_body, resp_status))
     }
 
-    pub async fn construction_derive(
+    pub async fn construction_derive_for_network(
         &self,
+        net_id: NetworkIdentifier,
         pk: PublicKey,
     ) -> Result<Result<ConstructionDeriveResponse, RosettaError>, String> {
-        let req = ConstructionDeriveRequest::new(self.network_id(), pk);
+        let req = ConstructionDeriveRequest::new(net_id, pk);
         to_rosetta_response(
             self.post_json_request(
                 &format!("http://{}/construction/derive", self.api_url),
@@ -176,6 +211,14 @@ impl RosettaApiHandle {
             )
             .await,
         )
+    }
+
+    pub async fn construction_derive(
+        &self,
+        pk: PublicKey,
+    ) -> Result<Result<ConstructionDeriveResponse, RosettaError>, String> {
+        self.construction_derive_for_network(self.network_id(), pk)
+            .await
     }
 
     pub async fn construction_preprocess(
@@ -299,19 +342,16 @@ impl RosettaApiHandle {
 
     pub async fn construction_submit(
         &self,
-        signed_transaction: String,
+        mut signed_transaction: SignedTransaction,
     ) -> Result<Result<ConstructionSubmitResponse, RosettaError>, String> {
         // Shuffle the messages to check whether the server picks a
         // valid one to send to the IC.
-        let mut signed_transaction: Envelopes =
-            serde_cbor::from_slice(&hex::decode(&signed_transaction).unwrap()).unwrap();
         let mut rng = thread_rng();
-        signed_transaction.shuffle(&mut rng);
+        for request in signed_transaction.iter_mut() {
+            request.shuffle(&mut rng);
+        }
 
-        let req = ConstructionSubmitRequest {
-            network_identifier: self.network_id(),
-            signed_transaction: hex::encode(serde_cbor::to_vec(&signed_transaction).unwrap()),
-        };
+        let req = ConstructionSubmitRequest::new(self.network_id(), signed_transaction);
 
         to_rosetta_response(
             self.post_json_request(
@@ -390,7 +430,7 @@ impl RosettaApiHandle {
                     return Ok(b);
                 }
             }
-            delay_for(Duration::from_millis(100)).await;
+            sleep(Duration::from_millis(100)).await;
         }
         Err(format!("Timeout on waiting for block at {}", idx))
     }
@@ -405,7 +445,7 @@ impl RosettaApiHandle {
                     return Ok(());
                 }
             }
-            delay_for(Duration::from_millis(100)).await;
+            sleep(Duration::from_millis(100)).await;
         }
 
         Err(format!("Timeout on waiting for tip at {}", tip_idx))
