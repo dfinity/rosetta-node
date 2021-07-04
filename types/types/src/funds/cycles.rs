@@ -1,4 +1,5 @@
 use candid::CandidType;
+use ic_protobuf::state::canister_state_bits::v1::CyclesAccount as pbCyclesAccount;
 use ic_protobuf::state::queues::v1::Cycles as PbCycles;
 use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
@@ -49,15 +50,15 @@ impl From<&Vec<u8>> for Cycles {
     }
 }
 
-impl Into<Vec<u8>> for Cycles {
-    fn into(self) -> Vec<u8> {
-        self.0.to_le_bytes().to_vec()
+impl From<Cycles> for Vec<u8> {
+    fn from(val: Cycles) -> Self {
+        val.0.to_le_bytes().to_vec()
     }
 }
 
-impl Into<u64> for Cycles {
-    fn into(self) -> u64 {
-        self.0 as u64
+impl From<Cycles> for u64 {
+    fn from(val: Cycles) -> Self {
+        val.0 as u64
     }
 }
 
@@ -144,6 +145,20 @@ impl From<Cycles> for PbCycles {
 impl From<PbCycles> for Cycles {
     fn from(item: PbCycles) -> Self {
         Self::from(&item.raw_cycles)
+    }
+}
+
+impl From<Cycles> for pbCyclesAccount {
+    fn from(item: Cycles) -> Self {
+        Self {
+            cycles_balance: item.into(),
+        }
+    }
+}
+
+impl From<pbCyclesAccount> for Cycles {
+    fn from(value: pbCyclesAccount) -> Self {
+        Self::from(&value.cycles_balance)
     }
 }
 

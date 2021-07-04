@@ -51,6 +51,10 @@ impl SignedIngressContent {
     pub fn nonce(&self) -> Option<&Vec<u8>> {
         self.nonce.as_ref()
     }
+
+    pub fn ingress_expiry(&self) -> Time {
+        Time::from_nanos_since_unix_epoch(self.ingress_expiry)
+    }
 }
 
 impl HasCanisterId for SignedIngressContent {

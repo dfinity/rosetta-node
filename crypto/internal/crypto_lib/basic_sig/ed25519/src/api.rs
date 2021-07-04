@@ -19,6 +19,13 @@ pub fn keypair_from_rng<R: Rng + CryptoRng>(
     (sk, pk)
 }
 
+/// The object identifier for Ed25519 public keys
+///
+/// See [RFC 8410](https://tools.ietf.org/html/rfc8410).
+pub fn algorithm_identifier() -> der_utils::PkixAlgorithmIdentifier {
+    der_utils::PkixAlgorithmIdentifier::new_with_empty_param(simple_asn1::oid!(1, 3, 101, 112))
+}
+
 /// Decodes an Ed25519 public key from a DER-encoding according to
 /// [RFC 8410, Section 4](https://tools.ietf.org/html/rfc8410#section-4).
 ///
@@ -28,14 +35,13 @@ pub fn keypair_from_rng<R: Rng + CryptoRng>(
 /// * `MalformedPublicKey` if the input is not a valid DER-encoding according to
 ///   RFC 8410, or the OID in incorrect, or the key length is incorrect.
 pub fn public_key_from_der(pk_der: &[u8]) -> CryptoResult<types::PublicKeyBytes> {
-    let (oid, pk_bytes) = der_utils::oid_and_public_key_bytes_from_der(pk_der).map_err(|e| {
-        CryptoError::MalformedPublicKey {
-            algorithm: AlgorithmId::Ed25519,
-            key_bytes: Some(pk_der.to_vec()),
-            internal_error: e.internal_error,
-        }
-    })?;
-    ensure_correct_oid(oid, pk_der)?;
+    let expected_pk_len = 32;
+    let pk_bytes = der_utils::parse_public_key(
+        pk_der,
+        AlgorithmId::Ed25519,
+        algorithm_identifier(),
+        Some(expected_pk_len),
+    )?;
     types::PublicKeyBytes::try_from(&pk_bytes)
 }
 
@@ -112,16 +118,4 @@ pub fn verify_public_key(pk: &types::PublicKeyBytes) -> bool {
         None => false,
         Some(edwards_point) => edwards_point.is_torsion_free(),
     }
-}
-
-fn ensure_correct_oid(oid: simple_asn1::OID, pk_der: &[u8]) -> CryptoResult<()> {
-    // OID for Ed25519 is 1.3.101.112, see https://tools.ietf.org/html/rfc8410
-    if oid != simple_asn1::oid!(1, 3, 101, 112) {
-        return Err(CryptoError::MalformedPublicKey {
-            algorithm: AlgorithmId::Ed25519,
-            key_bytes: Some(Vec::from(pk_der)),
-            internal_error: format!("Wrong OID: {:?}", oid),
-        });
-    }
-    Ok(())
 }

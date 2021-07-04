@@ -224,7 +224,6 @@ fn should_correctly_compare_csp_signatures() {
     let ed25519_s1_2 = CspSignature::ed25519_from_hex(TESTVEC_RFC8032_ED25519_1_SIG);
     let ed25519_s2 = CspSignature::ed25519_from_hex(TESTVEC_RFC8032_ED25519_2_SIG);
 
-    assert_eq!(ed25519_s1, ed25519_s1);
     assert_eq!(ed25519_s1, ed25519_s1_2);
     assert_ne!(ed25519_s1, ed25519_s2);
 }

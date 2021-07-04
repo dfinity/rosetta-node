@@ -235,7 +235,13 @@ impl RosettaApiServer {
         })
     }
 
-    pub async fn run(&self, exit_on_sync: bool, offline: bool) -> std::io::Result<()> {
+    pub async fn run(&self, options: RosettaApiServerOpt) -> std::io::Result<()> {
+        let RosettaApiServerOpt {
+            exit_on_sync,
+            offline,
+            mainnet,
+            not_whitelisted,
+        } = options;
         info!("Starting Rosetta API server");
         if offline {
             info!("Running in offline mode");
@@ -254,7 +260,12 @@ impl RosettaApiServer {
                 interval.tick().await;
 
                 if let Err(err) = ledger.sync_blocks(stopped.clone()).await {
-                    error!("Error in syncing blocks: {:?}", err);
+                    let msg_403 = if mainnet && !not_whitelisted && err.is_internal_error_403() {
+                        ", You may not be whitelisted; please try running the Rosetta server again with the '--not_whitelisted' flag"
+                    } else {
+                        ""
+                    };
+                    error!("Error in syncing blocks{}: {:?}", msg_403, err);
                 }
 
                 if exit_on_sync {
@@ -281,5 +292,23 @@ impl RosettaApiServer {
                 .expect("Error on waiting for sync thread to finish");
         }
         debug!("Joined with blockchain sync thread");
+    }
+}
+
+pub struct RosettaApiServerOpt {
+    pub exit_on_sync: bool,
+    pub offline: bool,
+    pub mainnet: bool,
+    pub not_whitelisted: bool,
+}
+
+impl Default for RosettaApiServerOpt {
+    fn default() -> RosettaApiServerOpt {
+        RosettaApiServerOpt {
+            exit_on_sync: false,
+            offline: false,
+            mainnet: false,
+            not_whitelisted: false,
+        }
     }
 }

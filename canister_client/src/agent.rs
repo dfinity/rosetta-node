@@ -3,6 +3,7 @@ use crate::{
     cbor::{parse_canister_query_response, parse_read_state_response, RequestStatus},
     http_client::HttpClient,
 };
+use backoff::backoff::Backoff;
 use ed25519_dalek::{Keypair, Signer, KEYPAIR_LENGTH};
 use ic_crypto_sha256::Sha256;
 use ic_crypto_tree_hash::Path;
@@ -12,14 +13,14 @@ use ic_types::{
     consensus::catchup::CatchUpPackageParam,
     messages::{
         Blob, HttpReadContent, HttpRequestEnvelope, HttpStatusResponse, HttpSubmitContent,
-        MessageId,
+        MessageId, ReplicaHealthStatus,
     },
     CanisterId, PrincipalId,
 };
 use prost::Message;
 use serde_cbor::value::Value as CBOR;
 use std::{error::Error, fmt, sync::Arc, time::Duration, time::Instant};
-use tokio::time::delay_for;
+use tokio::time::sleep_until;
 use url::Url;
 
 /// Maximum time in seconds to wait for a result (successful or otherwise)
@@ -29,6 +30,10 @@ const INGRESS_TIMEOUT: Duration = Duration::from_secs(60 * 6);
 /// Maximum time in seconds to wait for a result (successful or otherwise)
 /// from an 'execute_query' call.
 const QUERY_TIMEOUT: Duration = Duration::from_secs(30);
+
+const MIN_POLL_INTERVAL: Duration = Duration::from_millis(500);
+const MAX_POLL_INTERVAL: Duration = Duration::from_secs(10);
+const POLL_INTERVAL_MULTIPLIER: f64 = 1.2;
 
 /// The HTTP path for query calls on the replica.
 // TODO is this how v1 api works can we just change the URL?
@@ -190,6 +195,19 @@ impl Sender {
     }
 }
 
+pub fn get_backoff_policy() -> backoff::ExponentialBackoff {
+    backoff::ExponentialBackoff {
+        initial_interval: MIN_POLL_INTERVAL,
+        current_interval: MIN_POLL_INTERVAL,
+        randomization_factor: 0.1,
+        multiplier: POLL_INTERVAL_MULTIPLIER,
+        start_time: std::time::Instant::now(),
+        max_interval: MAX_POLL_INTERVAL,
+        max_elapsed_time: None,
+        clock: backoff::SystemClock::default(),
+    }
+}
+
 /// An agent to talk to the Internet Computer through the public endpoints.
 #[derive(Clone)]
 pub struct Agent {
@@ -197,8 +215,10 @@ pub struct Agent {
     /// "/api/v1/submit".
     pub url: Url,
 
-    // How long to wait for ingress requests.
-    ingress_timeout: Duration,
+    // How long to wait and poll for ingress requests? This is independent from the expiry time
+    // send as part of the HTTP body.
+    // TODO(SCL-237): After the cleanup is complete, this method should be private.
+    pub ingress_timeout: Duration,
 
     // How long to wait for queries.
     query_timeout: Duration,
@@ -353,6 +373,7 @@ impl Agent {
         nonce: Vec<u8>,
     ) -> Result<Option<Vec<u8>>, String> {
         let deadline = Instant::now() + self.ingress_timeout;
+        let mut backoff = get_backoff_policy();
         let (http_body, request_id) = self
             .prepare_update(canister_id, method, arguments, nonce)
             .map_err(|err| format!("{}", err))?;
@@ -365,17 +386,14 @@ impl Agent {
             )
             .await?;
 
-        // Exponential backoff from 100ms to 10s with a multiplier of 1.3.
-        const MIN_POLL_INTERVAL: Duration = Duration::from_millis(100);
-        const MAX_POLL_INTERVAL: Duration = Duration::from_secs(10);
-        const POLL_INTERVAL_MULTIPLIER: f32 = 1.3;
+        // Check request status for the first time after 2s (~ time between blocks)
+        let mut next_poll_time = Instant::now() + Duration::from_secs(2);
 
-        let mut poll_interval = MIN_POLL_INTERVAL;
-        let mut next_poll_time = Instant::now() + poll_interval;
-
+        // The first poll should not be immediate because a successful status request
+        // will take at least the time between consensus blocks.
         while next_poll_time < deadline {
-            delay_for(poll_interval).await;
-
+            sleep_until(tokio::time::Instant::from_std(next_poll_time)).await;
+            next_poll_time = Instant::now() + backoff.next_backoff().expect("Backoff interval MUST be available. If you see this error the backoff is misconfigured.");
             match self
                 .wait_ingress(request_id.clone(), deadline, canister_id)
                 .await
@@ -394,13 +412,6 @@ impl Agent {
                 },
                 Err(e) => return Err(format!("Unexpected error: {:?}", e)),
             }
-
-            // Bump the poll interval and compute the next poll time (based on current wall
-            // time, so we don't spin without delay after a slow poll).
-            poll_interval = poll_interval
-                .mul_f32(POLL_INTERVAL_MULTIPLIER)
-                .min(MAX_POLL_INTERVAL);
-            next_poll_time += poll_interval;
         }
         Err(format!(
             "Request took longer than the deadline {:?} to complete.",
@@ -453,7 +464,7 @@ impl Agent {
         parse_read_state_response(&request_id, cbor)
     }
 
-    async fn get_status_with_response(&self) -> Result<HttpStatusResponse, String> {
+    async fn get_status(&self) -> Result<HttpStatusResponse, String> {
         let bytes = self
             .http_client
             .get_with_response(
@@ -467,25 +478,18 @@ impl Agent {
             .map_err(|source| format!("decoding to HttpStatusResponse failed: {}", source))
     }
 
-    /// Requests the version of the public spec supported by this node by
-    /// querying /api/v1/status.
-    pub async fn ic_api_version(&self) -> Result<String, String> {
-        let response = self.get_status_with_response().await?;
-        Ok(response.ic_api_version)
-    }
-
-    /// Requests the Replica impl version of this node by querying
-    /// /api/v1/status
-    pub async fn impl_version(&self) -> Result<Option<String>, String> {
-        let response = self.get_status_with_response().await?;
-        Ok(response.impl_version)
-    }
-
     /// Requests the root key of this node by querying /api/v1/status
     pub async fn root_key(&self) -> Result<Option<Blob>, String> {
-        let response = self.get_status_with_response().await?;
-
+        let response = self.get_status().await?;
         Ok(response.root_key)
+    }
+
+    /// Checks if the target replica is healthy.
+    pub async fn is_replica_healthy(&self) -> bool {
+        if let Ok(response) = self.get_status().await {
+            return response.replica_health_status == Some(ReplicaHealthStatus::Healthy);
+        }
+        false
     }
 
     pub fn http_client(&self) -> &HttpClient {
@@ -586,6 +590,7 @@ mod tests {
     use super::*;
     use ic_test_utilities::crypto::temp_crypto_component_with_fake_registry;
     use ic_test_utilities::types::ids::node_test_id;
+    use ic_types::malicious_flags::MaliciousFlags;
     use ic_types::messages::{HttpCanisterUpdate, HttpRequest, HttpUserQuery, ReadContent};
     use ic_types::time::current_time;
     use ic_types::{PrincipalId, RegistryVersion, UserId};
@@ -609,7 +614,7 @@ mod tests {
         let expiry_time = test_start_time + Duration::from_secs(4 * 60);
         // Set up an arbitrary legal input
         let keypair = {
-            let mut rng = ChaChaRng::seed_from_u64(789 as u64);
+            let mut rng = ChaChaRng::seed_from_u64(789_u64);
             ed25519_dalek::Keypair::generate(&mut rng)
         };
         let content = HttpSubmitContent::Call {
@@ -645,7 +650,8 @@ mod tests {
             &request,
             &validator,
             test_start_time,
-            mock_registry_version()
+            mock_registry_version(),
+            &MaliciousFlags::default(),
         )
         .unwrap()
         .contains(&request.content().canister_id()));
@@ -660,7 +666,7 @@ mod tests {
         // Set up an arbitrary legal input
         // Set up an arbitrary legal input
         let (sk, pk) = {
-            let mut rng = ChaChaRng::seed_from_u64(89 as u64);
+            let mut rng = ChaChaRng::seed_from_u64(89_u64);
             let sk = secp256k1::SecretKey::random(&mut rng);
             let pk = secp256k1::PublicKey::from_secret_key(&sk);
             (sk.serialize(), pk.serialize())
@@ -697,7 +703,8 @@ mod tests {
             &request,
             &validator,
             test_start_time,
-            mock_registry_version()
+            mock_registry_version(),
+            &MaliciousFlags::default(),
         )
         .unwrap()
         .contains(&request.content().canister_id()));
@@ -737,7 +744,8 @@ mod tests {
             &request,
             &validator,
             test_start_time,
-            mock_registry_version()
+            mock_registry_version(),
+            &MaliciousFlags::default(),
         )
         .unwrap()
         .contains(&request.content().canister_id()));
@@ -750,7 +758,7 @@ mod tests {
 
         // Set up an arbitrary legal input
         let keypair = {
-            let mut rng = ChaChaRng::seed_from_u64(89 as u64);
+            let mut rng = ChaChaRng::seed_from_u64(89_u64);
             ed25519_dalek::Keypair::generate(&mut rng)
         };
         let sender = UserId::from(PrincipalId::new_self_authenticating(
@@ -784,7 +792,8 @@ mod tests {
             &read_request,
             &validator,
             test_start_time,
-            mock_registry_version()
+            mock_registry_version(),
+            &MaliciousFlags::default(),
         ));
     }
 
@@ -795,7 +804,7 @@ mod tests {
 
         // Set up an arbitrary legal input
         let (sk, pk) = {
-            let mut rng = ChaChaRng::seed_from_u64(89 as u64);
+            let mut rng = ChaChaRng::seed_from_u64(89_u64);
             let sk = secp256k1::SecretKey::random(&mut rng);
             let pk = secp256k1::PublicKey::from_secret_key(&sk);
             (sk.serialize(), pk.serialize())
@@ -836,7 +845,8 @@ mod tests {
             &read_request,
             &validator,
             test_start_time,
-            mock_registry_version()
+            mock_registry_version(),
+            &MaliciousFlags::default(),
         ));
     }
 }

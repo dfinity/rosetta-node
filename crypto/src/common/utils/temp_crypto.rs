@@ -8,22 +8,29 @@ use async_trait::async_trait;
 use ic_config::crypto::CryptoConfig;
 use ic_crypto_internal_csp::secret_key_store::proto_store::ProtoSecretKeyStore;
 use ic_crypto_internal_csp::{public_key_store, CryptoServiceProvider, Csp};
+use ic_crypto_tls_interfaces::TlsPublicKeyCert;
 use ic_crypto_tls_interfaces::{
     AllowedClients, AuthenticatedPeer, Peer, TlsClientHandshakeError, TlsHandshake,
     TlsServerHandshakeError, TlsStream,
 };
-use ic_interfaces::crypto::{BasicSigVerifierByPublicKey, CanisterSigVerifier, Signable};
+use ic_interfaces::crypto::{
+    BasicSigVerifier, BasicSigVerifierByPublicKey, CanisterSigVerifier, MultiSigVerifier, Signable,
+    ThresholdSigVerifier, ThresholdSigVerifierByPublicKey,
+};
 use ic_interfaces::registry::RegistryClient;
 use ic_logger::replica_logger::no_op_logger;
 use ic_protobuf::crypto::v1::NodePublicKeys;
 use ic_protobuf::registry::crypto::v1::PublicKey as PublicKeyProto;
-use ic_protobuf::registry::crypto::v1::X509PublicKeyCert;
-use ic_types::crypto::{BasicSigOf, CanisterSigOf, CryptoResult, UserPublicKey};
-use ic_types::{NodeId, Randomness, RegistryVersion};
+use ic_types::crypto::threshold_sig::ni_dkg::DkgId;
+use ic_types::crypto::{
+    BasicSigOf, CanisterSigOf, CombinedMultiSigOf, CombinedThresholdSigOf, CryptoResult,
+    IndividualMultiSigOf, ThresholdSigShareOf, UserPublicKey,
+};
+use ic_types::{NodeId, Randomness, RegistryVersion, SubnetId};
 use rand::rngs::OsRng;
 use rand::SeedableRng;
 use rand_chacha::ChaChaRng;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Deref;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -108,7 +115,7 @@ impl TempCryptoComponent {
     pub fn new_with_tls_key_generation(
         registry_client: Arc<dyn RegistryClient>,
         node_id: NodeId,
-    ) -> (Self, X509PublicKeyCert) {
+    ) -> (Self, TlsPublicKeyCert) {
         let (config, temp_dir) = CryptoConfig::new_in_temp_dir();
         let tls_pubkey = generate_tls_keys(&temp_dir.path().to_path_buf(), node_id);
 
@@ -151,7 +158,7 @@ impl TempCryptoComponent {
             false => None,
         };
         let tls_certificate = match selector.generate_tls_keys_and_certificate {
-            true => Some(generate_tls_keys(&temp_dir_path, node_id)),
+            true => Some(generate_tls_keys(&temp_dir_path, node_id).to_proto()),
             false => None,
         };
 
@@ -321,6 +328,16 @@ impl<C: CryptoServiceProvider + Send + Sync> TlsHandshake for TempCryptoComponen
             .await
     }
 
+    async fn perform_tls_server_handshake_without_client_auth(
+        &self,
+        tcp_stream: TcpStream,
+        registry_version: RegistryVersion,
+    ) -> Result<TlsStream, TlsServerHandshakeError> {
+        self.crypto_component
+            .perform_tls_server_handshake_without_client_auth(tcp_stream, registry_version)
+            .await
+    }
+
     async fn perform_tls_client_handshake(
         &self,
         tcp_stream: TcpStream,
@@ -330,5 +347,113 @@ impl<C: CryptoServiceProvider + Send + Sync> TlsHandshake for TempCryptoComponen
         self.crypto_component
             .perform_tls_client_handshake(tcp_stream, server, registry_version)
             .await
+    }
+}
+
+impl<C: CryptoServiceProvider, T: Signable> BasicSigVerifier<T> for TempCryptoComponentGeneric<C> {
+    fn verify_basic_sig(
+        &self,
+        signature: &BasicSigOf<T>,
+        message: &T,
+        signer: NodeId,
+        registry_version: RegistryVersion,
+    ) -> CryptoResult<()> {
+        self.crypto_component
+            .verify_basic_sig(signature, message, signer, registry_version)
+    }
+}
+
+impl<C: CryptoServiceProvider, T: Signable> MultiSigVerifier<T> for TempCryptoComponentGeneric<C> {
+    fn verify_multi_sig_individual(
+        &self,
+        signature: &IndividualMultiSigOf<T>,
+        message: &T,
+        signer: NodeId,
+        registry_version: RegistryVersion,
+    ) -> CryptoResult<()> {
+        self.crypto_component.verify_multi_sig_individual(
+            signature,
+            message,
+            signer,
+            registry_version,
+        )
+    }
+
+    fn combine_multi_sig_individuals(
+        &self,
+        signatures: BTreeMap<NodeId, IndividualMultiSigOf<T>>,
+        registry_version: RegistryVersion,
+    ) -> CryptoResult<CombinedMultiSigOf<T>> {
+        self.crypto_component
+            .combine_multi_sig_individuals(signatures, registry_version)
+    }
+
+    fn verify_multi_sig_combined(
+        &self,
+        signature: &CombinedMultiSigOf<T>,
+        message: &T,
+        signers: BTreeSet<NodeId>,
+        registry_version: RegistryVersion,
+    ) -> CryptoResult<()> {
+        self.crypto_component.verify_multi_sig_combined(
+            signature,
+            message,
+            signers,
+            registry_version,
+        )
+    }
+}
+
+impl<C: CryptoServiceProvider, T: Signable> ThresholdSigVerifier<T>
+    for TempCryptoComponentGeneric<C>
+{
+    fn verify_threshold_sig_share(
+        &self,
+        signature: &ThresholdSigShareOf<T>,
+        message: &T,
+        dkg_id: DkgId,
+        signer: NodeId,
+    ) -> CryptoResult<()> {
+        self.crypto_component
+            .verify_threshold_sig_share(signature, message, dkg_id, signer)
+    }
+
+    fn combine_threshold_sig_shares(
+        &self,
+        shares: BTreeMap<NodeId, ThresholdSigShareOf<T>>,
+        dkg_id: DkgId,
+    ) -> CryptoResult<CombinedThresholdSigOf<T>> {
+        self.crypto_component
+            .combine_threshold_sig_shares(shares, dkg_id)
+    }
+
+    fn verify_threshold_sig_combined(
+        &self,
+        signature: &CombinedThresholdSigOf<T>,
+        message: &T,
+        dkg_id: DkgId,
+    ) -> CryptoResult<()> {
+        self.crypto_component
+            .verify_threshold_sig_combined(signature, message, dkg_id)
+    }
+}
+
+impl<C: CryptoServiceProvider, T: Signable> ThresholdSigVerifierByPublicKey<T>
+    for TempCryptoComponentGeneric<C>
+{
+    fn verify_combined_threshold_sig_by_public_key(
+        &self,
+        signature: &CombinedThresholdSigOf<T>,
+        message: &T,
+        subnet_id: SubnetId,
+        registry_version: RegistryVersion,
+    ) -> CryptoResult<()> {
+        self.crypto_component
+            .verify_combined_threshold_sig_by_public_key(
+                signature,
+                message,
+                subnet_id,
+                registry_version,
+            )
     }
 }

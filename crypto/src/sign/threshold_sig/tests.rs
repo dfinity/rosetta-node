@@ -984,7 +984,7 @@ mod combine_threshold_sig_shares {
     #[test]
     #[should_panic(expected = "Illegal state: unexpected error from the CSP")]
     fn should_panic_if_csp_returns_unexpected_error() {
-        let indices = indices(vec![(NODE_1, 0 as NodeIndex)]);
+        let indices = indices(vec![(NODE_1, 0_u32)]);
         let shares = shares(vec![(
             NODE_1,
             threshold_sig_share(vec![1; IndividualSignatureBytes::SIZE]),

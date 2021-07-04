@@ -8,6 +8,25 @@ use ic_types::crypto::threshold_sig::ni_dkg::{NiDkgDealing, NiDkgTranscript};
 use ic_types::NodeId;
 use std::collections::{BTreeMap, HashSet};
 
+/// The result of loading a transcript
+///
+/// Calling `NiDkgAlgorithm::load_transcript` can succeed with several
+/// possible states.
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+pub enum LoadTranscriptResult {
+    /// The keys associated with the transcript could be decrypted
+    SigningKeyAvailable,
+    /// The keys associated with the transcript could not be decrypted
+    /// as this node never had access to the associated forward-secure
+    /// encryption keys
+    SigningKeyUnavailable,
+    /// The keys associated with the transcript could not be decrypted
+    /// because this node has subseqently called retain_only_active_keys
+    /// and discarded the forward-secure keys that would be needed to
+    /// decrypt the keys in the transcript
+    SigningKeyUnavailableDueToDiscard,
+}
+
 /// The building blocks to perform non-interactive distributed key generation
 /// (DKG).
 ///
@@ -110,10 +129,18 @@ pub trait NiDkgAlgorithm {
     /// * the individual nodes' public threshold signing keys are available for
     ///   the methods of the `ThresholdSigVerifier` trait, and
     /// * if the node is a receiver and the node's forward secure decryption key
-    ///   is present in the secret key store, the node's secret threshold
-    ///   signing key is available for the methods of the `ThresholdSigner`
-    ///   trait for the DKG instance identified by the DKG ID contained in the
-    ///   transcript.
+    ///   is present in the secret key store, and the epoch of the forward
+    ///   secure decryption key is able to decrypt the ciphertext included in
+    ///   the transcript, then the node's secret threshold signing key is
+    ///   available for the methods of the `ThresholdSigner` trait for the DKG
+    ///   instance identified by the DKG ID contained in the transcript.
+    ///
+    /// # Result
+    /// * Returns `Ok` if parsing and loading the transcript succeeded. This
+    ///   function will succeed even if the forward secure decryption key is
+    ///   unavailable or has been discarded. Whether or not the threshold
+    ///   signing key is available for signing is indicated in the returned
+    ///   `LoadTranscriptResult`.
     ///
     /// # Errors
     /// * `DkgLoadTranscriptError::FsEncryptionPublicKeyNotInRegistry` if a
@@ -124,7 +151,10 @@ pub trait NiDkgAlgorithm {
     ///   error, e.g. because the registry version is not available.
     /// * `DkgLoadTranscriptError::InvalidTranscript` if the transcript could
     ///   not be parsed.
-    fn load_transcript(&self, transcript: &NiDkgTranscript) -> Result<(), DkgLoadTranscriptError>;
+    fn load_transcript(
+        &self,
+        transcript: &NiDkgTranscript,
+    ) -> Result<LoadTranscriptResult, DkgLoadTranscriptError>;
 
     /// Retains only keys for the given `transcripts`.
     ///

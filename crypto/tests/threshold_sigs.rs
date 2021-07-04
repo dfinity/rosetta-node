@@ -328,7 +328,6 @@ mod threshold_sigs_with_resharing_dkg {
 
 mod threshold_sig_verification_by_public_key {
     use super::*;
-    use ic_crypto::utils::dkg::initial_dkg_transcript_record_from_transcript;
     use ic_crypto::verify_combined_threshold_sig;
     use ic_interfaces::crypto::ThresholdSigVerifierByPublicKey;
     use ic_registry_keys::make_subnet_record_key;
@@ -468,15 +467,11 @@ mod threshold_sig_verification_by_public_key {
 
     fn add_dkg_transcript_to_registry(
         registry_data_provider: &Arc<ProtoRegistryDataProvider>,
-        transcript: &Transcript,
+        _transcript: &Transcript,
         subnet_id: SubnetId,
         registry_version: RegistryVersion,
     ) {
-        let mut subnet_record = test_subnet_record();
-        subnet_record.initial_dkg_transcript = Some(initial_dkg_transcript_record_from_transcript(
-            transcript.clone(),
-        ));
-
+        let subnet_record = test_subnet_record();
         registry_data_provider
             .add(
                 &make_subnet_record_key(subnet_id),

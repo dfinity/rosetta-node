@@ -21,4 +21,5 @@ base64 = "0.13.0"
 # TODO (CRP-912) Replace ic-crypto with ic-crypto-utils-threshold-sig
 ic-crypto = { path = "../../../../../crypto" }
 ic-crypto-internal-test-vectors = { path = "../../../test_vectors" }
+ic-crypto-test-utils = { path = "../../../../test_utils" }
 ic-interfaces = { path = "../../../../../interfaces" }

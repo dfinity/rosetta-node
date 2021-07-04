@@ -1,89 +1,25 @@
 use serde::{Deserialize, Serialize};
 
-/// This is effecitively a duplicate of `parity_wasm::elements::Error`.  We
-/// duplicate because `parity_wasm::elements::Error` does not derive `Serialize`
-/// and `Deserialize` and we need to derive these as this error gets embedded in
-/// other types that derive `Serialize` and `Deserialize`.
+/// Represents an error that can happen when parsing a Wasm module using
+/// `parity_wasm`.
+///
+/// Note that ideally we would wrap a `parity_wasm::elements:Error` here but
+/// unfortunately it does not derive `Serialize` and `Deserialize` which is
+/// required by other types that this error gets embedded in. So, instead wrap
+/// only the error message.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub enum ParityWasmError {
-    UnexpectedEof,
-    InvalidMagic,
-    UnsupportedVersion(u32),
-    InconsistentLength { expected: usize, actual: usize },
-    UnknownValueType(i8),
-    UnknownTableElementType(i8),
-    NonUtf8String,
-    UnknownOpcode(u8),
-    InvalidVarInt { signed: bool, size_bits: u8 },
-    InconsistentMetadata,
-    InvalidSectionId(u8),
-    SectionsOutOfOrder,
-    DuplicatedSections(u8),
-    InvalidMemoryReference(u8),
-    InvalidTableReference(u8),
-    InvalidLimitsFlags(u8),
-    UnknownFunctionForm(u8),
-    InconsistentCode,
-    InvalidSegmentFlags(u32),
-    TooManyLocals,
-    DuplicatedNameSubsections(u8),
-    UnknownNameSubsectionType(u8),
-    Other,
+pub struct ParityWasmError(String);
+
+impl ParityWasmError {
+    /// Creates a new `ParityWasmError` out of an error message.
+    pub fn new(error_message: String) -> Self {
+        Self(error_message)
+    }
 }
 
 impl std::fmt::Display for ParityWasmError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::UnexpectedEof => write!(f, "unexpected end of input"),
-            Self::InvalidMagic => write!(f, "invalid magic"),
-            Self::UnsupportedVersion(v) => write!(f, "unsupported version {}", v),
-            Self::InconsistentLength { expected, actual } => write!(
-                f,
-                "inconsistent length (expected {}, actual {})",
-                expected, actual
-            ),
-            Self::UnknownValueType(t) => {
-                write!(f, "invalid/unknown value type declaration {:#x}", t)
-            }
-            Self::UnknownTableElementType(t) => {
-                write!(f, "invalid/unknown table element type declaration {:#x}", t)
-            }
-            Self::NonUtf8String => write!(f, "non-utf8 string"),
-            Self::UnknownOpcode(c) => write!(f, "unknown opcode {:#x}", c),
-            Self::InvalidVarInt { signed, size_bits } => write!(
-                f,
-                "invalid {}{}",
-                if *signed { "varint" } else { "varuint" },
-                size_bits
-            ),
-            Self::InconsistentMetadata => write!(f, "inconsistent metadata"),
-            Self::InvalidSectionId(id) => write!(f, "invalid section with id {}", id),
-            Self::SectionsOutOfOrder => write!(f, "sections are out of order"),
-            Self::DuplicatedSections(s) => write!(f, "duplicated sections with id {}", s),
-            Self::InvalidMemoryReference(r) => write!(f, "invalid memory reference {}", r),
-            Self::InvalidTableReference(r) => write!(f, "invalid table reference {}", r),
-            Self::InvalidLimitsFlags(flags) => {
-                write!(f, "invalid value {} used for flags in limits type", flags)
-            }
-            Self::UnknownFunctionForm(form) => {
-                write!(f, "unknown function form {:#x} (should be 0x60)", form)
-            }
-            Self::InconsistentCode => write!(
-                f,
-                "number of function body entries and signatures does not match"
-            ),
-            Self::InvalidSegmentFlags(flags) => write!(
-                f,
-                "invalid segment flags {}, only flags 0, 1, and 2 are accepted on segments",
-                flags
-            ),
-            Self::TooManyLocals => write!(f, "sum of counts of locals is greater than 2^32"),
-            Self::DuplicatedNameSubsections(i) => write!(f, "duplicated name subsections {}", i),
-            Self::UnknownNameSubsectionType(t) => {
-                write!(f, "unknown name subsection type {:#x}", t)
-            }
-            Self::Other => write!(f, "unknown"),
-        }
+        write!(f, "{}", self.0)
     }
 }
 
@@ -104,6 +40,10 @@ pub enum WasmValidationError {
     InvalidDataSection(String),
     /// Failure when trying to compile in Lucet
     LucetCompilerErr(String),
+    /// Module contains too many globals.
+    TooManyGlobals { defined: usize, allowed: usize },
+    /// Module contains too many functions.
+    TooManyFunctions { defined: usize, allowed: usize },
 }
 
 impl std::fmt::Display for WasmValidationError {
@@ -131,6 +71,16 @@ impl std::fmt::Display for WasmValidationError {
                 f,
                 "Validation failed due to \"{}\" compile error in Lucet",
                 err
+            ),
+            Self::TooManyGlobals { defined, allowed } => write!(
+                f,
+                "Wasm module defined {} globals which exceeds the maximum number allowed {}.",
+                defined, allowed
+            ),
+            Self::TooManyFunctions { defined, allowed } => write!(
+                f,
+                "Wasm module defined {} functions which exceeds the maximum number allowed {}.",
+                defined, allowed
             ),
         }
     }

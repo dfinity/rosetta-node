@@ -2,10 +2,10 @@
 use crate::keygen_utils::{add_keys_to_registry, TestKeygenCrypto};
 use ic_config::crypto::CryptoConfig;
 use ic_crypto::utils::{
-    get_node_keys_or_generate_if_missing, get_node_keys_or_generate_if_missing_for_node_id,
-    NodeKeysToGenerate, TempCryptoComponent,
+    get_node_keys_or_generate_if_missing, NodeKeysToGenerate, TempCryptoComponent,
 };
 use ic_crypto::CryptoComponent;
+use ic_crypto_test_utils::tls::x509_certificates::generate_ed25519_cert;
 use ic_interfaces::crypto::{BasicSigner, KeyManager, Keygen, SignableMock};
 use ic_interfaces::registry::RegistryClient;
 use ic_logger::replica_logger::no_op_logger;
@@ -121,34 +121,6 @@ fn should_sign_with_keys_generated_in_multiple_threads() {
 }
 
 // TODO(CRP-430): check/improve the test coverage of SKS checks.
-
-#[test]
-fn should_generate_all_keys_for_given_node_id_for_new_node() {
-    CryptoConfig::run_with_temp_config(|config| {
-        let node_pks = get_node_keys_or_generate_if_missing_for_node_id(
-            &config.crypto_root,
-            node_test_id(NODE_ID),
-        );
-        assert!(all_node_keys_are_present(&node_pks));
-    })
-}
-
-#[test]
-fn should_not_generate_new_keys_for_given_node_id_if_all_keys_are_present() {
-    CryptoConfig::run_with_temp_config(|config| {
-        let orig_node_pks = get_node_keys_or_generate_if_missing_for_node_id(
-            &config.crypto_root,
-            node_test_id(NODE_ID),
-        );
-        assert!(all_node_keys_are_present(&orig_node_pks));
-        let new_node_pks = get_node_keys_or_generate_if_missing_for_node_id(
-            &config.crypto_root,
-            node_test_id(NODE_ID),
-        );
-        assert!(all_node_keys_are_present(&new_node_pks));
-        assert_eq!(orig_node_pks, new_node_pks);
-    })
-}
 
 #[test]
 fn should_generate_all_keys_for_new_node() {
@@ -273,6 +245,38 @@ fn should_fail_check_keys_with_registry_if_tls_cert_is_missing_in_registry() {
 }
 
 #[test]
+fn should_fail_check_keys_with_registry_if_cert_is_malformed() {
+    let node_keys_to_generate = NodeKeysToGenerate {
+        generate_node_signing_keys: true,
+        generate_committee_signing_keys: true,
+        generate_dkg_dealing_encryption_keys: true,
+        generate_tls_keys_and_certificate: false,
+    };
+    let malformed_cert = X509PublicKeyCert {
+        certificate_der: b"not DER".to_vec(),
+    };
+    let crypto = TestKeygenCrypto::builder()
+        .with_node_keys_to_generate(node_keys_to_generate)
+        .with_tls_cert_in_registry(malformed_cert)
+        .add_generated_node_signing_key_to_registry()
+        .add_generated_committee_signing_key_to_registry()
+        .add_generated_dkg_dealing_enc_key_to_registry()
+        .build(NODE_ID, REG_V1);
+
+    let result = crypto.get().check_keys_with_registry(REG_V1);
+
+    assert!(matches!(
+        result,
+        Err(CryptoError::MalformedPublicKey {
+            algorithm: AlgorithmId::Ed25519,
+            key_bytes: None,
+            internal_error
+        })
+        if internal_error.contains("Error parsing DER")
+    ));
+}
+
+#[test]
 fn should_fail_check_keys_with_registry_if_node_signing_secret_key_is_missing() {
     let node_signing_pk_without_corresponding_secret_key = PublicKey {
         algorithm: AlgorithmId::Ed25519 as i32,
@@ -304,7 +308,7 @@ fn should_fail_check_keys_with_registry_if_committee_member_secret_key_is_missin
         algorithm: AlgorithmId::MultiBls12_381 as i32,
         key_value: [1u8; 96].to_vec(),
         version: 0,
-        proof_data: Some(vec![1, 2, 3]),
+        proof_data: Some(vec![1u8; 48]),
     };
     let crypto = TestKeygenCrypto::builder()
         .with_node_keys_to_generate(NodeKeysToGenerate::all())
@@ -381,6 +385,64 @@ fn should_fail_check_keys_with_registry_if_dkg_dealing_encryption_pubkey_is_malf
 }
 
 #[test]
+fn should_fail_check_keys_with_registry_if_dkg_dealing_encryption_pop_is_missing() {
+    let dkg_dealing_encryption_pubkey_with_missing_pop = PublicKey {
+        version: 0,
+        algorithm: AlgorithmId::Groth20_Bls12_381 as i32,
+        proof_data: None,
+        key_value: b"irrelevant because pop validity is checked before pubkey validity".to_vec(),
+    };
+    let crypto = TestKeygenCrypto::builder()
+        .with_node_keys_to_generate(NodeKeysToGenerate::all())
+        .add_generated_node_signing_key_to_registry()
+        .add_generated_committee_signing_key_to_registry()
+        .with_dkg_dealing_enc_key_in_registry(dkg_dealing_encryption_pubkey_with_missing_pop)
+        .add_generated_tls_cert_to_registry()
+        .build(NODE_ID, REG_V1);
+
+    let result = crypto.get().check_keys_with_registry(REG_V1);
+
+    assert_eq!(
+        result.unwrap_err(),
+        CryptoError::MalformedPublicKey {
+            algorithm: AlgorithmId::Groth20_Bls12_381,
+            key_bytes: None,
+            internal_error: "MissingProofData".to_string()
+        }
+    );
+}
+
+#[test]
+fn should_fail_check_keys_with_registry_if_dkg_dealing_encryption_pop_is_empty() {
+    let dkg_dealing_encryption_pubkey_with_empty_pop = PublicKey {
+        version: 0,
+        algorithm: AlgorithmId::Groth20_Bls12_381 as i32,
+        proof_data: Some(vec![]),
+        key_value: b"irrelevant because pop validity is checked before pubkey validity".to_vec(),
+    };
+    let crypto = TestKeygenCrypto::builder()
+        .with_node_keys_to_generate(NodeKeysToGenerate::all())
+        .add_generated_node_signing_key_to_registry()
+        .add_generated_committee_signing_key_to_registry()
+        .with_dkg_dealing_enc_key_in_registry(dkg_dealing_encryption_pubkey_with_empty_pop)
+        .add_generated_tls_cert_to_registry()
+        .build(NODE_ID, REG_V1);
+
+    let result = crypto.get().check_keys_with_registry(REG_V1);
+
+    assert_eq!(
+        result.unwrap_err(),
+        CryptoError::MalformedPublicKey {
+            algorithm: AlgorithmId::Groth20_Bls12_381,
+            key_bytes: None,
+            internal_error:
+                "MalformedPop { pop_bytes: [], internal_error: \"EOF while parsing a value\" }"
+                    .to_string()
+        }
+    );
+}
+
+#[test]
 fn should_fail_check_keys_with_registry_if_dkg_dealing_encryption_pop_is_malformed() {
     let dkg_dealing_encryption_pubkey_with_malformed_pop = PublicKey {
         version: 0,
@@ -409,9 +471,96 @@ fn should_fail_check_keys_with_registry_if_dkg_dealing_encryption_pop_is_malform
 }
 
 #[test]
+fn should_fail_check_keys_with_registry_if_committee_key_pop_is_missing() {
+    let committee_key_without_pop = PublicKey {
+        algorithm: AlgorithmId::MultiBls12_381 as i32,
+        key_value: b"irrelevant because pop validity is checked before pubkey validity".to_vec(),
+        version: 0,
+        proof_data: None,
+    };
+    let crypto = TestKeygenCrypto::builder()
+        .with_node_keys_to_generate(NodeKeysToGenerate::all())
+        .add_generated_node_signing_key_to_registry()
+        .with_committee_signing_key_in_registry(committee_key_without_pop)
+        .add_generated_dkg_dealing_enc_key_to_registry()
+        .add_generated_tls_cert_to_registry()
+        .build(NODE_ID, REG_V1);
+
+    let result = crypto.get().check_keys_with_registry(REG_V1);
+
+    assert_eq!(
+        result.unwrap_err(),
+        CryptoError::MalformedPop {
+            algorithm: AlgorithmId::MultiBls12_381,
+            pop_bytes: vec![0u8; 0],
+            internal_error: "MissingProofData".to_string(),
+        }
+    );
+}
+
+#[test]
+fn should_fail_check_keys_with_registry_if_committee_key_pop_is_empty() {
+    let committee_key_with_empty_pop = PublicKey {
+        algorithm: AlgorithmId::MultiBls12_381 as i32,
+        key_value: b"irrelevant because pop validity is checked before pubkey validity".to_vec(),
+        version: 0,
+        proof_data: Some(vec![]),
+    };
+    let crypto = TestKeygenCrypto::builder()
+        .with_node_keys_to_generate(NodeKeysToGenerate::all())
+        .add_generated_node_signing_key_to_registry()
+        .with_committee_signing_key_in_registry(committee_key_with_empty_pop)
+        .add_generated_dkg_dealing_enc_key_to_registry()
+        .add_generated_tls_cert_to_registry()
+        .build(NODE_ID, REG_V1);
+
+    let result = crypto.get().check_keys_with_registry(REG_V1);
+
+    assert_eq!(
+        result.unwrap_err(),
+        CryptoError::MalformedPop {
+            algorithm: AlgorithmId::MultiBls12_381,
+            pop_bytes: vec![0u8; 0],
+            internal_error: "Wrong pop length 0, expected length 48.".to_string(),
+        }
+    );
+}
+
+#[test]
+fn should_fail_check_keys_with_registry_if_committee_key_pop_is_malformed() {
+    let committee_key_with_malformed_pop = PublicKey {
+        algorithm: AlgorithmId::MultiBls12_381 as i32,
+        key_value: b"irrelevant because pop validity is checked before pubkey validity".to_vec(),
+        version: 0,
+        proof_data: Some(b"malformed pop".to_vec()),
+    };
+    let crypto = TestKeygenCrypto::builder()
+        .with_node_keys_to_generate(NodeKeysToGenerate::all())
+        .add_generated_node_signing_key_to_registry()
+        .with_committee_signing_key_in_registry(committee_key_with_malformed_pop)
+        .add_generated_dkg_dealing_enc_key_to_registry()
+        .add_generated_tls_cert_to_registry()
+        .build(NODE_ID, REG_V1);
+
+    let result = crypto.get().check_keys_with_registry(REG_V1);
+
+    assert_eq!(
+        result.unwrap_err(),
+        CryptoError::MalformedPop {
+            algorithm: AlgorithmId::MultiBls12_381,
+            pop_bytes: b"malformed pop".to_vec(),
+            internal_error: "Wrong pop length 13, expected length 48.".to_string(),
+        }
+    );
+}
+
+#[test]
 fn should_fail_check_keys_with_registry_if_tls_cert_secret_key_is_missing() {
     let cert_without_corresponding_secret_key = X509PublicKeyCert {
-        certificate_der: vec![0, 1, 2],
+        certificate_der: generate_ed25519_cert()
+            .1
+            .to_der()
+            .expect("Failed to convert X509 to DER"),
     };
     let crypto = TestKeygenCrypto::builder()
         .with_node_keys_to_generate(NodeKeysToGenerate::all())

@@ -10,7 +10,7 @@ use ic_crypto_tree_hash::Path;
 use ic_types::messages::{
     HttpCanisterUpdate, HttpReadState, HttpRequestEnvelope, HttpSubmitContent,
 };
-use ic_types::PrincipalId;
+use ic_types::{CanisterId, PrincipalId};
 use ledger_canister::{
     BlockHeight, HashOf, ICPTs, SendArgs, Transaction, Transfer, DECIMAL_PLACES, TRANSACTION_FEE,
 };
@@ -132,36 +132,113 @@ pub fn operations(transaction: &Transfer, completed: bool) -> Result<Vec<Operati
     Ok(ops)
 }
 
-pub fn from_operations(
-    ops: Vec<Operation>,
+/// Helper for `from_operations` that creates `Transfer`s from related
+/// debit/credit/fee operations.
+struct State {
     preprocessing: bool,
-) -> Result<Vec<Transfer>, ApiError> {
-    let trans_err = |msg| {
-        let msg = format!("Bad transaction in {:?}: {}", &ops, msg);
-        let err = ApiError::InvalidTransaction(false, into_error(msg));
-        Err(err)
-    };
+    transfers: Vec<Transfer>,
+    cr: Option<(ICPTs, ledger_canister::AccountIdentifier)>,
+    db: Option<(ICPTs, ledger_canister::AccountIdentifier)>,
+    fee: Option<(ICPTs, ledger_canister::AccountIdentifier)>,
+}
 
+impl State {
+    /// Create a `Transfer` from the credit/debit/fee operations seen
+    /// previously.
+    fn flush(&mut self) -> Result<(), ApiError> {
+        let trans_err = |msg| {
+            let msg = format!("Bad transaction: {}", msg);
+            let err = ApiError::InvalidTransaction(false, into_error(msg));
+            Err(err)
+        };
+
+        if self.cr.is_none() && self.db.is_none() && self.fee.is_none() {
+            return Ok(());
+        }
+
+        // If you're preprocessing just continue with the default fee
+        if self.preprocessing && self.fee.is_none() && self.db.is_some() {
+            self.fee = Some((TRANSACTION_FEE, self.db.unwrap().1))
+        }
+
+        if self.cr.is_none() || self.db.is_none() || self.fee.is_none() {
+            return trans_err(
+                "Operations do not combine to make a recognizable transaction".to_string(),
+            );
+        }
+        let (cr_amount, mut to) = self.cr.take().unwrap();
+        let (db_amount, mut from) = self.db.take().unwrap();
+        let (fee_amount, fee_acc) = self.fee.take().unwrap();
+
+        if fee_acc != from {
+            if cr_amount == ICPTs::ZERO && fee_acc == to {
+                std::mem::swap(&mut from, &mut to);
+            } else {
+                let msg = format!("Fee should be taken from {}", from);
+                return trans_err(msg);
+            }
+        }
+        if cr_amount != db_amount {
+            return trans_err("Debit_amount should be equal -credit_amount".to_string());
+        }
+
+        self.transfers.push(Transfer::Send {
+            from,
+            to,
+            amount: cr_amount,
+            fee: fee_amount,
+        });
+
+        Ok(())
+    }
+
+    fn transaction(
+        &mut self,
+        account: ledger_canister::AccountIdentifier,
+        amount: i128,
+    ) -> Result<(), ApiError> {
+        if amount > 0 || self.db.is_some() && amount == 0 {
+            if self.cr.is_some() {
+                self.flush()?;
+            }
+            self.cr = Some((ICPTs::from_e8s(amount as u64), account));
+        } else {
+            if self.db.is_some() {
+                self.flush()?;
+            }
+            self.db = Some((ICPTs::from_e8s((-amount) as u64), account));
+        }
+        Ok(())
+    }
+
+    fn fee(
+        &mut self,
+        account: ledger_canister::AccountIdentifier,
+        amount: ICPTs,
+    ) -> Result<(), ApiError> {
+        if self.fee.is_some() {
+            self.flush()?;
+        }
+        self.fee = Some((amount, account));
+        Ok(())
+    }
+}
+
+pub fn from_operations(ops: &[Operation], preprocessing: bool) -> Result<Vec<Transfer>, ApiError> {
     let op_error = |op: &Operation, e| {
         let msg = format!("In operation '{:?}': {}", op, e);
         ApiError::InvalidTransaction(false, into_error(msg))
     };
 
-    let mut cr = None;
-    let mut db = None;
-    let mut fee = None;
+    let mut state = State {
+        preprocessing,
+        transfers: vec![],
+        cr: None,
+        db: None,
+        fee: None,
+    };
 
-    // Requests to preprocess often doesn't have a fee, but there's nothing stopping
-    // someone from putting one there so we are flexible
-    if ops.len() > 3 {
-        return trans_err(
-            "Operations do not combine to make a recognizable
-    transaction"
-                .to_string(),
-        );
-    }
-
-    for o in &ops {
+    for o in ops {
         if o.amount.is_none() || o.account.is_none() {
             return Err(op_error(&o, "Account and amount must be populated".into()));
         }
@@ -174,21 +251,14 @@ pub fn from_operations(
 
         match o._type.as_str() {
             TRANSACTION => {
-                if amount > 0 || db.is_some() && amount == 0 {
-                    let icpts = ICPTs::from_e8s(amount as u64);
-                    cr = Some((icpts, account));
-                } else {
-                    let icpts = ICPTs::from_e8s((-amount) as u64);
-                    db = Some((icpts, account));
-                }
+                state.transaction(account, amount)?;
             }
             FEE => {
                 if -amount != TRANSACTION_FEE.get_e8s() as i128 {
                     let msg = format!("Fee should be equal: {}", TRANSACTION_FEE.get_e8s());
                     return Err(op_error(&o, msg));
                 }
-                let icpts = ICPTs::from_e8s((-amount) as u64);
-                fee = Some((icpts, account));
+                state.fee(account, ICPTs::from_e8s((-amount) as u64))?;
             }
             _ => {
                 let msg = format!("Unsupported operation type: {}", o._type);
@@ -197,38 +267,16 @@ pub fn from_operations(
         }
     }
 
-    // If you're preprocessing just continue with the default fee
-    if preprocessing && fee.is_none() {
-        fee = Some((TRANSACTION_FEE, db.unwrap().1))
+    state.flush()?;
+
+    if state.transfers.is_empty() {
+        return Err(ApiError::InvalidTransaction(
+            false,
+            into_error("Operations don't contain any transfer.".to_owned()),
+        ));
     }
 
-    if cr.is_none() || db.is_none() || fee.is_none() {
-        return trans_err(
-            "Operations do not combine to make a recognizable transaction".to_string(),
-        );
-    }
-    let (cr_amount, mut to) = cr.unwrap();
-    let (db_amount, mut from) = db.unwrap();
-    let (fee_amount, fee_acc) = fee.unwrap();
-
-    if fee_acc != from {
-        if cr_amount == ICPTs::ZERO && fee_acc == to {
-            std::mem::swap(&mut from, &mut to);
-        } else {
-            let msg = format!("Fee should be taken from {}", from);
-            return trans_err(msg);
-        }
-    }
-    if cr_amount != db_amount {
-        return trans_err("Debit_amount should be equal -credit_amount".to_string());
-    }
-
-    Ok(vec![Transfer::Send {
-        from,
-        to,
-        amount: cr_amount,
-        fee: fee_amount,
-    }])
+    Ok(state.transfers)
 }
 
 pub fn amount_(amount: ICPTs) -> Result<Amount, ApiError> {
@@ -312,9 +360,9 @@ pub fn from_metadata(mut ob: models::Object) -> Result<BlockHeight, ApiError> {
 // This converts an error message to something that ApiError can consume
 // This returns an option because it's what the error type expects, but it will
 // always return Some
-pub fn into_error(error_msg: String) -> Option<models::Object> {
+pub fn into_error(error_msg: impl Into<String>) -> Option<models::Object> {
     let mut m = Map::new();
-    m.insert("error_message".to_string(), Value::from(error_msg));
+    m.insert("error_message".into(), Value::from(error_msg.into()));
     Some(m)
 }
 
@@ -323,9 +371,7 @@ pub fn from_public_key(pk: &models::PublicKey) -> Result<Vec<u8>, ApiError> {
 }
 
 pub fn from_hex(hex: &str) -> Result<Vec<u8>, ApiError> {
-    hex::decode(hex).map_err(|e| {
-        ApiError::InvalidRequest(false, into_error(format!("Hex could not be decoded {}", e)))
-    })
+    hex::decode(hex).map_err(|e| invalid_request(format!("Hex could not be decoded {}", e)))
 }
 
 pub fn to_hex(v: &[u8]) -> String {
@@ -368,6 +414,10 @@ pub fn ic_error(http_status: u16, msg: String) -> ApiError {
     ApiError::ICError(false, Some(m))
 }
 
+pub fn invalid_request<D: Display>(msg: D) -> ApiError {
+    ApiError::InvalidRequest(false, into_error(format!("{}", msg)))
+}
+
 pub fn invalid_block_id<D: Display>(msg: D) -> ApiError {
     ApiError::InvalidBlockId(false, into_error(format!("{}", msg)))
 }
@@ -376,12 +426,46 @@ pub fn invalid_account_id<D: Display>(msg: D) -> ApiError {
     ApiError::InvalidAccountId(false, into_error(format!("{}", msg)))
 }
 
-pub fn account_from_public_key(pk: models::PublicKey) -> Result<AccountIdentifier, ApiError> {
+pub fn account_from_public_key(pk: &models::PublicKey) -> Result<AccountIdentifier, ApiError> {
     let pid = principal_id_from_public_key(pk)?;
     Ok(to_model_account_identifier(&pid.into()))
 }
 
-pub fn principal_id_from_public_key(pk: models::PublicKey) -> Result<PrincipalId, ApiError> {
+pub fn neuron_account_from_public_key(
+    governance_canister_id: &CanisterId,
+    pk: &models::PublicKey,
+) -> Result<AccountIdentifier, ApiError> {
+    let controller = principal_id_from_public_key(pk)?;
+
+    // We only allow 1 neuron account per public key, so the nonce is fixed to
+    // be 0.
+    const NONCE: u64 = 0;
+
+    let sub_account_bytes = {
+        let mut state = ic_crypto_sha256::Sha256::new();
+        state.write(&[0x0c]);
+        state.write(b"neuron-stake");
+        state.write(&controller.as_slice());
+        state.write(&NONCE.to_be_bytes());
+        state.finish()
+    };
+
+    Ok(AccountIdentifier {
+        address: governance_canister_id.to_string(),
+        sub_account: Some(models::SubAccountIdentifier::new(hex::encode(
+            &sub_account_bytes,
+        ))),
+        metadata: None,
+    })
+}
+
+pub fn principal_id_from_public_key(pk: &models::PublicKey) -> Result<PrincipalId, ApiError> {
+    if pk.curve_type != models::CurveType::Edwards25519 {
+        return Err(ApiError::InvalidPublicKey(
+            false,
+            into_error("Only EDWARDS25519 curve type is supported".to_string()),
+        ));
+    }
     let pid = PrincipalId::new_self_authenticating(&ic_canister_client::ed25519_public_key_to_der(
         from_hex(&pk.hex_bytes)?,
     ));

@@ -1,4 +1,4 @@
-FROM rust:1.50.0-buster as builder-00
+FROM rust:bullseye as builder-00
 
 ARG GITHUB_TOKEN
 
@@ -11,7 +11,7 @@ RUN \
   cd rs/rosetta-api && \
   cargo build --release --package ic-rosetta-api --bin ic-rosetta-api
 
-FROM debian:buster-slim
+FROM debian:bullseye-slim
 
 ARG RELEASE
 
@@ -30,11 +30,12 @@ COPY --from=builder-00 \
 RUN \
   apt update && \
   apt install -y \
-    ca-certificates && \
+    ca-certificates \
+    libsqlite3-0 && \
   apt autoremove --purge -y && \
   rm -rf \
     /tmp/* \
     /var/lib/apt/lists/* \
     /var/tmp/*
 
-ENTRYPOINT ["/usr/local/bin/ic-rosetta-api"]
+ENTRYPOINT ["/usr/local/bin/ic-rosetta-api", "--store-location", "/data", "--store-type", "sqlite"]

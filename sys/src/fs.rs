@@ -48,6 +48,11 @@ fn handle_last_os_error() -> FileCloneError {
     let err = std::io::Error::last_os_error();
     match err.raw_os_error() {
         Some(libc::EOPNOTSUPP) | Some(libc::ENOSYS) => FileCloneError::OperationNotSupported,
+        // EOPNOTSUPP and ENOTSUP have the same value on Linux, but different
+        // values on macOS.  So ENOTSUP is handled in a separate clause compiled
+        // conditionally to avoid "unreachable-patterns" warning.
+        #[cfg(target_os = "macos")]
+        Some(libc::ENOTSUP) => FileCloneError::OperationNotSupported,
         Some(libc::EXDEV) => FileCloneError::DifferentFileSystems,
         _ => FileCloneError::IoError(err),
     }
@@ -76,7 +81,7 @@ fn clone_file_impl(src: &Path, dst: &Path) -> Result<(), FileCloneError> {
         () => {
             1074041865
         };
-    };
+    }
 
     let src_f = OpenOptions::new()
         .read(true)

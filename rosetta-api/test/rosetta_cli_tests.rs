@@ -29,10 +29,10 @@ async fn rosetta_cli_data_test() {
     let serv =
         Arc::new(RosettaApiServer::new(serv_ledger, serv_req_handler, addr.clone()).unwrap());
     let serv_run = serv.clone();
-    let mut arbiter = actix_rt::Arbiter::new();
-    arbiter.send(Box::pin(async move {
+    let arbiter = actix_rt::Arbiter::new();
+    arbiter.spawn(Box::pin(async move {
         debug!("Spawning server");
-        serv_run.run(false, false).await.unwrap();
+        serv_run.run(Default::default()).await.unwrap();
         debug!("Server thread done");
     }));
 
@@ -47,14 +47,12 @@ async fn rosetta_cli_data_test() {
 
     assert!(
         output.status.success(),
-        format!(
-            "rosetta-cli did not finish successfully: {},/\
+        "rosetta-cli did not finish successfully: {},/\
              \n\n--------------------------\nstdout: {}, \
              \n\n--------------------------\nstderr: {}",
-            output.status,
-            String::from_utf8(output.stdout).unwrap(),
-            String::from_utf8(output.stderr).unwrap()
-        )
+        output.status,
+        String::from_utf8(output.stdout).unwrap(),
+        String::from_utf8(output.stderr).unwrap()
     );
 
     serv.stop().await;
@@ -95,10 +93,10 @@ async fn rosetta_cli_construction_create_account_test() {
     let serv =
         Arc::new(RosettaApiServer::new(serv_ledger, serv_req_handler, addr.clone()).unwrap());
     let serv_run = serv.clone();
-    let mut arbiter = actix_rt::Arbiter::new();
-    arbiter.send(Box::pin(async move {
+    let arbiter = actix_rt::Arbiter::new();
+    arbiter.spawn(Box::pin(async move {
         debug!("Spawning server");
-        serv_run.run(false, false).await.unwrap();
+        serv_run.run(Default::default()).await.unwrap();
         debug!("Server thread done");
     }));
 
@@ -113,14 +111,12 @@ async fn rosetta_cli_construction_create_account_test() {
 
     assert!(
         output.status.success(),
-        format!(
-            "rosetta-cli did not finish successfully: {},/\
+        "rosetta-cli did not finish successfully: {},/\
              \n\n--------------------------\nstdout: {}, \
              \n\n--------------------------\nstderr: {}",
-            output.status,
-            String::from_utf8(output.stdout).unwrap(),
-            String::from_utf8(output.stderr).unwrap()
-        )
+        output.status,
+        String::from_utf8(output.stdout).unwrap(),
+        String::from_utf8(output.stderr).unwrap()
     );
 
     serv.stop().await;
@@ -180,10 +176,10 @@ async fn rosetta_cli_construction_test() {
     let serv =
         Arc::new(RosettaApiServer::new(serv_ledger, serv_req_handler, addr.clone()).unwrap());
     let serv_run = serv.clone();
-    let mut arbiter = actix_rt::Arbiter::new();
-    arbiter.send(Box::pin(async move {
+    let arbiter = actix_rt::Arbiter::new();
+    arbiter.spawn(Box::pin(async move {
         debug!("Spawning server");
-        serv_run.run(false, false).await.unwrap();
+        serv_run.run(Default::default()).await.unwrap();
         debug!("Server thread done");
     }));
 
@@ -200,14 +196,12 @@ async fn rosetta_cli_construction_test() {
 
     assert!(
         output.status.success(),
-        format!(
-            "rosetta-cli did not finish successfully: {},/\
+        "rosetta-cli did not finish successfully: {},/\
              \n\n--------------------------\nstdout: {}, \
              \n\n--------------------------\nstderr: {}",
-            output.status,
-            String::from_utf8(output.stdout).unwrap(),
-            String::from_utf8(output.stderr).unwrap()
-        )
+        output.status,
+        String::from_utf8(output.stdout).unwrap(),
+        String::from_utf8(output.stderr).unwrap()
     );
 
     serv.stop().await;

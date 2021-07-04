@@ -3,7 +3,9 @@ use ic_nns_constants::REGISTRY_CANISTER_ID;
 use dfn_core::api::call;
 use ic_protobuf::registry::conversion_rate::v1::IcpXdrConversionRateRecord;
 use ic_protobuf::registry::subnet::v1::{SubnetListRecord, SubnetRecord};
-use ic_registry_keys::{make_subnet_record_key, XDR_PER_ICP_KEY};
+use ic_registry_keys::{
+    make_icp_xdr_conversion_rate_record_key, make_subnet_list_record_key, make_subnet_record_key,
+};
 use ic_registry_transport::pb::v1::{Precondition, RegistryAtomicMutateResponse, RegistryMutation};
 use ic_registry_transport::{
     deserialize_get_latest_version_response, deserialize_get_value_response,
@@ -84,33 +86,36 @@ pub async fn get_subnet_record(subnet_id: SubnetId) -> Result<(SubnetRecord, u64
     get_value::<SubnetRecord>(make_subnet_record_key(subnet_id).as_bytes(), None).await
 }
 
-pub const SUBNET_LIST_KEY: &str = "subnet_list";
-
 /// Gets the subnet list record.
 ///
 /// If there is no subnet list record value, the method will return None.
 pub async fn get_subnet_list_record() -> Option<(SubnetListRecord, u64)> {
-    match get_value::<SubnetListRecord>(SUBNET_LIST_KEY.as_bytes(), None).await {
+    match get_value::<SubnetListRecord>(make_subnet_list_record_key().as_bytes(), None).await {
         Ok((slr, version)) => Some((slr, version)),
         Err(error) => match error {
             Error::KeyNotPresent(_) => None,
-            _ => panic!(format!(
+            _ => panic!(
                 "Error while fetching current subnet list record: {:?}",
                 error
-            )),
+            ),
         },
     }
 }
 
 pub async fn get_icp_xdr_conversion_rate_record() -> Option<(IcpXdrConversionRateRecord, u64)> {
-    match get_value::<IcpXdrConversionRateRecord>(XDR_PER_ICP_KEY.as_bytes(), None).await {
+    match get_value::<IcpXdrConversionRateRecord>(
+        make_icp_xdr_conversion_rate_record_key().as_bytes(),
+        None,
+    )
+    .await
+    {
         Ok((conversion_rate, version)) => Some((conversion_rate, version)),
         Err(error) => match error {
             Error::KeyNotPresent(_) => None,
-            _ => panic!(format!(
+            _ => panic!(
                 "Error while fetching current ICP/XDR conversion rate: {:?}",
                 error
-            )),
+            ),
         },
     }
 }

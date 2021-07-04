@@ -24,7 +24,7 @@ impl<R: Rng + CryptoRng, S: SecretKeyStore> CspSigner for Csp<R, S> {
         let secret_key: CspSecretKey =
             self.sks_read_lock()
                 .get(&key_id)
-                .ok_or_else(|| CryptoError::SecretKeyNotFound {
+                .ok_or(CryptoError::SecretKeyNotFound {
                     algorithm: algorithm_id,
                     key_id,
                 })?;

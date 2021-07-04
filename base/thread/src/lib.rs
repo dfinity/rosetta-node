@@ -1,5 +1,8 @@
+//! The crate contains common concurrency patterns.
+mod async_util;
 mod observable_counting_semaphore;
-mod spawn_and_wait;
+mod periodic_closure;
 
+pub use async_util::*;
 pub use observable_counting_semaphore::*;
-pub use spawn_and_wait::*;
+pub use periodic_closure::*;

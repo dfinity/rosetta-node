@@ -352,7 +352,7 @@ pub fn call_bytes(
     fn callback(future_ptr: *mut ()) {
         let ref_counted = unsafe { RefCounted::from_raw(future_ptr as *const RefCell<CallFuture>) };
         let top_level_future = ref_counted.borrow_mut().top_level_future;
-        let waker = {
+        let maybe_waker = {
             let mut future = ref_counted.borrow_mut();
             future.result = Some(match reject_code() {
                 0 => Ok(arg_data()),
@@ -360,14 +360,16 @@ pub fn call_bytes(
             });
             future.waker.take()
         };
-        waker.expect("there is no waker").wake();
+        if let Some(waker) = maybe_waker {
+            waker.wake();
+        }
         std::mem::drop(ref_counted);
         if !top_level_future.is_null() {
             unsafe {
                 TopLevelFuture::release(top_level_future);
             }
         }
-    };
+    }
     let future_for_closure = RefCounted::new(CallFuture::new());
     let future = future_for_closure.clone();
     let future_ptr = future_for_closure.into_raw();
@@ -402,7 +404,7 @@ pub fn call_bytes_with_cleanup(
     fn callback(future_ptr: *mut ()) {
         let ref_counted = unsafe { RefCounted::from_raw(future_ptr as *const RefCell<CallFuture>) };
         let top_level_future = ref_counted.borrow_mut().top_level_future;
-        let waker = {
+        let maybe_waker = {
             let mut future = ref_counted.borrow_mut();
             future.result = Some(match reject_code() {
                 0 => Ok(arg_data()),
@@ -410,14 +412,16 @@ pub fn call_bytes_with_cleanup(
             });
             future.waker.take()
         };
-        waker.expect("there is no waker").wake();
+        if let Some(waker) = maybe_waker {
+            waker.wake();
+        }
         std::mem::drop(ref_counted);
         if !top_level_future.is_null() {
             unsafe {
                 TopLevelFuture::release(top_level_future);
             }
         }
-    };
+    }
 
     fn cleanup(future_ptr: *mut ()) {
         let f = unsafe { RefCounted::from_raw(future_ptr as *const RefCell<CallFuture>) };
@@ -430,7 +434,7 @@ pub fn call_bytes_with_cleanup(
                 TopLevelFuture::drop_if_last_reference(top_level_future);
             }
         }
-    };
+    }
 
     let future_for_closure = RefCounted::new(CallFuture::new());
     let future = future_for_closure.clone();
@@ -706,16 +710,16 @@ pub fn stable_memory_size_in_pages() -> u32 {
 /// Represents the different token units that are available on canisters.
 pub enum TokenUnit {
     Cycles = 0,
-    ICP = 1,
+    Icp = 1,
 }
 
 /// Based on the public spec, cycles is represented by `0x00` and ICP tokens by
 /// `0x01`.
-impl Into<Vec<u8>> for TokenUnit {
-    fn into(self) -> Vec<u8> {
-        match self {
+impl From<TokenUnit> for Vec<u8> {
+    fn from(val: TokenUnit) -> Self {
+        match val {
             TokenUnit::Cycles => hex::decode("00").unwrap(),
-            TokenUnit::ICP => hex::decode("01").unwrap(),
+            TokenUnit::Icp => hex::decode("01").unwrap(),
         }
     }
 }

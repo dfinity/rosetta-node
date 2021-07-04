@@ -1,13 +1,16 @@
 //! The registry public interface.
 use ic_types::{
-    registry::RegistryClientError, registry::RegistryDataProviderError, RegistryVersion,
+    registry::RegistryClientError, registry::RegistryDataProviderError, time::Time, RegistryVersion,
 };
 pub use prost::Message as RegistryValue;
 use serde::{Deserialize, Serialize};
-use std::{cmp::Eq, fmt::Debug, hash::Hash};
+use std::{cmp::Eq, fmt::Debug, hash::Hash, time::Duration};
 
 /// The registry at version `0` is the empty registry.
 pub const ZERO_REGISTRY_VERSION: RegistryVersion = RegistryVersion::new(0);
+
+/// How often we poll the local store.
+pub const POLLING_PERIOD: Duration = Duration::from_secs(5);
 
 pub fn empty_zero_registry_record(key: &str) -> RegistryTransportRecord {
     RegistryTransportRecord {
@@ -90,6 +93,10 @@ pub trait RegistryClient: Send + Sync {
     /// of the registry is `t`, then this method should eventually return a
     /// value no less than `t`.
     fn get_latest_version(&self) -> RegistryVersion;
+
+    /// Returns the time at which the given version became available locally or
+    /// None if the version is not available locally,
+    fn get_version_timestamp(&self, registry_version: RegistryVersion) -> Option<Time>;
 }
 
 /// A versioned (Key, Value) pair returned from the registry.
@@ -141,20 +148,20 @@ pub type RegistryTransportRecord = RegistryVersionedRecord<Vec<u8>>;
 /// and local deployment, this can be instantiated with an implementation that
 /// reads from a local file, e.g.
 pub trait RegistryDataProvider: Send + Sync {
-    /// If successful, the call returns a pair, the first element of which is a
-    /// list of records that were added to the database since `version`. The
-    /// second element of the pair is the current registry version.
+    /// If successful, the call returns a list of records that represents the
+    /// delta between `version` and some registry version larger or equal to
+    /// `version`.
     ///
-    /// The record version of the returned records MUST be greater than
-    /// `version` and MUST be smaller or equal to the current registry version.
+    /// (1) All returned records must be greater than `version`.
     ///
-    /// Thus, if the local cache is at version `version`, after the returned
-    /// records have been added to the local cache, the local registry is at
-    /// the current version.
+    /// (2) Let max_v be the maximal version in the returned records, then the
+    /// return records must represent all updates to the registry for all
+    /// versions in the interval (version..max_v]. In particular, each version
+    /// must be fully contained.
     fn get_updates_since(
         &self,
         version: RegistryVersion,
-    ) -> Result<(Vec<RegistryTransportRecord>, RegistryVersion), RegistryDataProviderError>;
+    ) -> Result<Vec<RegistryTransportRecord>, RegistryDataProviderError>;
 }
 
 /// Whenever the local store is successfully updated, the time contained in the
