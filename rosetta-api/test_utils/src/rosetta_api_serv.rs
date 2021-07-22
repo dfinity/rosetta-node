@@ -91,6 +91,9 @@ impl RosettaApiHandle {
         args.push("--store-location".to_string());
         args.push(format!("{}/data", workspace.path().display()));
 
+        args.push("--store-type".to_string());
+        args.push("sqlite".to_string());
+
         if let Some(root_key) = root_key_blob {
             let root_key_file_path =
                 std::path::PathBuf::from(format!("{}/root_key.pub", workspace.path().display()));
@@ -348,7 +351,7 @@ impl RosettaApiHandle {
         // valid one to send to the IC.
         let mut rng = thread_rng();
         for request in signed_transaction.iter_mut() {
-            request.shuffle(&mut rng);
+            request.1.shuffle(&mut rng);
         }
 
         let req = ConstructionSubmitRequest::new(self.network_id(), signed_transaction);

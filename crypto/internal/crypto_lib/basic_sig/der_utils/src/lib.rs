@@ -14,7 +14,10 @@ mod tests;
 /// when different algorithms are implemented
 #[derive(Clone, Debug, PartialEq)]
 pub enum PkixAlgorithmParameters {
+    /// An ASN.1 object identifier
     ObjectIdentifier(OID),
+    /// An ASN.1 explicit NULL
+    Null,
 }
 
 /// An AlgorithmIdentifier as described in RFC 5480
@@ -29,6 +32,13 @@ impl PkixAlgorithmIdentifier {
         Self {
             oid: algo_oid,
             params: None,
+        }
+    }
+
+    pub fn new_with_null_param(algo_oid: OID) -> Self {
+        Self {
+            oid: algo_oid,
+            params: Some(PkixAlgorithmParameters::Null),
         }
     }
 
@@ -259,6 +269,9 @@ impl KeyDerParser {
                 let algo_params = oid_parts.get(1);
 
                 match (algo_oid, algo_params) {
+                    (ASN1Block::ObjectIdentifier(_, algo_oid), Some(ASN1Block::Null(_))) => Ok(
+                        PkixAlgorithmIdentifier::new_with_null_param(algo_oid.clone()),
+                    ),
                     (
                         ASN1Block::ObjectIdentifier(_, algo_oid),
                         Some(ASN1Block::ObjectIdentifier(_, algo_params)),

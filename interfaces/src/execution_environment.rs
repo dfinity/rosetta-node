@@ -84,178 +84,6 @@ pub struct ExecuteMessageResult<CanisterState> {
     pub heap_delta: NumBytes,
 }
 
-/// An underlying struct/helper for implementing select() on multiple
-/// AsyncResult<T>'s. If an AsyncResult is really an ongoing computation, we
-/// have to obtain its result from a channel. However, some AsyncResults are of
-/// type EarlyResult, which only emulates being async, but in reality is a ready
-/// value (mostly used for early errors). In such case, there is no channel
-/// present and we can simply return the value without waiting.
-pub enum TrySelect<T> {
-    EarlyResult(T),
-    // These Box<Any>'s are here only to hide internal data types from the interfaces crate.
-    // These are known types (crossbeam channnel, WasmExecutionOutput),
-    // and if we restructure our dependency tree we may put the real types here.
-    Channel(
-        Box<dyn std::any::Any + 'static>,
-        Box<dyn FnOnce(Box<dyn std::any::Any + 'static>) -> T>,
-    ),
-}
-
-/// An execution can finish successfully or get interrupted (out of cycles).
-pub enum ExecResultVariant<T> {
-    Completed(T),
-    Interrupted(Box<dyn InterruptedExec<T>>),
-}
-
-// Most likely these traits can be moved to embedders crate if we restructure
-// ExecutionEnvironment a little.
-
-/// An async result which allows for sync wait and select.
-pub trait AsyncResult<T> {
-    fn get(self: Box<Self>) -> ExecResultVariant<T>;
-    fn try_select(self: Box<Self>) -> TrySelect<T>;
-}
-
-/// Interrupted execution. Can be resumed or canceled.
-pub trait InterruptedExec<T> {
-    fn resume(self: Box<Self>, cycles_topup: NumInstructions) -> ExecResult<T>;
-    fn cancel(self: Box<Self>) -> ExecResult<T>;
-}
-
-impl<A: 'static> dyn InterruptedExec<A> {
-    /// Add post-processing on the output received after resume/cancel.
-    pub fn and_then<B: 'static, F: 'static + FnOnce(A) -> B>(
-        self: Box<Self>,
-        f: F,
-    ) -> Box<dyn InterruptedExec<B>> {
-        Box::new(ResumeTokenWrapper {
-            resume_token: self,
-            f,
-        })
-    }
-}
-
-// A wrapper which allows for post processing of the ExecResult returned by
-// original resume/cancel.
-struct ResumeTokenWrapper<A, B, F: FnOnce(A) -> B> {
-    resume_token: Box<dyn InterruptedExec<A>>,
-    f: F,
-}
-
-impl<A, B, F> InterruptedExec<B> for ResumeTokenWrapper<A, B, F>
-where
-    A: 'static,
-    B: 'static,
-    F: 'static + FnOnce(A) -> B,
-{
-    fn resume(self: Box<Self>, cycles_topup: NumInstructions) -> ExecResult<B> {
-        self.resume_token.resume(cycles_topup).and_then(self.f)
-    }
-
-    fn cancel(self: Box<Self>) -> ExecResult<B> {
-        self.resume_token.cancel().and_then(self.f)
-    }
-}
-
-/// Generic async result of an execution.
-pub struct ExecResult<T> {
-    result: Box<dyn AsyncResult<T>>,
-}
-
-impl<T> ExecResult<T> {
-    pub fn new(result: Box<dyn AsyncResult<T>>) -> Self {
-        Self { result }
-    }
-
-    /// Wait for the result
-    pub fn get(self) -> ExecResultVariant<T> {
-        self.result.get()
-    }
-
-    /// Wait for the final result without allowing for a pause.
-    /// If pause occurs, the execution is automatically cancelled.
-    pub fn get_no_pause(self) -> T {
-        match self.result.get() {
-            ExecResultVariant::Completed(x) => x,
-            ExecResultVariant::Interrupted(resume_token) => {
-                if let ExecResultVariant::Completed(x) = resume_token.cancel().get() {
-                    x
-                } else {
-                    panic!("Unexpected response from execution cancel request");
-                }
-            }
-        }
-    }
-
-    /// This function allows to extract an underlying channel to perform a
-    /// select. It is used to implement 'ic_embedders::ExecSelect' and is
-    /// not meant to be used explicitly.
-    pub fn try_select(self) -> TrySelect<T> {
-        self.result.try_select()
-    }
-}
-
-impl<A: 'static> ExecResult<A> {
-    /// Add post-processing on the result.
-    pub fn and_then<B: 'static, F: 'static + FnOnce(A) -> B>(self, f: F) -> ExecResult<B> {
-        ExecResult::new(Box::new(ExecResultWrapper { result: self, f }))
-    }
-}
-
-// A wrapper which allows for post processing of the original ExecResult.
-struct ExecResultWrapper<A, B, F: FnOnce(A) -> B> {
-    result: ExecResult<A>,
-    f: F,
-}
-
-impl<A, B, F> AsyncResult<B> for ExecResultWrapper<A, B, F>
-where
-    A: 'static,
-    B: 'static,
-    F: 'static + FnOnce(A) -> B,
-{
-    fn get(self: Box<Self>) -> ExecResultVariant<B> {
-        match self.result.get() {
-            ExecResultVariant::Completed(x) => ExecResultVariant::Completed((self.f)(x)),
-            ExecResultVariant::Interrupted(resume_token) => {
-                ExecResultVariant::Interrupted(resume_token.and_then(self.f))
-            }
-        }
-    }
-
-    fn try_select(self: Box<Self>) -> TrySelect<B> {
-        let f = self.f;
-        match self.result.try_select() {
-            TrySelect::EarlyResult(res) => TrySelect::EarlyResult(f(res)),
-            TrySelect::Channel(a, p) => TrySelect::Channel(a, Box::new(move |x| f(p(x)))),
-        }
-    }
-}
-
-/// Sync result implementing async interface.
-pub struct EarlyResult<T> {
-    result: T,
-}
-
-impl<T: 'static> EarlyResult<T> {
-    #[allow(clippy::new_ret_no_self)]
-    pub fn new(result: T) -> ExecResult<T> {
-        ExecResult {
-            result: Box::new(Self { result }),
-        }
-    }
-}
-
-impl<T: 'static> AsyncResult<T> for EarlyResult<T> {
-    fn get(self: Box<Self>) -> ExecResultVariant<T> {
-        ExecResultVariant::Completed(self.result)
-    }
-
-    fn try_select(self: Box<Self>) -> TrySelect<T> {
-        TrySelect::EarlyResult(self.result)
-    }
-}
-
 pub type HypervisorResult<T> = Result<T, HypervisorError>;
 
 /// Interface for the component to execute queries on canisters.  It can be used
@@ -479,10 +307,6 @@ pub trait SystemApi {
     /// Outputs the specified bytes on the heap as a string on STDOUT.
     fn ic0_debug_print(&self, src: u32, size: u32, heap: &[u8]);
 
-    /// Just like `exec` in C replaces the current process with a new process,
-    /// this system call replaces the current canister with a new canister.
-    fn ic0_exec(&mut self, bytes: Vec<u8>, payload: Vec<u8>) -> HypervisorError;
-
     /// Traps, with a possibly helpful message
     fn ic0_trap(&self, src: u32, size: u32, heap: &[u8]) -> HypervisorError;
 
@@ -599,11 +423,8 @@ pub trait SystemApi {
     fn ic0_time(&self) -> HypervisorResult<Time>;
 
     /// This system call is not part of the public spec and used by the
-    /// hypervisor, when execution runs out of instructions. Higher levels
-    /// can decide how to proceed, by either providing more instructions
-    /// or aborting the execution (typically with an out-of-instructions
-    /// error).
-    fn out_of_instructions(&self) -> HypervisorResult<NumInstructions>;
+    /// hypervisor, when execution runs out of instructions.
+    fn out_of_instructions(&self) -> HypervisorError;
 
     /// This system call is not part of the public spec. It's called after a
     /// native `memory.grow` has been called to check whether there's enough

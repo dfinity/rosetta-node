@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 0c3d5bf334829a92d272994590496ec59ed94ae4f2f050bb686717fdff0686fa # shrinks to csp_signatures = [], msg = []
+cc dce3acc9d03ba6de8b6bb8f6b8509376b11adfa415e63c00e75170d99fe14ce4 # shrinks to msg = [], signer = CspPublicKey: 0000000000000000000000000000000000000000000000000000000000000000
+cc fbf9adffaedaf71ee3a2aab07affa35ceac6508591da5159d67626895baab312 # shrinks to signature = CspSignature: f28da11ec8e23b2de21cede9de597f3ee2b6265d3e0c891d6c6c39c6c4a87735190913b685f9f04e5a903288448e6ecf9c387cdc3b2e0f6db20a799a0e0e6b5c, msg = [], signer = CspPublicKey: 0000000000000000000000000000000000000000000000000000000000000000

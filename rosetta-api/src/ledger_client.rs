@@ -1,12 +1,18 @@
 use crate::balance_book::BalanceBook;
 use crate::certification::verify_block_hash;
 use crate::convert::{ic_error, internal_error, into_error, invalid_block_id, transaction_id};
-use crate::models::{ApiError, EnvelopePair, SignedTransaction, TransactionIdentifier};
+use crate::models::{
+    ApiError, EnvelopePair, RequestType, SignedTransaction, TransactionIdentifier,
+};
 use crate::store::{BlockStore, BlockStoreError, HashedBlock, InMemoryStore, OnDiskStore};
 use async_trait::async_trait;
 use core::ops::Deref;
 use dfn_protobuf::{ProtoBuf, ToProto};
 use ic_canister_client::{Agent, HttpClient, Sender};
+use ic_nns_governance::pb::v1::{
+    claim_or_refresh_neuron_from_account_response::Result as ClaimOrRefreshResult,
+    ClaimOrRefreshNeuronFromAccountResponse,
+};
 use ic_types::messages::{HttpSubmitContent, MessageId};
 use ic_types::CanisterId;
 use ic_types::{crypto::threshold_sig::ThresholdSigPublicKey, messages::SignedRequestBytes};
@@ -128,6 +134,8 @@ impl LedgerClient {
         canister_access: &CanisterAccess,
     ) -> Result<(), ApiError> {
         debug!("Verifying store...");
+        let first_block = blocks.block_store.first()?;
+
         match blocks.block_store.get_at(0) {
             Ok(store_genesis) => {
                 let genesis = canister_access
@@ -147,7 +155,7 @@ impl LedgerClient {
                 }
             }
             Err(BlockStoreError::NotFound(0)) => {
-                if blocks.block_store.first_snapshot().is_some() {
+                if first_block.is_some() {
                     let msg = "Snapshot found, but genesis block not present in the store";
                     error!("{}", msg);
                     return Err(internal_error(msg));
@@ -160,7 +168,8 @@ impl LedgerClient {
             }
         }
 
-        if let Some((first_block, _)) = blocks.block_store.first_snapshot() {
+        if first_block.is_some() && first_block.as_ref().unwrap().index > 0 {
+            let first_block = first_block.unwrap();
             let queried_block = canister_access.query_raw_block(first_block.index).await?;
             if queried_block.is_none() {
                 let msg = format!(
@@ -255,6 +264,17 @@ impl LedgerAccess for LedgerClient {
             return Ok(());
         }
 
+        let print_progress = if chain_length - next_block_index >= 1000 {
+            info!(
+                "Syncing {} blocks. New tip at {}",
+                chain_length - next_block_index,
+                chain_length - 1
+            );
+            true
+        } else {
+            false
+        };
+
         let mut i = next_block_index;
         while i < chain_length {
             if stopped.load(Relaxed) {
@@ -290,6 +310,9 @@ impl LedgerAccess for LedgerClient {
                 blockchain.add_block(hb.clone())?;
                 last_block_hash = Some(hb.hash);
                 i += 1;
+            }
+            if print_progress && (i - next_block_index) % 10000 == 0 {
+                info!("Synced up to {}", i - 1);
             }
         }
         if let Some(last_hash) = last_block_hash {
@@ -336,7 +359,7 @@ impl LedgerAccess for LedgerClient {
 
         let mut results = vec![];
 
-        for request in envelopes {
+        for (request_type, request) in envelopes {
             // Pick the update/read-start message that is currently valid.
             let now = ic_types::time::current_time();
 
@@ -365,7 +388,7 @@ impl LedgerAccess for LedgerClient {
             };
 
             let request_id = MessageId::from(update.content.representation_independent_hash());
-            let txn_id = transaction_id(&update)?;
+            let txn_id = transaction_id(request_type, &update)?;
 
             let http_body = SignedRequestBytes::try_from(update).map_err(|e| {
                 internal_error(format!(
@@ -480,9 +503,10 @@ impl LedgerAccess for LedgerClient {
 
                                     match status.status.as_ref() {
                                         "replied" => match status.reply {
-                                            Some(bytes) => {
-                                                let block_index: BlockHeight =
-                                                    ProtoBuf::from_bytes(bytes)
+                                            Some(bytes) => match request_type {
+                                                RequestType::Send => {
+                                                    let block_index: BlockHeight =
+                                                        ProtoBuf::from_bytes(bytes)
                                                         .map(|c| c.0)
                                                         .map_err(|err| {
                                                             format!(
@@ -490,8 +514,29 @@ impl LedgerAccess for LedgerClient {
                                                                 err
                                                             )
                                                         })?;
-                                                return Ok(Ok(block_index));
-                                            }
+                                                    return Ok(Ok(Some(block_index)));
+                                                }
+                                                RequestType::CreateStake => {
+                                                    let res: ClaimOrRefreshNeuronFromAccountResponse = candid::decode_one(&bytes)
+                                                        .map_err(|err| {
+                                                            format!(
+                                                                "While parsing the reply of the stake creation call: {}",
+                                                                err
+                                                            )
+                                                        })?;
+                                                    match res.result.unwrap() {
+                                                        ClaimOrRefreshResult::Error(err) => {
+                                                            return Ok(Err(ApiError::TransactionRejected(
+                                                                false,
+                                                                into_error(format!("Could not claim neuron: {}", err)))));
+                                                        }
+                                                        ClaimOrRefreshResult::NeuronId(_) => {
+                                                            // FIXME: return neuron ID
+                                                            return Ok(Ok(None));
+                                                        }
+                                                    };
+                                                }
+                                            },
                                             None => {
                                                 return Err(
                                                     "Send returned with no result.".to_owned()
@@ -557,7 +602,7 @@ impl LedgerAccess for LedgerClient {
                 Ok(Ok(block_index)) => {
                     let res = SubmitResult {
                         transaction_identifier: txn_id,
-                        block_index: Some(block_index),
+                        block_index,
                     };
                     results.push(res);
                 }
@@ -776,16 +821,6 @@ impl Blocks {
         if let Some((first, balances_snapshot)) = self.block_store.first_snapshot().cloned() {
             self.balance_book = balances_snapshot;
 
-            // sanity check
-            let mut sum_icpt = ICPTs::ZERO;
-            for acc in self.balance_book.store.acc_to_hist.keys() {
-                sum_icpt += self.get_balance(acc, first.index).unwrap();
-            }
-            assert_eq!(
-                (ICPTs::MAX - sum_icpt).unwrap(),
-                self.balance_book.icpt_pool
-            );
-
             self.hash_location.insert(first.hash, first.index);
 
             let tx = first.block.decode().unwrap().transaction;
@@ -805,6 +840,9 @@ impl Blocks {
             })?;
             next_idx += 1;
             n += 1;
+            if n % 30000 == 0 {
+                info!("Loading... {} blocks processed", n);
+            }
         }
         Ok(n)
     }

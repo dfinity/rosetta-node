@@ -34,6 +34,7 @@ struct Opt {
     log_config_file: PathBuf,
     #[structopt(long = "root-key")]
     root_key: Option<PathBuf>,
+    /// Supported options: on-disk, sqlite, in-memory
     #[structopt(long = "store-type", default_value = "on-disk")]
     store_type: String,
     #[structopt(long = "store-location", default_value = "./data")]
@@ -163,11 +164,10 @@ async fn main() -> std::io::Result<()> {
                 rusqlite::Connection::open_in_memory()
                     .expect("Unable to open SQLite in-memory database connection")
             };
-            let store = Box::new(SQLiteStore::new(opt.store_location, connection).unwrap());
-            store
-                .create_tables()
-                .expect("Failed to initialize SQLite database");
-            store
+            Box::new(
+                SQLiteStore::new(opt.store_location, connection)
+                    .expect("Failed to initialize sql store"),
+            )
         }
         _ => {
             panic!("Invalid store type");

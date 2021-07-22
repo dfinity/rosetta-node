@@ -1,24 +1,16 @@
 use super::*;
-use ic_rosetta_api::store::{BlockStore, BlockStoreError, InMemoryStore, SQLiteStore};
+use ic_rosetta_api::store::{BlockStore, BlockStoreError, InMemoryStore, OnDiskStore, SQLiteStore};
 
 fn sqlite_in_memory_store(path: &std::path::Path) -> SQLiteStore {
     let connection = rusqlite::Connection::open_in_memory()
         .expect("Unable to open SQLite in-memory database connection");
-    let store = SQLiteStore::new(path.to_path_buf(), connection).expect("Unable to create store");
-    store
-        .create_tables()
-        .expect("Unable to create database tables");
-    store
+    SQLiteStore::new(path.to_path_buf(), connection).expect("Unable to create store")
 }
 
-fn on_disk_store(path: &std::path::Path) -> SQLiteStore {
+pub(crate) fn sqlite_on_disk_store(path: &std::path::Path) -> SQLiteStore {
     let connection = rusqlite::Connection::open(path.join("db.sqlite"))
         .expect("Unable to open SQLite in-memory database connection");
-    let store = SQLiteStore::new(path.to_path_buf(), connection).expect("Unable to create store");
-    store
-        .create_tables()
-        .expect("Unable to create database tables");
-    store
+    SQLiteStore::new(path.to_path_buf(), connection).expect("Unable to create store")
 }
 
 #[actix_rt::test]
@@ -61,17 +53,45 @@ async fn sqlite_in_memory_store_prune_corner_cases_test() {
 }
 
 #[actix_rt::test]
-async fn on_disk_store_prune_first_balance_test() {
+async fn sqlite_on_disk_store_smoke_test() {
     init_test_logger();
     let tmpdir = create_tmp_dir();
-    store_prune_first_balance_test(on_disk_store(tmpdir.path()));
+    store_smoke_test(sqlite_on_disk_store(tmpdir.path()));
 }
 
 #[actix_rt::test]
-async fn on_disk_store_prune_and_load_test() {
+async fn sqlite_on_disk_memory_store_prune_test() {
     init_test_logger();
     let tmpdir = create_tmp_dir();
-    let mut store = on_disk_store(tmpdir.path());
+    store_prune_test(sqlite_on_disk_store(tmpdir.path()));
+}
+
+#[actix_rt::test]
+async fn sqlite_on_disk_memory_store_prune_corner_cases_test() {
+    init_test_logger();
+    let tmpdir = create_tmp_dir();
+    store_prune_corner_cases_test(sqlite_on_disk_store(tmpdir.path()));
+}
+
+#[actix_rt::test]
+async fn sqlite_on_disk_store_prune_first_balance_test() {
+    init_test_logger();
+    let tmpdir = create_tmp_dir();
+    store_prune_first_balance_test(sqlite_on_disk_store(tmpdir.path()));
+}
+
+#[actix_rt::test]
+async fn on_disk_store_prune_first_balance_test() {
+    init_test_logger();
+    let tmpdir = create_tmp_dir();
+    store_prune_first_balance_test(OnDiskStore::new(tmpdir.path().into(), true).unwrap());
+}
+
+#[actix_rt::test]
+async fn sqlite_on_disk_store_prune_and_load_test() {
+    init_test_logger();
+    let tmpdir = create_tmp_dir();
+    let mut store = sqlite_on_disk_store(tmpdir.path());
 
     let scribe = Scribe::new_with_sample_data(10, 100);
 
@@ -89,7 +109,7 @@ async fn on_disk_store_prune_and_load_test() {
 
     drop(store);
     // Now reload from disk
-    let mut store = on_disk_store(tmpdir.path());
+    let mut store = sqlite_on_disk_store(tmpdir.path());
     verify_pruned(&scribe, &mut store, 20);
     verify_balance_snapshot(&scribe, &mut store, 20);
 
@@ -99,7 +119,47 @@ async fn on_disk_store_prune_and_load_test() {
 
     drop(store);
     // Reload once again
-    let mut store = on_disk_store(tmpdir.path());
+    let mut store = sqlite_on_disk_store(tmpdir.path());
+    verify_pruned(&scribe, &mut store, 30);
+    verify_balance_snapshot(&scribe, &mut store, 30);
+}
+
+// should be the same as sqlite_on_disk_store_prune_and_load_test
+// we plan to remove on disk store, so this will go away soon.
+// we keep if for compatibility for now
+#[actix_rt::test]
+async fn on_disk_store_prune_and_load_test() {
+    init_test_logger();
+    let tmpdir = create_tmp_dir();
+    let mut store = sqlite_on_disk_store(tmpdir.path());
+
+    let scribe = Scribe::new_with_sample_data(10, 100);
+
+    for hb in &scribe.blockchain {
+        store.push(hb.clone()).unwrap();
+    }
+
+    prune(&scribe, &mut store, 10);
+    verify_pruned(&scribe, &mut store, 10);
+    verify_balance_snapshot(&scribe, &mut store, 10);
+
+    prune(&scribe, &mut store, 20);
+    verify_pruned(&scribe, &mut store, 20);
+    verify_balance_snapshot(&scribe, &mut store, 20);
+
+    drop(store);
+    // Now reload from disk
+    let mut store = sqlite_on_disk_store(tmpdir.path());
+    verify_pruned(&scribe, &mut store, 20);
+    verify_balance_snapshot(&scribe, &mut store, 20);
+
+    prune(&scribe, &mut store, 30);
+    verify_pruned(&scribe, &mut store, 30);
+    verify_balance_snapshot(&scribe, &mut store, 30);
+
+    drop(store);
+    // Reload once again
+    let mut store = sqlite_on_disk_store(tmpdir.path());
     verify_pruned(&scribe, &mut store, 30);
     verify_balance_snapshot(&scribe, &mut store, 30);
 }
@@ -198,6 +258,10 @@ fn verify_pruned(scribe: &Scribe, store: &mut impl BlockStore, prune_at: u64) {
             store.get_at(i).unwrap_err(),
             BlockStoreError::NotAvailable(i)
         );
+    }
+
+    if oldest_idx < after_last_idx {
+        assert_eq!(store.first().unwrap().map(|x| x.index), Some(oldest_idx));
     }
 
     for i in oldest_idx..after_last_idx {

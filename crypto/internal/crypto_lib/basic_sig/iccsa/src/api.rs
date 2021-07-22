@@ -9,7 +9,6 @@ use ic_types::{
     crypto::{AlgorithmId, CryptoError, CryptoResult},
     CanisterId,
 };
-use simple_asn1::{BigUint, OID};
 use std::convert::TryFrom;
 
 #[cfg(test)]

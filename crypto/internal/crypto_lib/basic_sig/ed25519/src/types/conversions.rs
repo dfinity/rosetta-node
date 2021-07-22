@@ -1,19 +1,23 @@
 use super::*;
+use ic_crypto_secrets_containers::SecretArray;
 use ic_types::crypto::{AlgorithmId, CryptoError};
 use std::convert::TryFrom;
 
 pub mod protobuf;
 
+#[cfg(test)]
+mod tests;
+
 impl From<SecretKeyBytes> for String {
     fn from(val: SecretKeyBytes) -> Self {
-        base64::encode(&val.0[..])
+        base64::encode(val.0.expose_secret())
     }
 }
 impl TryFrom<&str> for SecretKeyBytes {
     type Error = CryptoError;
 
     fn try_from(key: &str) -> Result<Self, CryptoError> {
-        let key = base64::decode(key).map_err(|e| CryptoError::MalformedSecretKey {
+        let mut key = base64::decode(key).map_err(|e| CryptoError::MalformedSecretKey {
             algorithm: AlgorithmId::Ed25519,
             internal_error: format!("Key is not a valid base64 encoded string: {}", e),
         })?;
@@ -25,7 +29,9 @@ impl TryFrom<&str> for SecretKeyBytes {
         }
         let mut buffer = [0u8; SecretKeyBytes::SIZE];
         buffer.copy_from_slice(&key);
-        Ok(SecretKeyBytes(buffer))
+        key.zeroize();
+        let ret = SecretKeyBytes(SecretArray::new_and_zeroize_argument(&mut buffer));
+        Ok(ret)
     }
 }
 impl TryFrom<&String> for SecretKeyBytes {

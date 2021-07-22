@@ -14,12 +14,14 @@ ic-crypto-internal-basic-sig-cose = { path = "../crypto_lib/basic_sig/cose" }
 ic-crypto-internal-basic-sig-ecdsa-secp256k1 = { path = "../crypto_lib/basic_sig/ecdsa_secp256k1" }
 ic-crypto-internal-basic-sig-ecdsa-secp256r1 = { path = "../crypto_lib/basic_sig/ecdsa_secp256r1" }
 ic-crypto-internal-basic-sig-ed25519 = { path = "../crypto_lib/basic_sig/ed25519" }
+ic-crypto-internal-basic-sig-rsa-pkcs1 = { path = "../crypto_lib/basic_sig/rsa_pkcs1" }
 ic-crypto-internal-basic-sig-iccsa = { path = "../crypto_lib/basic_sig/iccsa" }
 ic-crypto-internal-bls12381-common = { path = "../crypto_lib/bls12_381/common" }
 ic-crypto-internal-bls12381-serde-miracl = { path = "../crypto_lib/bls12_381/serde/miracl" }
 ic-crypto-internal-fs-ni-dkg = { path = "../crypto_lib/fs_ni_dkg" }
 ic-crypto-internal-logmon = { path = "../logmon" }
 ic-crypto-internal-multi-sig-bls12381 = { path = "../crypto_lib/multi_sig/bls12_381" }
+ic-crypto-secrets-containers = { path = "../../secrets_containers" }
 ic-crypto-internal-threshold-sig-bls12381 = { path = "../crypto_lib/threshold_sig/bls12_381" }
 ic-crypto-internal-test-vectors = { path = "../test_vectors" }
 ic-crypto-internal-tls = { path = "../crypto_lib/tls" }
@@ -40,7 +42,7 @@ rand_chacha = "0.2.2"
 rand_core = "0.5.1"
 serde = { version = "1.0.99", features = [ "derive" ] }
 serde_cbor = "0.11.1"
-simple_asn1 = "0.4.1"
+simple_asn1 = "0.5.4"
 slog = { version = "2.5.2", features = ["nested-values", "max_level_trace", "release_max_level_debug"] }
 strum = "0.18.0"
 strum_macros = "0.18.0"

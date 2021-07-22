@@ -1,6 +1,10 @@
-use ic_nns_constants::REGISTRY_CANISTER_ID;
+use std::convert::TryFrom;
+
+use prost::Message;
 
 use dfn_core::api::call;
+use ic_base_types::{PrincipalId, SubnetId};
+use ic_nns_constants::REGISTRY_CANISTER_ID;
 use ic_protobuf::registry::conversion_rate::v1::IcpXdrConversionRateRecord;
 use ic_protobuf::registry::subnet::v1::{SubnetListRecord, SubnetRecord};
 use ic_registry_keys::{
@@ -12,9 +16,6 @@ use ic_registry_transport::{
     serialize_atomic_mutate_request, serialize_get_value_request, Error,
 };
 use on_wire::bytes;
-
-use ic_base_types::SubnetId;
-use prost::Message;
 
 /// Wraps around Message::encode and panics on error.
 pub fn encode_or_panic<T: Message>(msg: &T) -> Vec<u8> {
@@ -100,6 +101,14 @@ pub async fn get_subnet_list_record() -> Option<(SubnetListRecord, u64)> {
             ),
         },
     }
+}
+
+pub fn get_subnet_ids_from_subnet_list(subnet_list: SubnetListRecord) -> Vec<SubnetId> {
+    subnet_list
+        .subnets
+        .iter()
+        .map(|subnet_id_vec| SubnetId::new(PrincipalId::try_from(subnet_id_vec).unwrap()))
+        .collect()
 }
 
 pub async fn get_icp_xdr_conversion_rate_record() -> Option<(IcpXdrConversionRateRecord, u64)> {

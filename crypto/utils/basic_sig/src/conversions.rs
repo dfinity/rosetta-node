@@ -1,7 +1,7 @@
 //! Conversion of keys into various formats
 use ic_crypto_internal_basic_sig_der_utils as der_utils;
 use ic_crypto_internal_types::sign::eddsa::ed25519 as internal_types;
-use simple_asn1::{BigUint, OID};
+use simple_asn1::{oid, OID};
 use std::convert::TryFrom;
 pub mod pem;
 
@@ -64,7 +64,7 @@ pub enum Ed25519DerParseError {
     IncorrectPublicKeyLength(internal_types::PublicKeyByteConversionError),
     IncorrectSecretKeyLength(internal_types::SecretKeyByteConversionError),
     OidExtractionError(String),
-    OidValueError(simple_asn1::OID),
+    OidValueError(OID),
     MissingPublicKey(),
 }
 
@@ -180,8 +180,8 @@ impl Ed25519SecretKeyConversions for internal_types::SecretKey {
 /// The ASN.1 OID for Ed25519
 ///
 /// OID for Ed25519 is 1.3.101.112, see https://tools.ietf.org/html/rfc8410
-fn ed25519_oid() -> simple_asn1::OID {
-    simple_asn1::oid!(1, 3, 101, 112)
+fn ed25519_oid() -> OID {
+    oid!(1, 3, 101, 112)
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]

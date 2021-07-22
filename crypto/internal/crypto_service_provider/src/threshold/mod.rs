@@ -115,6 +115,7 @@ impl<R: Rng + CryptoRng, S: SecretKeyStore> ThresholdSignatureCspClient for Csp<
                     .iter()
                     .map(|csp_signature_maybe| {
                         csp_signature_maybe
+                            .clone()
                             .map(clib::types::IndividualSignatureBytes::try_from)
                             .transpose()
                     })

@@ -1,18 +1,19 @@
 use crate::models;
 use crate::models::{
-    AccountIdentifier, Amount, ApiError, BlockIdentifier, Currency, Operation, Timestamp,
-    TransactionIdentifier,
+    AccountIdentifier, Amount, ApiError, BlockIdentifier, Currency, Operation, OperationIdentifier,
+    RequestType, Timestamp, TransactionIdentifier,
 };
 use crate::store::HashedBlock;
 use core::fmt::Display;
 use dfn_protobuf::ProtoBuf;
 use ic_crypto_tree_hash::Path;
 use ic_types::messages::{
-    HttpCanisterUpdate, HttpReadState, HttpRequestEnvelope, HttpSubmitContent,
+    HttpCanisterUpdate, HttpReadState, HttpRequestEnvelope, HttpSubmitContent, MessageId,
 };
 use ic_types::{CanisterId, PrincipalId};
 use ledger_canister::{
-    BlockHeight, HashOf, ICPTs, SendArgs, Transaction, Transfer, DECIMAL_PLACES, TRANSACTION_FEE,
+    BlockHeight, HashOf, ICPTs, SendArgs, Subaccount, Transaction, Transfer, DECIMAL_PLACES,
+    TRANSACTION_FEE,
 };
 use on_wire::{FromWire, IntoWire};
 use serde_json::map::Map;
@@ -36,11 +37,23 @@ pub fn timestamp(timestamp: SystemTime) -> Result<Timestamp, ApiError> {
 
 // Since our blockchain doesn't have smart contracts all operations are always a
 // single value
-const STATUS: &str = "COMPLETED";
+const STATUS_COMPLETED: &str = "COMPLETED";
 const TRANSACTION: &str = "TRANSACTION";
 const MINT: &str = "MINT";
 const BURN: &str = "BURN";
 const FEE: &str = "FEE";
+const STAKE: &str = "STAKE";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Request {
+    Transfer(Transfer),
+    Stake(Stake),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stake {
+    pub account: ledger_canister::AccountIdentifier,
+}
 
 pub fn transaction(hb: &HashedBlock) -> Result<models::Transaction, ApiError> {
     let block = hb
@@ -50,7 +63,13 @@ pub fn transaction(hb: &HashedBlock) -> Result<models::Transaction, ApiError> {
     let transaction = block.transaction;
     let transaction_identifier = transaction_identifier(&transaction.hash());
     let transfer = transaction.transfer;
-    let operations = operations(&transfer, true)?;
+    let operations = {
+        let mut ops = requests_to_operations(&[Request::Transfer(transfer)])?;
+        for op in ops.iter_mut() {
+            op.status = Some(STATUS_COMPLETED.to_string());
+        }
+        ops
+    };
     let mut t = models::Transaction::new(transaction_identifier, operations);
     let mut metadata = Map::new();
     metadata.insert(
@@ -69,66 +88,97 @@ pub fn transaction(hb: &HashedBlock) -> Result<models::Transaction, ApiError> {
     Ok(t)
 }
 
-// This currently only takes a transation
-pub fn operations(transaction: &Transfer, completed: bool) -> Result<Vec<Operation>, ApiError> {
-    // The spec just says if there aren't smart contracts all statuses should
-    // be the same
-    let status = if completed {
-        Some(STATUS.to_string())
-    } else {
-        None
+/// Translates a sequence of internal requests into an array of Rosetta API
+/// operations.
+pub fn requests_to_operations(requests: &[Request]) -> Result<Vec<Operation>, ApiError> {
+    let mut ops = vec![];
+    let mut idx = 0;
+    let mut allocate_op_id = || {
+        let n = idx;
+        idx += 1;
+        OperationIdentifier::new(n)
     };
 
-    let ops = match transaction {
-        Transfer::Send {
-            from,
-            to,
-            amount,
-            fee,
-        } => {
-            let from_account = Some(to_model_account_identifier(from));
-            let to_account = Some(to_model_account_identifier(to));
-            let amount = i128::try_from(amount.get_e8s())
-                .map_err(|_| ApiError::InternalError(true, None))?;
-            let db = Operation::new(
-                0,
-                TRANSACTION.to_string(),
-                status.clone(),
-                from_account.clone(),
-                Some(signed_amount(-amount)),
-            );
-            let cr = Operation::new(
-                1,
-                TRANSACTION.to_string(),
-                status.clone(),
-                to_account,
-                Some(signed_amount(amount)),
-            );
-            let fee = Operation::new(
-                2,
-                FEE.to_string(),
-                status,
-                from_account,
-                Some(signed_amount(-(fee.get_e8s() as i128))),
-            );
-            vec![db, cr, fee]
+    for request in requests {
+        match request {
+            Request::Transfer(Transfer::Send {
+                from,
+                to,
+                amount,
+                fee,
+            }) => {
+                let from_account = Some(to_model_account_identifier(from));
+                let amount = i128::from(amount.get_e8s());
+
+                ops.push(Operation {
+                    operation_identifier: allocate_op_id(),
+                    _type: TRANSACTION.to_string(),
+                    status: None,
+                    account: from_account.clone(),
+                    amount: Some(signed_amount(-amount)),
+                    related_operations: None,
+                    coin_change: None,
+                    metadata: None,
+                });
+                ops.push(Operation {
+                    operation_identifier: allocate_op_id(),
+                    _type: TRANSACTION.to_string(),
+                    status: None,
+                    account: Some(to_model_account_identifier(to)),
+                    amount: Some(signed_amount(amount)),
+                    related_operations: None,
+                    coin_change: None,
+                    metadata: None,
+                });
+                ops.push(Operation {
+                    operation_identifier: allocate_op_id(),
+                    _type: FEE.to_string(),
+                    status: None,
+                    account: from_account,
+                    amount: Some(signed_amount(-(fee.get_e8s() as i128))),
+                    related_operations: None,
+                    coin_change: None,
+                    metadata: None,
+                });
+            }
+            Request::Transfer(Transfer::Mint { to, amount, .. }) => {
+                ops.push(Operation {
+                    operation_identifier: allocate_op_id(),
+                    _type: MINT.to_string(),
+                    status: None,
+                    account: Some(to_model_account_identifier(to)),
+                    amount: Some(amount_(*amount)?),
+                    related_operations: None,
+                    coin_change: None,
+                    metadata: None,
+                });
+            }
+            Request::Transfer(Transfer::Burn { from, amount, .. }) => {
+                ops.push(Operation {
+                    operation_identifier: allocate_op_id(),
+                    _type: BURN.to_string(),
+                    status: None,
+                    account: Some(to_model_account_identifier(from)),
+                    amount: Some(signed_amount(-i128::from(amount.get_e8s()))),
+                    related_operations: None,
+                    coin_change: None,
+                    metadata: None,
+                });
+            }
+            Request::Stake(Stake { account }) => {
+                ops.push(Operation {
+                    operation_identifier: allocate_op_id(),
+                    _type: STAKE.to_string(),
+                    status: None,
+                    account: Some(to_model_account_identifier(account)),
+                    amount: None,
+                    related_operations: None,
+                    coin_change: None,
+                    metadata: None,
+                });
+            }
         }
-        // TODO include the destination in the metadata
-        Transfer::Mint { to, amount, .. } => {
-            let account = Some(to_model_account_identifier(to));
-            let amount = Some(amount_(*amount)?);
-            let op = Operation::new(0, MINT.to_string(), status, account, amount);
-            vec![op]
-        }
-        Transfer::Burn { from, amount, .. } => {
-            let amount = i128::try_from(amount.get_e8s())
-                .map_err(|_| ApiError::InternalError(true, None))?;
-            let account = Some(to_model_account_identifier(from));
-            let amount = Some(signed_amount(-amount));
-            let op = Operation::new(0, BURN.to_string(), status, account, amount);
-            vec![op]
-        }
-    };
+    }
     Ok(ops)
 }
 
@@ -136,7 +186,7 @@ pub fn operations(transaction: &Transfer, completed: bool) -> Result<Vec<Operati
 /// debit/credit/fee operations.
 struct State {
     preprocessing: bool,
-    transfers: Vec<Transfer>,
+    actions: Vec<Request>,
     cr: Option<(ICPTs, ledger_canister::AccountIdentifier)>,
     db: Option<(ICPTs, ledger_canister::AccountIdentifier)>,
     fee: Option<(ICPTs, ledger_canister::AccountIdentifier)>,
@@ -182,12 +232,12 @@ impl State {
             return trans_err("Debit_amount should be equal -credit_amount".to_string());
         }
 
-        self.transfers.push(Transfer::Send {
+        self.actions.push(Request::Transfer(Transfer::Send {
             from,
             to,
             amount: cr_amount,
             fee: fee_amount,
-        });
+        }));
 
         Ok(())
     }
@@ -222,9 +272,15 @@ impl State {
         self.fee = Some((amount, account));
         Ok(())
     }
+
+    fn stake(&mut self, account: ledger_canister::AccountIdentifier) -> Result<(), ApiError> {
+        self.flush()?;
+        self.actions.push(Request::Stake(Stake { account }));
+        Ok(())
+    }
 }
 
-pub fn from_operations(ops: &[Operation], preprocessing: bool) -> Result<Vec<Transfer>, ApiError> {
+pub fn from_operations(ops: &[Operation], preprocessing: bool) -> Result<Vec<Request>, ApiError> {
     let op_error = |op: &Operation, e| {
         let msg = format!("In operation '{:?}': {}", op, e);
         ApiError::InvalidTransaction(false, into_error(msg))
@@ -232,33 +288,51 @@ pub fn from_operations(ops: &[Operation], preprocessing: bool) -> Result<Vec<Tra
 
     let mut state = State {
         preprocessing,
-        transfers: vec![],
+        actions: vec![],
         cr: None,
         db: None,
         fee: None,
     };
 
     for o in ops {
-        if o.amount.is_none() || o.account.is_none() {
-            return Err(op_error(&o, "Account and amount must be populated".into()));
+        if o.account.is_none() {
+            return Err(op_error(&o, "Account must be populated".into()));
         }
         if o.coin_change.is_some() {
             return Err(op_error(&o, "Coin changes are not permitted".into()));
         }
-        let amount = from_amount(o.amount.as_ref().unwrap()).map_err(|e| op_error(&o, e))?;
         let account = from_model_account_identifier(o.account.as_ref().unwrap())
             .map_err(|e| op_error(&o, e))?;
 
         match o._type.as_str() {
             TRANSACTION => {
+                let amount = o
+                    .amount
+                    .as_ref()
+                    .ok_or_else(|| op_error(&o, "Amount must be populated".into()))?;
+                let amount = from_amount(amount).map_err(|e| op_error(&o, e))?;
                 state.transaction(account, amount)?;
             }
             FEE => {
+                let amount = o
+                    .amount
+                    .as_ref()
+                    .ok_or_else(|| op_error(&o, "Amount must be populated".into()))?;
+                let amount = from_amount(amount).map_err(|e| op_error(&o, e))?;
                 if -amount != TRANSACTION_FEE.get_e8s() as i128 {
                     let msg = format!("Fee should be equal: {}", TRANSACTION_FEE.get_e8s());
                     return Err(op_error(&o, msg));
                 }
                 state.fee(account, ICPTs::from_e8s((-amount) as u64))?;
+            }
+            STAKE => {
+                if o.amount.is_some() {
+                    return Err(op_error(
+                        &o,
+                        "Staking operation cannot have an amount".into(),
+                    ));
+                }
+                state.stake(account)?;
             }
             _ => {
                 let msg = format!("Unsupported operation type: {}", o._type);
@@ -269,14 +343,14 @@ pub fn from_operations(ops: &[Operation], preprocessing: bool) -> Result<Vec<Tra
 
     state.flush()?;
 
-    if state.transfers.is_empty() {
+    if state.actions.is_empty() {
         return Err(ApiError::InvalidTransaction(
             false,
-            into_error("Operations don't contain any transfer.".to_owned()),
+            into_error("Operations don't contain any actions.".to_owned()),
         ));
     }
 
-    Ok(state.transfers)
+    Ok(state.actions)
 }
 
 pub fn amount_(amount: ICPTs) -> Result<Amount, ApiError> {
@@ -379,28 +453,42 @@ pub fn to_hex(v: &[u8]) -> String {
 }
 
 pub fn transaction_id(
+    request_type: RequestType,
     signed_transaction: &HttpRequestEnvelope<HttpSubmitContent>,
 ) -> Result<TransactionIdentifier, ApiError> {
-    let HttpSubmitContent::Call { update } = &signed_transaction.content;
-    let from = PrincipalId::try_from(update.sender.clone().0)
-        .map_err(|e| internal_error(e.to_string()))?;
-    let SendArgs {
-        memo,
-        amount,
-        fee,
-        from_subaccount,
-        to,
-        created_at_time,
-    } = from_arg(update.arg.clone().0)?;
-    let created_at_time = created_at_time.ok_or_else(|| internal_error(
-        "A transaction ID cannot be generated from a constructed transaction without an explicit 'created_at_time'"
-    ))?;
+    match request_type {
+        RequestType::Send => {
+            let HttpSubmitContent::Call { update } = &signed_transaction.content;
+            let from = PrincipalId::try_from(update.sender.clone().0)
+                .map_err(|e| internal_error(e.to_string()))?;
+            let SendArgs {
+                memo,
+                amount,
+                fee,
+                from_subaccount,
+                to,
+                created_at_time,
+            } = from_arg(update.arg.clone().0)?;
+            let created_at_time = created_at_time.ok_or_else(|| internal_error(
+                "A transaction ID cannot be generated from a constructed transaction without an explicit 'created_at_time'"
+            ))?;
 
-    let from = ledger_canister::AccountIdentifier::new(from, from_subaccount);
+            let from = ledger_canister::AccountIdentifier::new(from, from_subaccount);
 
-    let hash = Transaction::new(from, to, amount, fee, memo, created_at_time).hash();
+            let hash = Transaction::new(from, to, amount, fee, memo, created_at_time).hash();
 
-    Ok(transaction_identifier(&hash))
+            Ok(transaction_identifier(&hash))
+        }
+        RequestType::CreateStake => {
+            // Unfortunately, staking operations don't really have a
+            // transaction ID, but we have to return something. Let's
+            // use the message ID.
+            let HttpSubmitContent::Call { mut update } = signed_transaction.content.clone();
+            update.ingress_expiry = 0;
+            let request_id = MessageId::from(update.representation_independent_hash());
+            Ok(TransactionIdentifier::new(format!("MSG:{}", request_id)))
+        }
+    }
 }
 
 pub fn internal_error<D: Display>(msg: D) -> ApiError {
@@ -441,6 +529,8 @@ pub fn neuron_account_from_public_key(
     // be 0.
     const NONCE: u64 = 0;
 
+    // FIXME: cut&paste from compute_neuron_staking_subaccount() in
+    // rs/nns/governance/src/governance.rs.
     let sub_account_bytes = {
         let mut state = ic_crypto_sha256::Sha256::new();
         state.write(&[0x0c]);
@@ -450,13 +540,12 @@ pub fn neuron_account_from_public_key(
         state.finish()
     };
 
-    Ok(AccountIdentifier {
-        address: governance_canister_id.to_string(),
-        sub_account: Some(models::SubAccountIdentifier::new(hex::encode(
-            &sub_account_bytes,
-        ))),
-        metadata: None,
-    })
+    Ok(to_model_account_identifier(
+        &ledger_canister::AccountIdentifier::new(
+            governance_canister_id.get(),
+            Some(Subaccount(sub_account_bytes)),
+        ),
+    ))
 }
 
 pub fn principal_id_from_public_key(pk: &models::PublicKey) -> Result<PrincipalId, ApiError> {
@@ -501,3 +590,6 @@ pub fn make_read_state_from_update(update: &HttpCanisterUpdate) -> HttpReadState
         ingress_expiry: update.ingress_expiry,
     }
 }
+
+#[cfg(test)]
+mod tests;

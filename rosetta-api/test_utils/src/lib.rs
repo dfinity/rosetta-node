@@ -1,6 +1,7 @@
 use ic_rosetta_api::convert::{
-    amount_, from_hex, from_model_account_identifier, from_operations, from_public_key, operations,
-    principal_id_from_public_key, signed_amount, to_hex, to_model_account_identifier,
+    amount_, from_hex, from_model_account_identifier, from_operations, from_public_key,
+    principal_id_from_public_key, requests_to_operations, signed_amount, to_hex,
+    to_model_account_identifier, Request, Stake,
 };
 use ic_rosetta_api::models::Error as RosettaError;
 use ic_rosetta_api::models::{
@@ -26,7 +27,6 @@ use std::path::Path;
 pub fn to_public_key(keypair: &EdKeypair) -> PublicKey {
     PublicKey {
         hex_bytes: to_hex(&keypair.public.to_bytes()),
-        // This is a guess
         curve_type: CurveType::Edwards25519,
     }
 }
@@ -62,14 +62,14 @@ pub fn acc_id(seed: u64) -> AccountIdentifier {
     PrincipalId::new_self_authenticating(&public_key_der).into()
 }
 
-pub struct TransferInfo {
-    pub transfer: Transfer,
+pub struct RequestInfo {
+    pub request: Request,
     pub sender_keypair: Arc<EdKeypair>,
 }
 
 pub async fn prepare_multiple_txn(
     ros: &RosettaApiHandle,
-    transfers: &[TransferInfo],
+    requests: &[RequestInfo],
     accept_suggested_fee: bool,
     ingress_end: Option<u64>,
     created_at_time: Option<u64>,
@@ -80,21 +80,10 @@ pub async fn prepare_multiple_txn(
     let mut all_sender_pks = Vec::new();
     let mut trans_fee_amount = None;
 
-    for transfer in transfers {
-        let (sender_acc, fee) = match transfer.transfer.clone() {
-            Transfer::Send { from, fee, .. } => (from, fee),
-            _ => panic!("Only Send supported here"),
-        };
-        trans_fee_amount = Some(amount_(fee).unwrap());
-
-        let ops = operations(&transfer.transfer, false).unwrap();
-
-        all_sender_pks.push(to_public_key(&transfer.sender_keypair));
-        all_sender_account_ids.push(to_model_account_identifier(&sender_acc));
-
+    for request in requests {
         // first ask for the fee
         let mut fee_found = false;
-        for o in ops {
+        for o in requests_to_operations(&[request.request.clone()]).unwrap() {
             if o._type == "FEE" {
                 fee_found = true;
             } else {
@@ -103,14 +92,34 @@ pub async fn prepare_multiple_txn(
             all_ops.push(o);
         }
 
-        // just a sanity check
-        assert!(fee_found, "There should be a fee op in operations");
+        match request.request.clone() {
+            Request::Transfer(Transfer::Send { from, fee, .. }) => {
+                trans_fee_amount = Some(amount_(fee).unwrap());
+                all_sender_account_ids.push(to_model_account_identifier(&from));
+
+                // just a sanity check
+                assert!(fee_found, "There should be a fee op in operations");
+            }
+            Request::Stake(Stake { account, .. }) => {
+                all_sender_account_ids.push(to_model_account_identifier(&account));
+            }
+            _ => panic!("Only Send/Stake supported here"),
+        };
+
+        all_sender_pks.push(to_public_key(&request.sender_keypair));
     }
 
+    all_sender_pks.sort();
+    all_sender_pks.dedup();
+
+    all_sender_account_ids.sort_by(compare_accounts);
+    all_sender_account_ids.dedup();
+
     let pre_res = ros.construction_preprocess(dry_run_ops).await.unwrap()?;
+    let mut res_keys = pre_res.required_public_keys.clone().unwrap();
+    res_keys.sort_by(compare_accounts);
     assert_eq!(
-        pre_res.required_public_keys.unwrap(),
-        all_sender_account_ids,
+        res_keys, all_sender_account_ids,
         "Preprocess should report that senders' pks are required"
     );
 
@@ -140,9 +149,10 @@ pub async fn prepare_multiple_txn(
         .construction_preprocess(all_ops.clone())
         .await
         .unwrap()?;
+    let mut res_keys = pre_res.required_public_keys.clone().unwrap();
+    res_keys.sort_by(compare_accounts);
     assert_eq!(
-        pre_res.required_public_keys.unwrap(),
-        all_sender_account_ids,
+        res_keys, all_sender_account_ids,
         "Preprocess should report that sender's pk is required"
     );
     let metadata_res = ros
@@ -178,8 +188,8 @@ pub async fn prepare_txn(
 ) -> Result<(ConstructionPayloadsResponse, ICPTs), RosettaError> {
     prepare_multiple_txn(
         ros,
-        &[TransferInfo {
-            transfer,
+        &[RequestInfo {
+            request: Request::Transfer(transfer),
             sender_keypair,
         }],
         accept_suggested_fee,
@@ -258,8 +268,8 @@ pub async fn do_txn(
 > {
     do_multiple_txn(
         ros,
-        &[TransferInfo {
-            transfer,
+        &[RequestInfo {
+            request: Request::Transfer(transfer),
             sender_keypair,
         }],
         accept_suggested_fee,
@@ -271,7 +281,7 @@ pub async fn do_txn(
 
 pub async fn do_multiple_txn(
     ros: &RosettaApiHandle,
-    transfers: &[TransferInfo],
+    requests: &[RequestInfo],
     accept_suggested_fee: bool,
     ingress_end: Option<u64>,
     created_at_time: Option<u64>,
@@ -285,7 +295,7 @@ pub async fn do_multiple_txn(
 > {
     let (payloads, charged_fee) = prepare_multiple_txn(
         ros,
-        transfers,
+        requests,
         accept_suggested_fee,
         ingress_end,
         created_at_time,
@@ -298,8 +308,8 @@ pub async fn do_multiple_txn(
         .unwrap()?;
 
     if !accept_suggested_fee {
-        let ts: Vec<_> = transfers.iter().map(|t| t.transfer.clone()).collect();
-        assert_eq!(ts, from_operations(&parse_res.operations, false).unwrap());
+        let rs: Vec<_> = requests.iter().map(|r| r.request.clone()).collect();
+        assert_eq!(rs, from_operations(&parse_res.operations, false).unwrap());
     }
 
     // check that we got enough unsigned messages
@@ -309,7 +319,7 @@ pub async fn do_multiple_txn(
         assert!(payloads.payloads.len() as u64 + 2 >= intervals * 2);
     }
 
-    let keypairs: Vec<_> = transfers
+    let keypairs: Vec<_> = requests
         .iter()
         .map(|t| t.sender_keypair.to_owned())
         .collect();
@@ -322,8 +332,8 @@ pub async fn do_multiple_txn(
         .unwrap()?;
 
     if !accept_suggested_fee {
-        let ts: Vec<_> = transfers.iter().map(|t| t.transfer.clone()).collect();
-        assert_eq!(ts, from_operations(&parse_res.operations, false).unwrap());
+        let rs: Vec<_> = requests.iter().map(|r| r.request.clone()).collect();
+        assert_eq!(rs, from_operations(&parse_res.operations, false).unwrap());
     }
 
     let hash_res = ros
@@ -444,4 +454,13 @@ pub fn store_threshold_sig_pk<P: AsRef<Path>>(pk: &Blob, path: P) {
     let path = path.as_ref();
     std::fs::write(path, bytes)
         .unwrap_or_else(|e| panic!("failed to store public key to {}: {}", path.display(), e));
+}
+
+fn compare_accounts(
+    x: &ic_rosetta_api::models::AccountIdentifier,
+    y: &ic_rosetta_api::models::AccountIdentifier,
+) -> std::cmp::Ordering {
+    let xx = (&x.address, x.sub_account.as_ref().map(|s| &s.address));
+    let yy = (&y.address, y.sub_account.as_ref().map(|s| &s.address));
+    xx.cmp(&yy)
 }

@@ -4,7 +4,7 @@ mod store_tests;
 
 use ic_rosetta_api::models::{
     AccountBalanceRequest, AccountBalanceResponse, ApiError, EnvelopePair, NetworkListResponse,
-    NetworkRequest, PartialBlockIdentifier, SignedTransaction,
+    NetworkRequest, PartialBlockIdentifier, RequestType, SignedTransaction,
 };
 use ledger_canister::{self, AccountIdentifier, Block, BlockHeight, ICPTs, SendArgs, Transfer};
 use tokio::sync::RwLock;
@@ -155,7 +155,9 @@ impl LedgerAccess for TestLedger {
     async fn submit(&self, envelopes: SignedTransaction) -> Result<Vec<SubmitResult>, ApiError> {
         let mut results = vec![];
 
-        for request in &envelopes {
+        for (request_type, request) in &envelopes {
+            assert_eq!(request_type, &RequestType::Send);
+
             let EnvelopePair { update, .. } = &request[0];
 
             let HttpCanisterUpdate { arg, sender, .. } = match update.content.clone() {

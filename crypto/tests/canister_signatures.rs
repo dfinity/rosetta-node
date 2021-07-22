@@ -20,7 +20,7 @@ use ic_types::crypto::{AlgorithmId, CanisterSig, CanisterSigOf, CryptoError, Use
 use ic_types::messages::Delegation;
 use ic_types::time::{current_time, Time};
 use ic_types::{CanisterId, RegistryVersion, SubnetId};
-use simple_asn1::{oid, BigUint, OID};
+use simple_asn1::oid;
 use std::str::FromStr;
 use std::sync::Arc;
 

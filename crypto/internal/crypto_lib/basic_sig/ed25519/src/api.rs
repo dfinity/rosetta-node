@@ -1,9 +1,9 @@
 //! API for Ed25519 basic signature
 use super::types;
 use ic_crypto_internal_basic_sig_der_utils as der_utils;
+use ic_crypto_secrets_containers::SecretArray;
 use ic_types::crypto::{AlgorithmId, CryptoError, CryptoResult};
 use rand::{CryptoRng, Rng};
-use simple_asn1::{BigUint, OID};
 use std::convert::TryFrom;
 
 #[cfg(test)]
@@ -14,7 +14,9 @@ pub fn keypair_from_rng<R: Rng + CryptoRng>(
     csprng: &mut R,
 ) -> (types::SecretKeyBytes, types::PublicKeyBytes) {
     let keypair = ed25519_dalek::Keypair::generate(csprng);
-    let sk = types::SecretKeyBytes(keypair.secret.to_bytes());
+    let sk = types::SecretKeyBytes(SecretArray::new_and_dont_zeroize_argument(
+        keypair.secret.as_bytes(),
+    ));
     let pk = types::PublicKeyBytes(keypair.public.to_bytes());
     (sk, pk)
 }
@@ -69,9 +71,11 @@ pub fn public_key_to_der(key: types::PublicKeyBytes) -> Vec<u8> {
 pub fn sign(msg: &[u8], sk: &types::SecretKeyBytes) -> CryptoResult<types::SignatureBytes> {
     use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signer};
 
-    let secret = SecretKey::from_bytes(&sk.0).map_err(|e| CryptoError::MalformedSecretKey {
-        algorithm: AlgorithmId::Ed25519,
-        internal_error: e.to_string(),
+    let secret = SecretKey::from_bytes(sk.0.expose_secret()).map_err(|_e| {
+        CryptoError::MalformedSecretKey {
+            algorithm: AlgorithmId::Ed25519,
+            internal_error: "dalek_ed25519::SecretKey::from_bytes failed".to_string(),
+        }
     })?;
     // TODO (DFN-845): Consider storing pubkey in key store to improve performance
     let public = PublicKey::from(&secret);

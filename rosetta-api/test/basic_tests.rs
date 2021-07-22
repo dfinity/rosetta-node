@@ -6,6 +6,7 @@ use ic_rosetta_api::convert::{amount_, block_id, from_hash, timestamp, to_hash};
 use ic_rosetta_api::ledger_client::LedgerAccess;
 use ic_rosetta_api::{RosettaRequestHandler, API_VERSION, NODE_VERSION};
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 #[actix_rt::test]
@@ -132,7 +133,8 @@ async fn smoke_test() {
                     "BURN".to_string(),
                     "MINT".to_string(),
                     "TRANSACTION".to_string(),
-                    "FEE".to_string()
+                    "FEE".to_string(),
+                    "STAKE".to_string(),
                 ],
                 vec![
                     Error::new(&ApiError::InternalError(true, None)),
@@ -419,7 +421,9 @@ async fn verify_account_search(
             }
             ledger_canister::Transfer::Send { from, to, .. } => {
                 history.entry(from).or_insert_with(Vec::new).push(hb.index);
-                history.entry(to).or_insert_with(Vec::new).push(hb.index);
+                if from != to {
+                    history.entry(to).or_insert_with(Vec::new).push(hb.index);
+                }
             }
         }
     }
@@ -453,7 +457,7 @@ async fn verify_account_search(
             .clone()
             .into_iter()
             .rev()
-            .filter(|i| *i <= middle_idx && *i <= last_verified_idx)
+            .filter(|i| *i <= middle_idx && *i >= oldest_idx && *i <= last_verified_idx)
             .collect();
 
         let search_res = query_search_transactions(
@@ -515,13 +519,47 @@ async fn verify_account_search(
 }
 
 #[actix_rt::test]
-async fn load_from_store_test() {
+async fn load_from_store_test_on_disk_store() {
     init_test_logger();
     let tmpdir = create_tmp_dir();
+    load_from_store_test(false, tmpdir.path().into()).await;
+}
 
+#[actix_rt::test]
+async fn load_from_store_test_sqlite_store() {
+    init_test_logger();
+    let tmpdir = create_tmp_dir();
+    load_from_store_test(true, tmpdir.path().into()).await;
+}
+
+#[actix_rt::test]
+async fn load_unverified_test_on_disk_store() {
+    init_test_logger();
+    let tmpdir = create_tmp_dir();
+    load_unverified_test(false, tmpdir.path().into()).await;
+}
+
+#[actix_rt::test]
+async fn load_unverified_test_sqlite_store() {
+    init_test_logger();
+    let tmpdir = create_tmp_dir();
+    load_unverified_test(true, tmpdir.path().into()).await;
+}
+
+fn create_blocks(sqlite: bool, location: PathBuf) -> Blocks {
+    if sqlite {
+        Blocks::new(Box::new(super::store_tests::sqlite_on_disk_store(
+            location.as_path(),
+        )))
+    } else {
+        Blocks::new_on_disk(location, true).unwrap()
+    }
+}
+
+async fn load_from_store_test(sqlite: bool, location: PathBuf) {
     let scribe = Scribe::new_with_sample_data(10, 150);
 
-    let mut blocks = Blocks::new_on_disk(tmpdir.path().into(), true).unwrap();
+    let mut blocks = create_blocks(sqlite, location.clone());
     let mut last_verified = 0;
     for hb in &scribe.blockchain {
         blocks.add_block(hb.clone()).unwrap();
@@ -544,7 +582,7 @@ async fn load_from_store_test() {
 
     drop(req_handler);
 
-    let mut blocks = Blocks::new_on_disk(tmpdir.path().into(), true).unwrap();
+    let mut blocks = create_blocks(sqlite, location.clone());
     blocks.load_from_store().unwrap();
 
     assert!(blocks.get_verified_at(10).is_ok());
@@ -561,7 +599,7 @@ async fn load_from_store_test() {
 
     drop(blocks);
 
-    let mut blocks = Blocks::new_on_disk(tmpdir.path().into(), true).unwrap();
+    let mut blocks = create_blocks(sqlite, location.clone());
     blocks.load_from_store().unwrap();
 
     verify_balances(&scribe, &blocks, 0);
@@ -582,7 +620,7 @@ async fn load_from_store_test() {
 
     drop(req_handler);
 
-    let mut blocks = Blocks::new_on_disk(tmpdir.path().into(), true).unwrap();
+    let mut blocks = create_blocks(sqlite, location.clone());
     blocks.load_from_store().unwrap();
 
     verify_balances(&scribe, &blocks, 10);
@@ -590,4 +628,43 @@ async fn load_from_store_test() {
     let ledger = Arc::new(TestLedger::from_blockchain(blocks));
     let req_handler = RosettaRequestHandler::new(ledger);
     verify_account_search(&scribe, &req_handler, 11, last_verified).await;
+}
+
+// remove this test if it's in the way of a new spec
+async fn load_unverified_test(sqlite: bool, location: PathBuf) {
+    let scribe = Scribe::new_with_sample_data(10, 150);
+
+    let mut blocks = create_blocks(sqlite, location.clone());
+    for hb in &scribe.blockchain {
+        blocks.add_block(hb.clone()).unwrap();
+        if hb.index < 20 {
+            blocks.block_store.mark_last_verified(hb.index).unwrap();
+        }
+    }
+
+    blocks
+        .try_prune(&Some((scribe.blockchain.len() - 51) as u64), 0)
+        .unwrap();
+
+    assert!(blocks.get_verified_at(49).is_err());
+    assert!(blocks.get_verified_at(50).is_err());
+
+    drop(blocks);
+
+    let mut blocks = create_blocks(sqlite, location.clone());
+    blocks.load_from_store().unwrap();
+    let last_verified = (scribe.blockchain.len() - 1) as u64;
+    blocks
+        .block_store
+        .mark_last_verified(last_verified)
+        .unwrap();
+
+    assert!(blocks.get_verified_at(49).is_err());
+    assert!(blocks.get_verified_at(50).is_ok());
+
+    verify_balances(&scribe, &blocks, 50);
+
+    let ledger = Arc::new(TestLedger::from_blockchain(blocks));
+    let req_handler = RosettaRequestHandler::new(ledger);
+    verify_account_search(&scribe, &req_handler, 51, last_verified).await;
 }

@@ -6,24 +6,26 @@ pub mod models;
 pub mod rosetta_server;
 pub mod store;
 
-use crate::convert::account_from_public_key;
-use crate::convert::operations;
 use crate::convert::{
-    from_arg, from_hex, from_model_account_identifier, from_model_transaction_identifier,
-    from_public_key, internal_error, into_error, invalid_request, make_read_state_from_update,
-    neuron_account_from_public_key, to_model_account_identifier, transaction_id,
+    account_from_public_key, from_arg, from_hex, from_model_account_identifier,
+    from_model_transaction_identifier, from_public_key, internal_error, into_error,
+    invalid_request, make_read_state_from_update, neuron_account_from_public_key,
+    requests_to_operations, to_model_account_identifier, transaction_id, Request, Stake,
 };
 use crate::ledger_client::LedgerAccess;
 
 use crate::store::HashedBlock;
 
 use convert::to_arg;
+use dfn_candid::CandidOne;
 use ic_interfaces::crypto::DOMAIN_IC_REQUEST;
+use ic_nns_governance::pb::v1::ClaimOrRefreshNeuronFromAccount;
 use ic_types::messages::{
     Blob, HttpCanisterUpdate, HttpReadContent, HttpRequestEnvelope, HttpSubmitContent,
 };
 use ic_types::time;
 use ic_types::{messages::MessageId, CanisterId, PrincipalId};
+use on_wire::IntoWire;
 
 use models::*;
 
@@ -32,7 +34,7 @@ use serde_json::{map::Map, value::Value};
 use std::convert::TryFrom;
 
 use rand::Rng;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -40,7 +42,7 @@ use std::time::{Duration, Instant};
 use log::{debug, warn};
 
 pub const API_VERSION: &str = "1.4.10";
-pub const NODE_VERSION: &str = "1.0.2";
+pub const NODE_VERSION: &str = "1.0.5";
 
 fn to_index(height: BlockHeight) -> Result<i128, ApiError> {
     i128::try_from(height).map_err(|_| ApiError::InternalError(true, None))
@@ -239,7 +241,7 @@ impl RosettaRequestHandler {
 
         let mut envelopes: SignedTransaction = vec![];
 
-        for update in unsigned_transaction.updates {
+        for (request_type, update) in unsigned_transaction.updates {
             let mut request_envelopes = vec![];
 
             for ingress_expiry in &unsigned_transaction.ingress_expiries {
@@ -288,7 +290,7 @@ impl RosettaRequestHandler {
                 });
             }
 
-            envelopes.push(request_envelopes);
+            envelopes.push((request_type, request_envelopes));
         }
 
         let envelopes = hex::encode(serde_cbor::to_vec(&envelopes).map_err(|_| {
@@ -341,10 +343,17 @@ impl RosettaRequestHandler {
         verify_network_id(self.ledger.ledger_canister_id(), &msg.network_identifier)?;
         let envelopes = msg.signed_transaction()?;
 
-        Ok(ConstructionHashResponse {
-            transaction_identifier: transaction_id(&envelopes.last().unwrap()[0].update)?,
-            metadata: Map::new(),
-        })
+        if let Some((request_type, envelope_pairs)) = envelopes.last() {
+            Ok(ConstructionHashResponse {
+                transaction_identifier: transaction_id(*request_type, &envelope_pairs[0].update)?,
+                metadata: Map::new(),
+            })
+        } else {
+            Err(ApiError::InvalidRequest(
+                false,
+                into_error("There is no hash for this transaction"),
+            ))
+        }
     }
 
     /// Get Metadata for Transfer Construction
@@ -365,45 +374,56 @@ impl RosettaRequestHandler {
     ) -> Result<ConstructionParseResponse, ApiError> {
         verify_network_id(self.ledger.ledger_canister_id(), &msg.network_identifier)?;
 
-        let updates: Vec<HttpCanisterUpdate> = match msg.transaction()? {
+        let updates: Vec<_> = match msg.transaction()? {
             ParsedTransaction::Signed(envelopes) => envelopes
                 .iter()
-                .map(|e| match e[0].update.content.clone() {
-                    HttpSubmitContent::Call { update } => update,
-                })
+                .map(
+                    |(request_type, updates)| match updates[0].update.content.clone() {
+                        HttpSubmitContent::Call { update } => (*request_type, update),
+                    },
+                )
                 .collect(),
             ParsedTransaction::Unsigned(unsigned_transaction) => unsigned_transaction.updates,
         };
 
-        let mut ops = vec![];
+        let mut requests = vec![];
         let mut from_ai = vec![];
 
-        for update in updates {
+        for (request_type, update) in updates {
             let from = PrincipalId::try_from(update.sender.0)
                 .map_err(|e| internal_error(e.to_string()))?
                 .into();
             if msg.signed {
-                from_ai.push(to_model_account_identifier(&from));
+                from_ai.push(from);
             }
 
-            // This is always a transaction
-            let SendArgs {
-                amount, fee, to, ..
-            } = from_arg(update.arg.0)?;
+            match request_type {
+                RequestType::Send => {
+                    let SendArgs {
+                        amount, fee, to, ..
+                    } = from_arg(update.arg.0)?;
 
-            ops.extend(operations(
-                &Transfer::Send {
-                    from,
-                    to,
-                    amount,
-                    fee,
-                },
-                false,
-            )?);
+                    requests.push(Request::Transfer(Transfer::Send {
+                        from,
+                        to,
+                        amount,
+                        fee,
+                    }));
+                }
+                RequestType::CreateStake => {
+                    let _: ClaimOrRefreshNeuronFromAccount =
+                        candid::decode_one(update.arg.0.as_ref()).map_err(internal_error)?;
+                    requests.push(Request::Stake(Stake { account: from }));
+                }
+            }
         }
 
+        from_ai.sort();
+        from_ai.dedup();
+        let from_ai = from_ai.iter().map(to_model_account_identifier).collect();
+
         Ok(ConstructionParseResponse {
-            operations: ops,
+            operations: requests_to_operations(&requests)?,
             signers: None,
             account_identifier_signers: Some(from_ai),
             metadata: None,
@@ -427,14 +447,6 @@ impl RosettaRequestHandler {
             .clone()
             .ok_or_else(|| internal_error("Expected field 'public_keys' to be populated"))?;
         let transactions = convert::from_operations(&ops, false)?;
-        let tl = transactions.len();
-        let pl = pks.len();
-        if tl != pl {
-            return Err(internal_error(format!(
-                "Expected {} public keys in 'public_keys' but found {} keys",
-                tl, pl
-            )));
-        }
 
         let interval = ic_types::ingress::MAX_INGRESS_TTL
             - ic_types::ingress::PERMITTED_DRIFT
@@ -492,22 +504,57 @@ impl RosettaRequestHandler {
             })
             .collect::<Result<HashMap<_, _>, ApiError>>()?;
 
+        fn add_payloads(
+            payloads: &mut Vec<SigningPayload>,
+            ingress_expiries: &[u64],
+            account_identifier: &AccountIdentifier,
+            update: &HttpCanisterUpdate,
+        ) {
+            for ingress_expiry in ingress_expiries {
+                let mut update = update.clone();
+                update.ingress_expiry = *ingress_expiry;
+
+                let message_id = update.id();
+
+                let transaction_payload = SigningPayload {
+                    address: None,
+                    account_identifier: Some(account_identifier.clone()),
+                    hex_bytes: hex::encode(make_sig_data(&message_id)),
+                    signature_type: Some(SignatureType::Ed25519),
+                };
+
+                payloads.push(transaction_payload);
+
+                let read_state = make_read_state_from_update(&update);
+
+                let read_state_message_id =
+                    MessageId::from(read_state.representation_independent_hash());
+
+                let read_state_payload = SigningPayload {
+                    address: None,
+                    account_identifier: Some(account_identifier.clone()),
+                    hex_bytes: hex::encode(make_sig_data(&read_state_message_id)),
+                    signature_type: Some(SignatureType::Ed25519),
+                };
+
+                payloads.push(read_state_payload);
+            }
+        }
+
         for t in transactions {
             match t {
-                Transfer::Send {
+                Request::Transfer(Transfer::Send {
                     from,
                     to,
                     amount,
                     fee,
-                } => {
+                }) => {
                     let pk = pks_map.get(&from).ok_or_else(|| {
                         internal_error(format!(
                             "Cannot find public key for account identifier {}",
                             from,
                         ))
                     })?;
-
-                    let pid: PrincipalId = convert::principal_id_from_public_key(&pk)?;
 
                     // The argument we send to the canister
                     let send_args = SendArgs {
@@ -519,9 +566,7 @@ impl RosettaRequestHandler {
                         created_at_time: Some(created_at_time),
                     };
 
-                    let account_identifier = to_model_account_identifier(&from);
-
-                    let mut update = HttpCanisterUpdate {
+                    let update = HttpCanisterUpdate {
                         canister_id: Blob(self.ledger.ledger_canister_id().get().to_vec()),
                         method_name: "send_pb".to_string(),
                         arg: Blob(to_arg(send_args)),
@@ -529,40 +574,55 @@ impl RosettaRequestHandler {
                         // We don't use a it here because we never want two transactions with
                         // identical tx IDs to both land on chain.
                         nonce: None,
-                        sender: Blob(pid.into_vec()),
+                        sender: Blob(convert::principal_id_from_public_key(&pk)?.into_vec()),
                         ingress_expiry: 0,
                     };
 
-                    for ingress_expiry in &ingress_expiries {
-                        update.ingress_expiry = *ingress_expiry;
+                    add_payloads(
+                        &mut payloads,
+                        &ingress_expiries,
+                        &to_model_account_identifier(&from),
+                        &update,
+                    );
+                    updates.push((RequestType::Send, update));
+                }
+                Request::Stake(Stake { account }) => {
+                    let pk = pks_map.get(&account).ok_or_else(|| {
+                        internal_error(format!(
+                            "Cannot find public key for account identifier {}",
+                            account,
+                        ))
+                    })?;
 
-                        let message_id = update.id();
+                    // What we send to the governance canister
+                    let args = ClaimOrRefreshNeuronFromAccount {
+                        controller: None,
+                        // Note: this requires the transfer to also
+                        // use the default memo value (see
+                        // neuron_account_from_public_key()).
+                        memo: Memo::default().0,
+                    };
 
-                        let transaction_payload = SigningPayload {
-                            address: None,
-                            account_identifier: Some(account_identifier.clone()),
-                            hex_bytes: hex::encode(make_sig_data(&message_id)),
-                            signature_type: Some(SignatureType::Ed25519),
-                        };
+                    let update = HttpCanisterUpdate {
+                        canister_id: Blob(ic_nns_constants::GOVERNANCE_CANISTER_ID.get().to_vec()),
+                        method_name: "claim_or_refresh_neuron_from_account".to_string(),
+                        arg: Blob(CandidOne(args).into_bytes().expect("Serialization failed")),
+                        // TODO work out whether Rosetta will accept us generating a nonce here
+                        // If we don't have a nonce it could cause one of those nasty bugs that
+                        // doesn't show it's face until you try to do two
+                        // identical transactions at the same time
+                        nonce: None,
+                        sender: Blob(convert::principal_id_from_public_key(&pk)?.into_vec()),
+                        ingress_expiry: 0,
+                    };
 
-                        payloads.push(transaction_payload);
-
-                        let read_state = make_read_state_from_update(&update);
-
-                        let read_state_message_id =
-                            MessageId::from(read_state.representation_independent_hash());
-
-                        let read_state_payload = SigningPayload {
-                            address: None,
-                            account_identifier: Some(account_identifier.clone()),
-                            hex_bytes: hex::encode(make_sig_data(&read_state_message_id)),
-                            signature_type: Some(SignatureType::Ed25519),
-                        };
-
-                        payloads.push(read_state_payload);
-                    }
-
-                    updates.push(update);
+                    add_payloads(
+                        &mut payloads,
+                        &ingress_expiries,
+                        &to_model_account_identifier(&account),
+                        &update,
+                    );
+                    updates.push((RequestType::CreateStake, update));
                 }
                 _ => panic!("This should be impossible"),
             }
@@ -584,17 +644,28 @@ impl RosettaRequestHandler {
     ) -> Result<ConstructionPreprocessResponse, ApiError> {
         verify_network_id(self.ledger.ledger_canister_id(), &msg.network_identifier)?;
         let transfers = convert::from_operations(&msg.operations, true)?;
-        let required_public_keys: Result<Vec<models::AccountIdentifier>, ApiError> = transfers
+        let required_public_keys: Result<HashSet<ledger_canister::AccountIdentifier>, ApiError> =
+            transfers
+                .into_iter()
+                .map(|transfer| match transfer {
+                    Request::Transfer(Transfer::Send { from, .. }) => Ok(from),
+                    Request::Stake(Stake { account, .. }) => Ok(account),
+                    Request::Transfer(Transfer::Burn { .. }) => Err(invalid_request(
+                        "Burn operations are not supported through rosetta",
+                    )),
+                    Request::Transfer(Transfer::Mint { .. }) => Err(invalid_request(
+                        "Mint operations are not supported through rosetta",
+                    )),
+                })
+                .collect();
+
+        let keys: Vec<_> = required_public_keys?
             .into_iter()
-            .map(|transfer| match transfer {
-                Transfer::Send { from, .. } => Ok(to_model_account_identifier(&from)),
-                _ => Err(internal_error(
-                    "Mint/Burn operations are not supported through rosetta",
-                )),
-            })
+            .map(|x| to_model_account_identifier(&x))
             .collect();
+
         Ok(ConstructionPreprocessResponse {
-            required_public_keys: Some(required_public_keys?),
+            required_public_keys: Some(keys),
             options: None,
         })
     }
@@ -748,6 +819,7 @@ impl RosettaRequestHandler {
                     "MINT".to_string(),
                     "TRANSACTION".to_string(),
                     "FEE".to_string(),
+                    "STAKE".to_string(),
                 ],
                 vec![
                     Error::new(&ApiError::InternalError(true, None)),

@@ -7,7 +7,7 @@ use openssl::ec::{EcGroup, EcKey, EcPoint};
 use openssl::ecdsa::EcdsaSig;
 use openssl::nid::Nid;
 use openssl::pkey::PKey;
-use simple_asn1::{oid, BigUint, OID};
+use simple_asn1::oid;
 
 #[cfg(test)]
 mod tests;

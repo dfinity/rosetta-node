@@ -63,9 +63,10 @@ fn execute_wycheproof_tests(test_data: &[u8]) {
                 }
             };
 
-            let sig_accepted = key.verify_pkcs1_sha256(&test.msg, &test.sig);
-
-            assert_eq!(sig_accepted, expected_result);
+            match key.verify_pkcs1_sha256(&test.msg, &test.sig) {
+                Ok(_) => assert!(expected_result),
+                Err(_) => assert!(!expected_result),
+            }
         }
     }
 }

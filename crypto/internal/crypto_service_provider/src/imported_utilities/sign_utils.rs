@@ -6,6 +6,7 @@ use ic_crypto_internal_basic_sig_ecdsa_secp256k1 as ecdsa_secp256k1;
 use ic_crypto_internal_basic_sig_ecdsa_secp256r1 as ecdsa_secp256r1;
 use ic_crypto_internal_basic_sig_ed25519 as ed25519;
 use ic_crypto_internal_basic_sig_iccsa as iccsa;
+use ic_crypto_internal_basic_sig_rsa_pkcs1 as rsa;
 use ic_crypto_internal_threshold_sig_bls12381 as bls12_381;
 use ic_crypto_internal_types::sign::threshold_sig::public_key::bls12_381::PublicKeyBytes as BlsPublicKeyBytes;
 use ic_crypto_internal_types::sign::threshold_sig::public_key::CspThresholdSigPublicKey;
@@ -27,13 +28,17 @@ pub enum KeyBytesContentType {
     Ed25519PublicKeyDer,
     EcdsaP256PublicKeyDer,
     EcdsaSecp256k1PublicKeyDer,
+    RsaSha256PublicKeyDer,
     EcdsaP256PublicKeyDerWrappedCose,
+    RsaSha256PublicKeyDerWrappedCose,
     IcCanisterSignatureAlgPublicKeyDer,
 }
 
 fn cose_key_bytes_content_type(alg_id: AlgorithmId) -> CryptoResult<KeyBytesContentType> {
     if alg_id == AlgorithmId::EcdsaP256 {
         Ok(KeyBytesContentType::EcdsaP256PublicKeyDerWrappedCose)
+    } else if alg_id == AlgorithmId::RsaSha256 {
+        Ok(KeyBytesContentType::RsaSha256PublicKeyDerWrappedCose)
     } else {
         Err(CryptoError::AlgorithmNotSupported {
             algorithm: alg_id,
@@ -86,6 +91,12 @@ pub fn user_public_key_from_bytes(
             iccsa::api::public_key_bytes_from_der(bytes)?.0,
             AlgorithmId::IcCanisterSignature,
             KeyBytesContentType::IcCanisterSignatureAlgPublicKeyDer,
+        )
+    } else if pkix_algo_id == rsa::algorithm_identifier() {
+        (
+            rsa::RsaPublicKey::from_der_spki(bytes)?.as_der().to_vec(),
+            AlgorithmId::RsaSha256,
+            KeyBytesContentType::RsaSha256PublicKeyDer,
         )
     } else {
         return Err(CryptoError::MalformedPublicKey {
@@ -146,6 +157,11 @@ pub fn ed25519_public_key_to_der(raw_key: Vec<u8>) -> CryptoResult<Vec<u8>> {
     Ok(ed25519::public_key_to_der(ed25519::types::PublicKeyBytes(
         key,
     )))
+}
+
+/// Decodes an RSA signature from binary data.
+pub fn rsa_signature_from_bytes(bytes: &[u8]) -> BasicSig {
+    BasicSig(bytes.to_vec())
 }
 
 /// Verifies a combined threshold signature.

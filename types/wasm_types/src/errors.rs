@@ -38,8 +38,6 @@ pub enum WasmValidationError {
     InvalidExportSection(String),
     /// Module contains an invalid data section
     InvalidDataSection(String),
-    /// Failure when trying to compile in Lucet
-    LucetCompilerErr(String),
     /// Module contains too many globals.
     TooManyGlobals { defined: usize, allowed: usize },
     /// Module contains too many functions.
@@ -67,11 +65,6 @@ impl std::fmt::Display for WasmValidationError {
             Self::InvalidDataSection(err) => {
                 write!(f, "Wasm module has an invalid data section. {}", err)
             }
-            Self::LucetCompilerErr(err) => write!(
-                f,
-                "Validation failed due to \"{}\" compile error in Lucet",
-                err
-            ),
             Self::TooManyGlobals { defined, allowed } => write!(
                 f,
                 "Wasm module defined {} globals which exceeds the maximum number allowed {}.",

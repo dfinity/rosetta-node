@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 1b6a0e8cd8ecf592d9cd957e945e2657395c8d6732bb40a4c238a82223b5f957 # shrinks to signature = Signature([]), signer = 0, group = 0, message_type = Ingress, message = [], registry_version = 0
+cc 1eaff02bd1270fc125331d68b1c603828aff961e06b90aec3bd57937e3b1a192 # shrinks to message = [], registry_version = 7388863700790730861, contributions = {0: (PublicKeyRegistryRecord { entity_id: NodeId(0), key_purpose: CommitteeMember, key: [], key_id: 0, algorithm_id: MultiBls12_381, version: 0 }, Signature([]))}

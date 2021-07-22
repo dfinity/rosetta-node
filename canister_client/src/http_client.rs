@@ -78,8 +78,14 @@ impl HttpClient {
                 uri, response
             ));
         }
-        hyper::body::to_bytes(response)
+        tokio::time::timeout_at(deadline, hyper::body::to_bytes(response))
             .await
+            .map_err(|e| {
+                format!(
+                    "HttpClient: hyper::body::to_bytes() timed out for {:?}: {:?}",
+                    uri, e
+                )
+            })?
             .map(|bytes| bytes.to_vec())
             .map_err(|e| {
                 format!(

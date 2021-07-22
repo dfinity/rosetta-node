@@ -526,11 +526,11 @@ impl ConstructionCombineResponse {
 
 /// The type (encoded as CBOR) returned by /construction/combine, containing the
 /// IC calls to submit the transaction and to check the result.
-pub type SignedTransaction = Vec<RequestEnvelopes>;
+pub type SignedTransaction = Vec<Request>;
 
 /// A vector of update/read-state calls for different ingress windows
 /// of the same call.
-pub type RequestEnvelopes = Vec<EnvelopePair>;
+pub type Request = (RequestType, Vec<EnvelopePair>);
 
 /// A signed IC update call and the corresponding read-state call for
 /// a particular ingress window.
@@ -538,6 +538,12 @@ pub type RequestEnvelopes = Vec<EnvelopePair>;
 pub struct EnvelopePair {
     pub update: HttpRequestEnvelope<HttpSubmitContent>,
     pub read_state: HttpRequestEnvelope<HttpReadContent>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum RequestType {
+    Send,
+    CreateStake,
 }
 
 /// ConstructionDeriveRequest is passed to the `/construction/derive` endpoint.
@@ -852,7 +858,7 @@ impl ConstructionPayloadsResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UnsignedTransaction {
-    pub updates: Vec<HttpCanisterUpdate>,
+    pub updates: Vec<(RequestType, HttpCanisterUpdate)>,
     pub ingress_expiries: Vec<u64>,
 }
 
@@ -1574,7 +1580,7 @@ impl Peer {
 /// PublicKey contains a public key byte array for a particular CurveType
 /// encoded in hex.  Note that there is no PrivateKey struct as this is NEVER
 /// the concern of an implementation.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(feature = "conversion", derive(LabelledGeneric))]
 pub struct PublicKey {
     /// Hex-encoded public key bytes in the format specified by the CurveType.

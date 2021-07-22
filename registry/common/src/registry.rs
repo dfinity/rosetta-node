@@ -1,3 +1,5 @@
+use ic_registry_transport::pb::v1::RegistryGetLatestVersionResponse;
+use prost::Message;
 use rand::seq::SliceRandom;
 use std::time::Duration;
 use url::Url;
@@ -134,6 +136,30 @@ impl RegistryCanister {
             &response[..],
         )
         .map_err(|err| Error::UnknownError(format!("{:?}", err)))
+    }
+
+    pub async fn get_latest_version(&self) -> Result<u64, Error> {
+        let agent = self.choose_random_agent();
+        match agent
+            .execute_query(&self.canister_id, "get_latest_version", vec![])
+            .await
+        {
+            Ok(result) => match result {
+                Some(response) => {
+                    match RegistryGetLatestVersionResponse::decode(response.as_slice()) {
+                        Ok(res) => Ok(res.version),
+                        Err(error) => Err(Error::MalformedMessage(error.to_string())),
+                    }
+                }
+                None => Err(ic_registry_transport::Error::UnknownError(
+                    "No response was received from registry_get_value.".to_string(),
+                )),
+            },
+            Err(error_string) => Err(ic_registry_transport::Error::UnknownError(format!(
+                "Error on registry_get_value_since: {} using agent {:?}",
+                error_string, &agent
+            ))),
+        }
     }
 
     /// Obtains the value for 'key'. If 'version_opt' is Some, this will try to

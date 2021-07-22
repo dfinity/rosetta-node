@@ -6,15 +6,40 @@
 //!
 //! See RFC 8017 (https://www.rfc-editor.org/rfc/rfc8017.txt)
 //! for information about the signature format
+use ic_crypto_internal_basic_sig_der_utils as der_utils;
 use ic_crypto_sha256::Sha256;
 use ic_types::crypto::{AlgorithmId, CryptoError, CryptoResult};
 use num_traits::{FromPrimitive, Zero};
 use rsa::{PublicKey, PublicKeyParts};
+use serde::{Deserialize, Deserializer, Serialize};
+
+/// The object identifier for RSA public keys
+///
+/// See [RFC 8017](https://tools.ietf.org/html/rfc8017).
+pub fn algorithm_identifier() -> der_utils::PkixAlgorithmIdentifier {
+    der_utils::PkixAlgorithmIdentifier::new_with_null_param(simple_asn1::oid!(
+        1, 2, 840, 113549, 1, 1, 1
+    ))
+}
 
 /// A RSA public key usable for signature verification
+#[derive(Debug, Clone, Eq, PartialEq, Serialize)]
 pub struct RsaPublicKey {
     der: Vec<u8>,
+    #[serde(skip_serializing)]
     key: rsa::RSAPublicKey,
+}
+
+impl<'de> Deserialize<'de> for RsaPublicKey {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct RsaPublicKeyDeserializationHelper {
+            der: Vec<u8>,
+        }
+
+        let helper: RsaPublicKeyDeserializationHelper = Deserialize::deserialize(deserializer)?;
+        RsaPublicKey::from_der_spki(&helper.der).map_err(serde::de::Error::custom)
+    }
 }
 
 impl RsaPublicKey {
@@ -133,11 +158,20 @@ impl RsaPublicKey {
     /// As specified in RFC 8017
     /// (https://datatracker.ietf.org/doc/html/rfc8017#section-8.2) and used by
     /// the IC for webauthn (https://docs.dfinity.systems/spec/public/#webauthn)
-    pub fn verify_pkcs1_sha256(&self, message: &[u8], signature: &[u8]) -> bool {
+    pub fn verify_pkcs1_sha256(&self, message: &[u8], signature: &[u8]) -> CryptoResult<()> {
         let digest = Sha256::hash(message);
         let padding = rsa::PaddingScheme::PKCS1v15Sign {
             hash: Some(rsa::Hash::SHA2_256),
         };
-        self.key.verify(padding, &digest, signature).is_ok()
+
+        match self.key.verify(padding, &digest, signature) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(CryptoError::SignatureVerification {
+                algorithm: AlgorithmId::RsaSha256,
+                public_key_bytes: self.as_der().to_vec(),
+                sig_bytes: signature.to_vec(),
+                internal_error: format!("{:?}", e),
+            }),
+        }
     }
 }

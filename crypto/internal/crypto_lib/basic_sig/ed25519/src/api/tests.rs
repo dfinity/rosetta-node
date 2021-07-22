@@ -13,7 +13,7 @@ mod keygen {
         let (sk, pk) = keypair_from_rng(&mut csprng);
 
         assert_eq!(
-            sk.0,
+            *sk.0.expose_secret(),
             hex_to_32_bytes("7848b5d711bc9883996317a3f9c90269d56771005d540a19184939c9e8d0db2a")
         );
         assert_eq!(
@@ -72,6 +72,7 @@ mod ed25519_cr_yp_to {
     use crate::types::{PublicKeyBytes, SecretKeyBytes};
     use crate::{sign, verify};
     use ic_crypto_internal_test_vectors::unhex::{hex_to_32_bytes, hex_to_byte_vec};
+    use ic_crypto_secrets_containers::SecretArray;
     use std::fs::File;
     use std::io::{prelude::*, BufReader};
     use std::path::PathBuf;
@@ -95,12 +96,13 @@ mod ed25519_cr_yp_to {
         {
             let mut splitter = line.split(':');
 
-            let sk = SecretKeyBytes(hex_to_32_bytes(&splitter.next().unwrap()[..64]));
+            let sk = SecretKeyBytes(SecretArray::new_and_dont_zeroize_argument(
+                &hex_to_32_bytes(&splitter.next().unwrap()[..64]),
+            ));
             let pk = PublicKeyBytes(hex_to_32_bytes(splitter.next().unwrap())); // We use pk directly from the input file
             let m = hex_to_byte_vec(splitter.next().unwrap());
             let sm = splitter.next().unwrap();
 
-            // s = ed25519.signature(m,sk,pk)
             let s = sign(&m, &sk).unwrap();
 
             // ed25519.checkvalid(s,m,pk)
@@ -131,13 +133,14 @@ mod sign {
     use crate::sign;
     use crate::types::{SecretKeyBytes, SignatureBytes};
     use ic_crypto_internal_test_vectors::ed25519::{crypto_lib_testvec, Ed25519TestVector};
+    use ic_crypto_secrets_containers::SecretArray;
     use strum::IntoEnumIterator;
 
     #[test]
     fn should_correctly_sign_test_vectors() {
         for test_vec in Ed25519TestVector::iter() {
             let (sk, _, msg, sig) = crypto_lib_testvec(test_vec);
-            let sk = SecretKeyBytes(sk);
+            let sk = SecretKeyBytes(SecretArray::new_and_dont_zeroize_argument(&sk));
             let sig = SignatureBytes(sig);
 
             assert_eq!(
@@ -166,6 +169,7 @@ mod verify {
     use ic_crypto_internal_test_vectors::ed25519::Ed25519TestVector::RFC8032_ED25519_1;
     use ic_crypto_internal_test_vectors::ed25519::Ed25519TestVector::RFC8032_ED25519_SHA_ABC;
     use ic_crypto_internal_test_vectors::ed25519::{crypto_lib_testvec, Ed25519TestVector};
+    use ic_crypto_secrets_containers::SecretArray;
     use strum::IntoEnumIterator;
 
     #[test]
@@ -199,7 +203,7 @@ mod verify {
     #[test]
     fn should_fail_to_verify_under_wrong_message() {
         let (sk, pk, _, _) = crypto_lib_testvec(RFC8032_ED25519_SHA_ABC);
-        let sk = SecretKeyBytes(sk);
+        let sk = SecretKeyBytes(SecretArray::new_and_dont_zeroize_argument(&sk));
         let pk = PublicKeyBytes(pk);
 
         let result = verify(&sign(b"x", &sk).unwrap(), b"y", &pk);
@@ -211,7 +215,7 @@ mod verify {
     fn should_fail_to_verify_under_wrong_public_key() {
         let (sk, pk, msg, _) = crypto_lib_testvec(RFC8032_ED25519_SHA_ABC);
         let (_, wrong_pk, _, _) = crypto_lib_testvec(RFC8032_ED25519_1);
-        let sk = SecretKeyBytes(sk);
+        let sk = SecretKeyBytes(SecretArray::new_and_dont_zeroize_argument(&sk));
         let pk = PublicKeyBytes(pk);
         let wrong_pk = PublicKeyBytes(wrong_pk);
         assert_ne!(pk, wrong_pk);
