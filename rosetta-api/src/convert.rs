@@ -4,6 +4,7 @@ use crate::models::{
     RequestType, Timestamp, TransactionIdentifier,
 };
 use crate::store::HashedBlock;
+use crate::time::Seconds;
 use core::fmt::Display;
 use dfn_protobuf::ProtoBuf;
 use ic_crypto_tree_hash::Path;
@@ -19,8 +20,9 @@ use on_wire::{FromWire, IntoWire};
 use serde_json::map::Map;
 use serde_json::{from_value, Number, Value};
 use std::convert::TryFrom;
+use std::iter;
 use std::str::FromStr;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// This module converts from ledger_canister data structures to Rosetta data
 /// structures
@@ -39,15 +41,40 @@ pub fn timestamp(timestamp: SystemTime) -> Result<Timestamp, ApiError> {
 // single value
 const STATUS_COMPLETED: &str = "COMPLETED";
 const TRANSACTION: &str = "TRANSACTION";
-const MINT: &str = "MINT";
-const BURN: &str = "BURN";
-const FEE: &str = "FEE";
-const STAKE: &str = "STAKE";
+pub const MINT: &str = "MINT";
+pub const BURN: &str = "BURN";
+pub const FEE: &str = "FEE";
+pub const STAKE: &str = "STAKE";
+pub const START_DISSOLVE: &str = "START_DISSOLVE";
+pub const STOP_DISSOLVE: &str = "STOP_DISSOLVE";
+pub const SET_DISSOLVE_TIMESTAMP: &str = "SET_DISSOLVE_TIMESTAMP";
+pub const DISSOLVE_TIME_UTC_SECONDS: &str = "dissolve_time_utc_seconds";
 
+// TODO break Request into it's own file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Request {
     Transfer(Transfer),
     Stake(Stake),
+    SetDissolveTimestamp(SetDissolveTimestamp),
+    StartDissolve(StartDissolve),
+    StopDissolve(StopDissolve),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetDissolveTimestamp {
+    pub account: ledger_canister::AccountIdentifier,
+    /// The number of seconds since Unix epoch.
+    pub timestamp: Seconds,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartDissolve {
+    pub account: ledger_canister::AccountIdentifier,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StopDissolve {
+    pub account: ledger_canister::AccountIdentifier,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -177,6 +204,49 @@ pub fn requests_to_operations(requests: &[Request]) -> Result<Vec<Operation>, Ap
                     metadata: None,
                 });
             }
+            Request::SetDissolveTimestamp(SetDissolveTimestamp { account, timestamp }) => {
+                ops.push(Operation {
+                    operation_identifier: allocate_op_id(),
+                    _type: SET_DISSOLVE_TIMESTAMP.to_string(),
+                    status: None,
+                    account: Some(to_model_account_identifier(account)),
+                    amount: None,
+                    related_operations: None,
+                    coin_change: None,
+                    metadata: Some(
+                        // Construct JSON object with single key `"dissolve_time_utc_seconds"`.
+                        iter::once((
+                            DISSOLVE_TIME_UTC_SECONDS.to_string(),
+                            Value::String(Duration::from(*timestamp).as_secs().to_string()),
+                        ))
+                        .collect(),
+                    ),
+                });
+            }
+            Request::StartDissolve(StartDissolve { account }) => {
+                ops.push(Operation {
+                    operation_identifier: allocate_op_id(),
+                    _type: START_DISSOLVE.to_string(),
+                    status: None,
+                    account: Some(to_model_account_identifier(account)),
+                    amount: None,
+                    related_operations: None,
+                    coin_change: None,
+                    metadata: None,
+                });
+            }
+            Request::StopDissolve(StopDissolve { account }) => {
+                ops.push(Operation {
+                    operation_identifier: allocate_op_id(),
+                    _type: STOP_DISSOLVE.to_string(),
+                    status: None,
+                    account: Some(to_model_account_identifier(account)),
+                    amount: None,
+                    related_operations: None,
+                    coin_change: None,
+                    metadata: None,
+                });
+            }
         }
     }
     Ok(ops)
@@ -278,6 +348,44 @@ impl State {
         self.actions.push(Request::Stake(Stake { account }));
         Ok(())
     }
+
+    fn set_dissolve_timestamp(
+        &mut self,
+        account: ledger_canister::AccountIdentifier,
+        timestamp: Seconds,
+    ) -> Result<(), ApiError> {
+        self.flush()?;
+        self.actions
+            .push(Request::SetDissolveTimestamp(SetDissolveTimestamp {
+                account,
+                timestamp,
+            }));
+        Ok(())
+    }
+
+    fn start_dissolve(
+        &mut self,
+        account: ledger_canister::AccountIdentifier,
+    ) -> Result<(), ApiError> {
+        self.flush()?;
+
+        self.actions
+            .push(Request::StartDissolve(StartDissolve { account }));
+
+        Ok(())
+    }
+
+    fn stop_dissolve(
+        &mut self,
+        account: ledger_canister::AccountIdentifier,
+    ) -> Result<(), ApiError> {
+        self.flush()?;
+
+        self.actions
+            .push(Request::StopDissolve(StopDissolve { account }));
+
+        Ok(())
+    }
 }
 
 pub fn from_operations(ops: &[Operation], preprocessing: bool) -> Result<Vec<Request>, ApiError> {
@@ -304,6 +412,28 @@ pub fn from_operations(ops: &[Operation], preprocessing: bool) -> Result<Vec<Req
         let account = from_model_account_identifier(o.account.as_ref().unwrap())
             .map_err(|e| op_error(&o, e))?;
 
+        let validate_neuron_management_op = || {
+            if o.amount.is_some() {
+                Err(op_error(
+                    &o,
+                    format!(
+                        "neuron management {} operation cannot have an amount",
+                        o._type
+                    ),
+                ))
+            } else if o.coin_change.is_some() {
+                Err(op_error(
+                    &o,
+                    format!(
+                        "neuron management {} operation cannot have a coin change",
+                        o._type
+                    ),
+                ))
+            } else {
+                Ok(())
+            }
+        };
+
         match o._type.as_str() {
             TRANSACTION => {
                 let amount = o
@@ -326,13 +456,32 @@ pub fn from_operations(ops: &[Operation], preprocessing: bool) -> Result<Vec<Req
                 state.fee(account, ICPTs::from_e8s((-amount) as u64))?;
             }
             STAKE => {
-                if o.amount.is_some() {
-                    return Err(op_error(
-                        &o,
-                        "Staking operation cannot have an amount".into(),
-                    ));
-                }
+                validate_neuron_management_op()?;
                 state.stake(account)?;
+            }
+            SET_DISSOLVE_TIMESTAMP => {
+                validate_neuron_management_op()?;
+                let timestamp = o.metadata.as_ref()
+                    .and_then(|obj| obj.get(DISSOLVE_TIME_UTC_SECONDS))
+                    .and_then(|field| field.as_str().and_then(|s| u64::from_str(s).ok()))
+                    .map(Seconds)
+                    .ok_or_else(|| op_error(
+                            &o,
+                            "Set Dissolve Timestamp operation must have a 'dissolve_time_utc_seconds' metadata field.
+                            The timestamp is a number of seconds since the Unix epoch.
+                            This is represented as an unsigned 64 bit integer and encoded as a JSON string".into(),
+                        )
+                    )?;
+
+                state.set_dissolve_timestamp(account, timestamp)?;
+            }
+            START_DISSOLVE => {
+                validate_neuron_management_op()?;
+                state.start_dissolve(account)?;
+            }
+            STOP_DISSOLVE => {
+                validate_neuron_management_op()?;
+                state.stop_dissolve(account)?;
             }
             _ => {
                 let msg = format!("Unsupported operation type: {}", o._type);
@@ -479,7 +628,10 @@ pub fn transaction_id(
 
             Ok(transaction_identifier(&hash))
         }
-        RequestType::CreateStake => {
+        RequestType::CreateStake
+        | RequestType::StartDissolve
+        | RequestType::StopDissolve
+        | RequestType::SetDissolveTimestamp => {
             // Unfortunately, staking operations don't really have a
             // transaction ID, but we have to return something. Let's
             // use the message ID.
@@ -519,10 +671,9 @@ pub fn account_from_public_key(pk: &models::PublicKey) -> Result<AccountIdentifi
     Ok(to_model_account_identifier(&pid.into()))
 }
 
-pub fn neuron_account_from_public_key(
-    governance_canister_id: &CanisterId,
+pub fn neuron_subaccount_bytes_from_public_key(
     pk: &models::PublicKey,
-) -> Result<AccountIdentifier, ApiError> {
+) -> Result<[u8; 32], ApiError> {
     let controller = principal_id_from_public_key(pk)?;
 
     // We only allow 1 neuron account per public key, so the nonce is fixed to
@@ -531,19 +682,23 @@ pub fn neuron_account_from_public_key(
 
     // FIXME: cut&paste from compute_neuron_staking_subaccount() in
     // rs/nns/governance/src/governance.rs.
-    let sub_account_bytes = {
-        let mut state = ic_crypto_sha256::Sha256::new();
-        state.write(&[0x0c]);
-        state.write(b"neuron-stake");
-        state.write(&controller.as_slice());
-        state.write(&NONCE.to_be_bytes());
-        state.finish()
-    };
+    let mut state = ic_crypto_sha256::Sha256::new();
+    state.write(&[0x0c]);
+    state.write(b"neuron-stake");
+    state.write(&controller.as_slice());
+    state.write(&NONCE.to_be_bytes());
+    Ok(state.finish())
+}
 
+pub fn neuron_account_from_public_key(
+    governance_canister_id: &CanisterId,
+    pk: &models::PublicKey,
+) -> Result<AccountIdentifier, ApiError> {
+    let subaccount_bytes = neuron_subaccount_bytes_from_public_key(pk)?;
     Ok(to_model_account_identifier(
         &ledger_canister::AccountIdentifier::new(
             governance_canister_id.get(),
-            Some(Subaccount(sub_account_bytes)),
+            Some(Subaccount(subaccount_bytes)),
         ),
     ))
 }

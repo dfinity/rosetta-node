@@ -117,45 +117,24 @@ async fn smoke_test() {
     );
 
     let msg = NetworkRequest::new(req_handler.network_id());
-    let res = req_handler.network_options(msg).await;
-    assert_eq!(
-        res,
-        Ok(NetworkOptionsResponse::new(
-            Version::new(
-                API_VERSION.to_string(),
-                NODE_VERSION.to_string(),
-                None,
-                None,
-            ),
-            Allow::new(
-                vec![OperationStatus::new("COMPLETED".to_string(), true)],
-                vec![
-                    "BURN".to_string(),
-                    "MINT".to_string(),
-                    "TRANSACTION".to_string(),
-                    "FEE".to_string(),
-                    "STAKE".to_string(),
-                ],
-                vec![
-                    Error::new(&ApiError::InternalError(true, None)),
-                    Error::new(&ApiError::InvalidRequest(false, None)),
-                    Error::new(&ApiError::NotAvailableOffline(false, None)),
-                    Error::new(&ApiError::InvalidNetworkId(false, None)),
-                    Error::new(&ApiError::InvalidAccountId(false, None)),
-                    Error::new(&ApiError::InvalidBlockId(false, None)),
-                    Error::new(&ApiError::InvalidPublicKey(false, None)),
-                    Error::new(&ApiError::InvalidTransactionId(false, None)),
-                    Error::new(&ApiError::MempoolTransactionMissing(false, None)),
-                    Error::new(&ApiError::BlockchainEmpty(false, None)),
-                    Error::new(&ApiError::InvalidTransaction(false, None)),
-                    Error::new(&ApiError::ICError(false, None)),
-                    Error::new(&ApiError::TransactionRejected(false, None)),
-                    Error::new(&ApiError::TransactionExpired),
-                ],
-                true
-            )
-        ))
-    );
+    let network_options = req_handler
+        .network_options(msg)
+        .await
+        .expect("failed to fetch network options");
+
+    assert_eq!(network_options.version.rosetta_version, API_VERSION);
+    assert_eq!(network_options.version.node_version, NODE_VERSION);
+    assert!(!network_options.allow.operation_statuses.is_empty());
+    assert!(network_options
+        .allow
+        .operation_types
+        .contains(&"TRANSACTION".to_string()));
+    assert!(network_options
+        .allow
+        .operation_types
+        .contains(&"FEE".to_string()));
+    assert!(!network_options.allow.errors.is_empty());
+    assert!(network_options.allow.historical_balance_lookup);
 
     let msg = NetworkRequest::new(req_handler.network_id());
     let res = req_handler.mempool(msg).await;

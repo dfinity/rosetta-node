@@ -201,12 +201,11 @@ impl RosettaApiHandle {
         Ok((resp_body, resp_status))
     }
 
-    pub async fn construction_derive_for_network(
+    pub async fn construction_derive(
         &self,
-        net_id: NetworkIdentifier,
         pk: PublicKey,
     ) -> Result<Result<ConstructionDeriveResponse, RosettaError>, String> {
-        let req = ConstructionDeriveRequest::new(net_id, pk);
+        let req = ConstructionDeriveRequest::new(self.network_id(), pk);
         to_rosetta_response(
             self.post_json_request(
                 &format!("http://{}/construction/derive", self.api_url),
@@ -216,12 +215,18 @@ impl RosettaApiHandle {
         )
     }
 
-    pub async fn construction_derive(
+    pub async fn neuron_derive(
         &self,
         pk: PublicKey,
     ) -> Result<Result<ConstructionDeriveResponse, RosettaError>, String> {
-        self.construction_derive_for_network(self.network_id(), pk)
-            .await
+        let req = ConstructionDeriveRequest::new(self.network_id(), pk);
+        to_rosetta_response(
+            self.post_json_request(
+                &format!("http://{}/neuron/derive", self.api_url),
+                serde_json::to_vec(&req).unwrap(),
+            )
+            .await,
+        )
     }
 
     pub async fn construction_preprocess(

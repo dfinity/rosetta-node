@@ -23,8 +23,8 @@ impl std::fmt::Display for ParityWasmError {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 /// Different errors that be returned by `validate_wasm_binary`
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum WasmValidationError {
     /// Failure in party_wasm when deserializing the wasm module.  
     ParityDeserializeError(ParityWasmError),
@@ -79,8 +79,8 @@ impl std::fmt::Display for WasmValidationError {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 /// Different errors that can be returned by `instrument`
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum WasmInstrumentationError {
     /// Failure in party_wasm when deserializing the wasm module
     ParityDeserializeError(ParityWasmError),
@@ -104,6 +104,34 @@ impl std::fmt::Display for WasmInstrumentationError {
                 "Wasm module has {} memory sections but should have had {}",
                 got, expected
             ),
+        }
+    }
+}
+
+/// Different errors that be returned by the Wasm engine
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum WasmEngineError {
+    FailedToInitializeEngine,
+    FailedToInstantiateModule,
+    FailedToSetAsyncStack,
+    FailedToSetWasmStack,
+}
+
+impl std::fmt::Display for WasmEngineError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::FailedToInitializeEngine => {
+                write!(f, "Failed to initialize engine")
+            }
+            Self::FailedToInstantiateModule => {
+                write!(f, "Failed to instantiate module")
+            }
+            Self::FailedToSetWasmStack => {
+                write!(f, "Failed to set Wasm stack")
+            }
+            Self::FailedToSetAsyncStack => {
+                write!(f, "Failed to set async stack")
+            }
         }
     }
 }

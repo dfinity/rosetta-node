@@ -1,7 +1,8 @@
 use ic_rosetta_api::convert::{
     amount_, from_hex, from_model_account_identifier, from_operations, from_public_key,
     principal_id_from_public_key, requests_to_operations, signed_amount, to_hex,
-    to_model_account_identifier, Request, Stake,
+    to_model_account_identifier, Request, SetDissolveTimestamp, Stake, StartDissolve, StopDissolve,
+    SET_DISSOLVE_TIMESTAMP, START_DISSOLVE, STOP_DISSOLVE,
 };
 use ic_rosetta_api::models::Error as RosettaError;
 use ic_rosetta_api::models::{
@@ -100,7 +101,10 @@ pub async fn prepare_multiple_txn(
                 // just a sanity check
                 assert!(fee_found, "There should be a fee op in operations");
             }
-            Request::Stake(Stake { account, .. }) => {
+            Request::Stake(Stake { account, .. })
+            | Request::StartDissolve(StartDissolve { account, .. })
+            | Request::StopDissolve(StopDissolve { account, .. })
+            | Request::SetDissolveTimestamp(SetDissolveTimestamp { account, .. }) => {
                 all_sender_account_ids.push(to_model_account_identifier(&account));
             }
             _ => panic!("Only Send/Stake supported here"),
@@ -141,7 +145,13 @@ pub async fn prepare_multiple_txn(
     } else {
         // we assume here that we've got a correct transaction; double check that the
         // fee really is what it should be.
-        assert_eq!(dry_run_suggested_fee, trans_fee_amount.unwrap());
+        // Set Dissolve does not have a fee.
+        if !all_ops
+            .iter()
+            .all(|op| [START_DISSOLVE, STOP_DISSOLVE, SET_DISSOLVE_TIMESTAMP].contains(&&*op._type))
+        {
+            assert_eq!(Some(&dry_run_suggested_fee), trans_fee_amount.as_ref());
+        }
     }
 
     // now try with operations containing the correct fee

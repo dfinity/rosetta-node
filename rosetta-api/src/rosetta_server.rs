@@ -79,6 +79,15 @@ async fn construction_derive(
     to_rosetta_response(res)
 }
 
+#[post("/neuron/derive")]
+async fn neuron_derive(
+    msg: web::Json<ConstructionDeriveRequest>,
+    req_handler: web::Data<RosettaRequestHandler>,
+) -> HttpResponse {
+    let res = req_handler.neuron_derive(msg.into_inner()).await;
+    to_rosetta_response(res)
+}
+
 #[post("/construction/hash")]
 async fn construction_hash(
     msg: web::Json<ConstructionHashRequest>,
@@ -222,6 +231,7 @@ impl RosettaApiServer {
                 .service(network_list)
                 .service(network_options)
                 .service(network_status)
+                .service(neuron_derive)
                 .service(search_transactions)
         })
         .bind(addr)?

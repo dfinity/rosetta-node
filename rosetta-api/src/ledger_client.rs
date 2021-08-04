@@ -11,7 +11,8 @@ use dfn_protobuf::{ProtoBuf, ToProto};
 use ic_canister_client::{Agent, HttpClient, Sender};
 use ic_nns_governance::pb::v1::{
     claim_or_refresh_neuron_from_account_response::Result as ClaimOrRefreshResult,
-    ClaimOrRefreshNeuronFromAccountResponse,
+    governance_error, manage_neuron_response, ClaimOrRefreshNeuronFromAccountResponse,
+    ManageNeuronResponse,
 };
 use ic_types::messages::{HttpSubmitContent, MessageId};
 use ic_types::CanisterId;
@@ -535,6 +536,64 @@ impl LedgerAccess for LedgerClient {
                                                             return Ok(Ok(None));
                                                         }
                                                     };
+                                                }
+                                                RequestType::SetDissolveTimestamp => {
+                                                    let response: ManageNeuronResponse =
+                                                        candid::decode_one(bytes.as_ref())
+                                                            .map_err(|err| {
+                                                                format!(
+                                                                    "Could not set dissolve timestamp: {}",
+                                                                    err
+                                                                )
+                                                            })?;
+                                                    match &response.command {
+                                                        Some(manage_neuron_response::Command::Configure(_)) => { return Ok(Ok(None)); }
+                                                        Some(manage_neuron_response::Command::Error(err)) => {
+                                                            if err.error_message == "Can't set a dissolve delay that is smaller than the current dissolve delay." {
+                                                                return Ok(Ok(None));
+                                                            } else {
+                                                                return Ok(Err(ApiError::TransactionRejected(
+                                                                    false,
+                                                                    into_error(format!("Could not set dissolve delay timestamp: {}", err))
+                                                                )));
+                                                            }
+                                                        }
+                                                        _ => panic!("unexpected set dissolve delay timestamp result: {:?}", response.command),
+                                                    }
+                                                }
+                                                RequestType::StartDissolve
+                                                | RequestType::StopDissolve => {
+                                                    let response: ManageNeuronResponse =
+                                                        candid::decode_one(bytes.as_ref())
+                                                            .map_err(|err| {
+                                                                format!(
+                                                                    "Could not set dissolve: {}",
+                                                                    err
+                                                                )
+                                                            })?;
+                                                    match &response.command {
+                                                        Some(manage_neuron_response::Command::Configure(_)) => {
+                                                            return Ok(Ok(None));
+                                                        }
+                                                        Some(manage_neuron_response::Command::Error(err)) => {
+                                                            if (request_type == RequestType::StartDissolve
+                                                                && err.error_type == governance_error::ErrorType::RequiresNotDissolving as i32)
+                                                                || (request_type == RequestType::StopDissolve
+                                                                    && err.error_type == governance_error::ErrorType::RequiresDissolving as i32)
+                                                            {
+                                                                return Ok(Ok(None));
+                                                            } else {
+                                                                return Ok(Err(ApiError::TransactionRejected(
+                                                                    false,
+                                                                    into_error(format!("Could not start/stop dissolving: {}", err)),
+                                                                )));
+                                                            }
+                                                        }
+                                                        _ => panic!(
+                                                            "unexpected start/stop dissolve result: {:?}",
+                                                            response.command
+                                                        ),
+                                                    }
                                                 }
                                             },
                                             None => {

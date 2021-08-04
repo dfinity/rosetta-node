@@ -544,6 +544,9 @@ pub struct EnvelopePair {
 pub enum RequestType {
     Send,
     CreateStake,
+    SetDissolveTimestamp,
+    StartDissolve,
+    StopDissolve,
 }
 
 /// ConstructionDeriveRequest is passed to the `/construction/derive` endpoint.
@@ -692,6 +695,7 @@ pub struct ConstructionMetadataResponse {
 
     #[serde(rename = "suggested_fee")]
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub suggested_fee: Option<Vec<Amount>>,
 }
 
@@ -1460,6 +1464,7 @@ impl Operation {
         status: Option<String>,
         account: Option<AccountIdentifier>,
         amount: Option<Amount>,
+        metadata: Option<Object>,
     ) -> Operation {
         Operation {
             operation_identifier: OperationIdentifier::new(op_id),
@@ -1469,7 +1474,7 @@ impl Operation {
             account,
             amount,
             coin_change: None,
-            metadata: None,
+            metadata,
         }
     }
 }
