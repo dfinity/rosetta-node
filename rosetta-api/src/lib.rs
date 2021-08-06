@@ -48,7 +48,7 @@ use std::time::{Duration, Instant};
 use log::{debug, warn};
 
 pub const API_VERSION: &str = "1.4.10";
-pub const NODE_VERSION: &str = "1.0.5";
+pub const NODE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn to_index(height: BlockHeight) -> Result<i128, ApiError> {
     i128::try_from(height).map_err(|_| ApiError::InternalError(true, None))

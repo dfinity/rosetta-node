@@ -13,7 +13,7 @@ ic-canister-client = { path = "../../canister_client" }
 on_wire = {path = "../../rust_canisters/on_wire"}
 ledger-canister = {path = "../ledger_canister"}
 lazy_static = "1.4.0"
-candid = "0.6.15"
+candid = "0.7.4"
 ed25519-dalek = "1.0.1"
 cycles-minting-canister = {path = "../cycles_minting_canister"}
 url = "2.2.1"
