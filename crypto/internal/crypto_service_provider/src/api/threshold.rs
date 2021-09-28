@@ -78,16 +78,6 @@ pub trait ThresholdSignatureCspClient {
     ) -> CryptoResult<(CspPublicCoefficients, Vec<Option<KeyId>>)>;
 
     /// Signs with a threshold key
-    // TODO (DFN-1460): remove the threshold_sign_to_be_removed method once the
-    // threshold_sign method below is implemented in the CSP and used in IDKM.
-    fn threshold_sign_to_be_removed(
-        &self,
-        algorithm_id: AlgorithmId,
-        message: &[u8],
-        key_id: KeyId,
-    ) -> Result<CspSignature, CspThresholdSignError>;
-
-    /// Signs with a threshold key
     fn threshold_sign(
         &self,
         algorithm_id: AlgorithmId,

@@ -1,11 +1,11 @@
 use crate::balance_book::BalanceBook;
-use crate::convert::{internal_error, invalid_block_id};
-use crate::models::ApiError;
+use crate::errors::ApiError;
 
 use ledger_canister::{AccountIdentifier, BlockHeight, EncodedBlock, HashOf, ICPTs};
 use log::{debug, error, trace};
 use serde::{Deserialize, Serialize};
 
+use rusqlite::Connection;
 use std::collections::VecDeque;
 use std::convert::TryInto;
 use std::fs::OpenOptions;
@@ -45,19 +45,26 @@ pub enum BlockStoreError {
 impl From<BlockStoreError> for ApiError {
     fn from(e: BlockStoreError) -> Self {
         match e {
-            BlockStoreError::NotFound(idx) => invalid_block_id(format!("Block not found: {}", idx)),
+            BlockStoreError::NotFound(idx) => {
+                ApiError::invalid_block_id(format!("Block not found: {}", idx))
+            }
             // TODO Add a new error type (ApiError::BlockPruned or something like that)
             BlockStoreError::NotAvailable(idx) => {
-                internal_error(format!("Block not available for query: {}", idx))
+                ApiError::internal_error(format!("Block not available for query: {}", idx))
             }
-            BlockStoreError::Other(msg) => internal_error(msg),
+            BlockStoreError::Other(msg) => ApiError::internal_error(msg),
         }
     }
 }
 
 pub trait BlockStore {
     fn get_at(&self, index: BlockHeight) -> Result<HashedBlock, BlockStoreError>;
+    fn get_range(
+        &self,
+        range: std::ops::Range<BlockHeight>,
+    ) -> Result<Vec<HashedBlock>, BlockStoreError>;
     fn push(&mut self, block: HashedBlock) -> Result<(), BlockStoreError>;
+    fn push_batch(&mut self, batch: Vec<HashedBlock>) -> Result<(), BlockStoreError>;
     fn prune(&mut self, hb: &HashedBlock, balances: &BalanceBook) -> Result<(), String>;
     fn first_snapshot(&self) -> Option<&(HashedBlock, BalanceBook)>;
     fn first(&self) -> Result<Option<HashedBlock>, BlockStoreError>;
@@ -134,6 +141,18 @@ impl SQLiteStore {
         Ok(())
     }
 
+    fn execute_push(connection: &mut Connection, hb: HashedBlock) -> Result<(), BlockStoreError> {
+        let hash = hb.hash.into_bytes().to_vec();
+        let parent_hash = hb.parent_hash.map(|ph| ph.into_bytes().to_vec());
+        connection
+            .execute(
+                "INSERT INTO blocks (hash, block, parent_hash, idx, verified) VALUES (?1, ?2, ?3, ?4, FALSE)",
+                rusqlite::params![hash, hb.block.0, parent_hash, hb.index],
+            )
+            .map_err(|e| BlockStoreError::Other(e.to_string()))?;
+        Ok(())
+    }
+
     fn read_oldest_block_snapshot(&self) -> Result<Option<(HashedBlock, BalanceBook)>, String> {
         self.balances_snapshot.read_oldest_block_snapshot()
     }
@@ -197,17 +216,66 @@ impl BlockStore for SQLiteStore {
             .map(|block| block.unwrap())
     }
 
-    fn push(&mut self, hb: HashedBlock) -> Result<(), BlockStoreError> {
-        let hash = hb.hash.into_bytes().to_vec();
-        let parent_hash = hb.parent_hash.map(|ph| ph.into_bytes().to_vec());
+    fn get_range(
+        &self,
+        range: std::ops::Range<BlockHeight>,
+    ) -> Result<Vec<HashedBlock>, BlockStoreError> {
+        if 0 < range.start && range.start < self.base_idx {
+            return Err(BlockStoreError::NotAvailable(range.start));
+        }
         let connection = self.connection.lock().unwrap();
-        connection
-            .execute(
-                "INSERT INTO blocks (hash, block, parent_hash, idx, verified) VALUES (?1, ?2, ?3, ?4, FALSE)",
-                rusqlite::params![hash, hb.block.0, parent_hash, hb.index],
-            )
+        let mut stmt = connection
+            .prepare("SELECT hash, block, parent_hash, idx FROM blocks WHERE idx >= ? AND idx < ?")
             .map_err(|e| BlockStoreError::Other(e.to_string()))?;
+        let mut blocks = stmt
+            .query_map(rusqlite::params![range.start, range.end], |row| {
+                Ok(HashedBlock {
+                    hash: row.get(0).map(|bytes| HashOf::new(vec_into_array(bytes)))?,
+                    block: row
+                        .get(1)
+                        .map(|bytes: Vec<u8>| EncodedBlock::from(bytes.into_boxed_slice()))?,
+                    parent_hash: row.get(2).map(|opt_bytes: Option<Vec<u8>>| {
+                        opt_bytes.map(|bytes| HashOf::new(vec_into_array(bytes)))
+                    })?,
+                    index: row.get(3)?,
+                })
+            })
+            .map_err(|e| BlockStoreError::Other(e.to_string()))?;
+        let mut res = Vec::new();
+        while let Some(hb) = blocks.next().map(|block| block.unwrap()) {
+            res.push(hb)
+        }
+        Ok(res)
+    }
+
+    fn push_batch(&mut self, batch: Vec<HashedBlock>) -> Result<(), BlockStoreError> {
+        let mut connection = self.connection.lock().unwrap();
+
+        connection
+            .execute_batch("BEGIN TRANSACTION;")
+            .map_err(|e| BlockStoreError::Other(format!("{}", e)))?;
+
+        for hb in batch {
+            match Self::execute_push(&mut *connection, hb) {
+                Ok(_) => (),
+                Err(e) => {
+                    connection
+                        .execute_batch("ROLLBACK TRANSACTION;")
+                        .map_err(|e| BlockStoreError::Other(format!("{}", e)))?;
+                    return Err(e);
+                }
+            }
+        }
+
+        connection
+            .execute_batch("COMMIT TRANSACTION;")
+            .map_err(|e| BlockStoreError::Other(format!("{}", e)))?;
         Ok(())
+    }
+
+    fn push(&mut self, hb: HashedBlock) -> Result<(), BlockStoreError> {
+        let mut connection = self.connection.lock().unwrap();
+        Self::execute_push(&mut *connection, hb)
     }
 
     // FIXME: Make `prune` return `BlockStoreError` on error
@@ -309,8 +377,27 @@ impl BlockStore for InMemoryStore {
             .ok_or(BlockStoreError::NotFound(index))
     }
 
+    fn get_range(
+        &self,
+        range: std::ops::Range<BlockHeight>,
+    ) -> Result<Vec<HashedBlock>, BlockStoreError> {
+        let mut res = Vec::new();
+        for i in range {
+            match self.get_at(i) {
+                Ok(hb) => res.push(hb),
+                Err(_) => break,
+            }
+        }
+        Ok(res)
+    }
+
     fn push(&mut self, block: HashedBlock) -> Result<(), BlockStoreError> {
         self.inner.push_back(block);
+        Ok(())
+    }
+
+    fn push_batch(&mut self, batch: Vec<HashedBlock>) -> Result<(), BlockStoreError> {
+        self.inner.extend(batch.into_iter());
         Ok(())
     }
 
@@ -454,6 +541,20 @@ impl BlockStore for OnDiskStore {
         }
     }
 
+    fn get_range(
+        &self,
+        range: std::ops::Range<BlockHeight>,
+    ) -> Result<Vec<HashedBlock>, BlockStoreError> {
+        let mut res = Vec::new();
+        for i in range {
+            match self.get_at(i) {
+                Ok(hb) => res.push(hb),
+                Err(_) => break,
+            }
+        }
+        Ok(res)
+    }
+
     fn push(&mut self, block: HashedBlock) -> Result<(), BlockStoreError> {
         debug!("Writing block to the store. Block height: {}", block.index);
         let file_name = self.block_file_name(block.index);
@@ -473,6 +574,23 @@ impl BlockStore for OnDiskStore {
             })?;
         }
 
+        Ok(())
+    }
+
+    fn push_batch(&mut self, batch: Vec<HashedBlock>) -> Result<(), BlockStoreError> {
+        let mut added = Vec::new();
+        for hb in batch {
+            let block_idx = hb.index;
+            match self.push(hb) {
+                Ok(_) => added.push(block_idx),
+                Err(e) => {
+                    for i in added {
+                        let _ = std::fs::remove_file(self.block_file_name(i));
+                    }
+                    return Err(e);
+                }
+            }
+        }
         Ok(())
     }
 

@@ -13,7 +13,7 @@ use std::convert::TryFrom;
 use tree_deserializer::{types::Leb128EncodedU64, LabeledTreeDeserializer};
 
 pub(crate) fn verify_block_hash(
-    cert: ledger_canister::Certification,
+    cert: &ledger_canister::Certification,
     hash: HashOf<EncodedBlock>,
     root_key: &Option<ThresholdSigPublicKey>,
     canister_id: &CanisterId,
@@ -23,7 +23,8 @@ pub(crate) fn verify_block_hash(
             let (from_cert, _) = check_certificate(
                 canister_id,
                 root_key,
-                &*cert.ok_or("verify tip failed: no data certificate present")?,
+                cert.as_ref()
+                    .ok_or("verify tip failed: no data certificate present")?,
             )
             .map_err(|e| format!("Certification error: {:?}", e))?;
             if from_cert.as_bytes() != hash.into_bytes() {

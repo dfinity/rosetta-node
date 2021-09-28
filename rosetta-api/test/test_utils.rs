@@ -2,9 +2,13 @@ mod basic_tests;
 mod rosetta_cli_tests;
 mod store_tests;
 
+use ic_rosetta_api::errors::ApiError;
 use ic_rosetta_api::models::{
-    AccountBalanceRequest, AccountBalanceResponse, ApiError, EnvelopePair, NetworkListResponse,
-    NetworkRequest, PartialBlockIdentifier, RequestType, SignedTransaction,
+    AccountBalanceRequest, AccountBalanceResponse, EnvelopePair, NetworkListResponse,
+    NetworkRequest, PartialBlockIdentifier, SignedTransaction,
+};
+use ic_rosetta_api::request_types::{
+    Request, RequestResult, RequestType, Status, TransactionResults,
 };
 use ledger_canister::{self, AccountIdentifier, Block, BlockHeight, ICPTs, SendArgs, Transfer};
 use tokio::sync::RwLock;
@@ -13,10 +17,8 @@ use async_trait::async_trait;
 use dfn_core::CanisterId;
 use ic_rosetta_api::balance_book::BalanceBook;
 
-use ic_rosetta_api::convert::{
-    from_arg, internal_error, to_model_account_identifier, transaction_identifier,
-};
-use ic_rosetta_api::ledger_client::{Blocks, LedgerAccess, SubmitResult};
+use ic_rosetta_api::convert::{from_arg, to_model_account_identifier};
+use ic_rosetta_api::ledger_client::{Blocks, LedgerAccess};
 use ic_rosetta_api::rosetta_server::RosettaApiServer;
 use ic_rosetta_api::{store::HashedBlock, RosettaRequestHandler};
 use ic_types::{
@@ -128,6 +130,8 @@ impl LedgerAccess for TestLedger {
         Box::new(self.blockchain.read().await)
     }
 
+    async fn cleanup(&self) {}
+
     async fn sync_blocks(&self, _stopped: Arc<AtomicBool>) -> Result<(), ApiError> {
         let mut queue = self.submit_queue.write().await;
 
@@ -152,7 +156,7 @@ impl LedgerAccess for TestLedger {
         &self.governance_canister_id
     }
 
-    async fn submit(&self, envelopes: SignedTransaction) -> Result<Vec<SubmitResult>, ApiError> {
+    async fn submit(&self, envelopes: SignedTransaction) -> Result<TransactionResults, ApiError> {
         let mut results = vec![];
 
         for (request_type, request) in &envelopes {
@@ -164,7 +168,8 @@ impl LedgerAccess for TestLedger {
                 HttpSubmitContent::Call { update } => update,
             };
 
-            let from = PrincipalId::try_from(sender.0).map_err(internal_error)?;
+            let from = PrincipalId::try_from(sender.0)
+                .map_err(|e| ApiError::internal_error(format!("{}", e)))?;
 
             let SendArgs {
                 memo,
@@ -192,26 +197,28 @@ impl LedgerAccess for TestLedger {
 
             let block = Block::new(
                 None, /* FIXME */
-                transaction,
+                transaction.clone(),
                 memo,
                 created_at_time,
                 dfn_core::api::now().into(),
             )
-            .map_err(internal_error)?;
+            .map_err(ApiError::internal_error)?;
 
-            let raw_block = block.clone().encode().map_err(internal_error)?;
+            let raw_block = block.clone().encode().map_err(ApiError::internal_error)?;
 
             let hb = HashedBlock::hash_block(raw_block, parent_hash, index);
 
             self.submit_queue.write().await.push(hb.clone());
 
-            results.push(SubmitResult {
-                transaction_identifier: transaction_identifier(&block.transaction().hash()),
+            results.push(RequestResult {
+                _type: Request::Transfer(transaction),
+                transaction_identifier: Some(From::from(&block.transaction().hash())),
                 block_index: None,
+                status: Status::Completed,
             });
         }
 
-        Ok(results)
+        Ok(results.into())
     }
 }
 
@@ -267,8 +274,9 @@ async fn smoke_test_with_server() {
     let serv_ledger = ledger.clone();
     let serv_req_handler = req_handler.clone();
 
-    let serv =
-        Arc::new(RosettaApiServer::new(serv_ledger, serv_req_handler, addr.clone()).unwrap());
+    let serv = Arc::new(
+        RosettaApiServer::new(serv_ledger, serv_req_handler, addr.clone(), false).unwrap(),
+    );
     let serv_run = serv.clone();
     actix_rt::spawn(async move {
         log::info!("Spawning server");

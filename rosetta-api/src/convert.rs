@@ -1,28 +1,30 @@
+use crate::errors::ApiError;
 use crate::models;
 use crate::models::{
-    AccountIdentifier, Amount, ApiError, BlockIdentifier, Currency, Operation, OperationIdentifier,
-    RequestType, Timestamp, TransactionIdentifier,
+    AccountIdentifier, Amount, BlockIdentifier, Currency, Operation, OperationIdentifier, Timestamp,
+};
+use crate::request_types::{
+    AddHotKey, KeyMetadata, NeuronIdentifierMetadata, PublicKeyOrPrincipal, Request,
+    SetDissolveTimestamp, SetDissolveTimestampMetadata, Stake, StartDissolve, StopDissolve,
+    ADD_HOT_KEY, BURN, FEE, MINT, SET_DISSOLVE_TIMESTAMP, STAKE, START_DISSOLVE, STATUS_COMPLETED,
+    STOP_DISSOLVE, TRANSACTION,
 };
 use crate::store::HashedBlock;
 use crate::time::Seconds;
-use core::fmt::Display;
+use crate::transaction_id::TransactionIdentifier;
 use dfn_protobuf::ProtoBuf;
 use ic_crypto_tree_hash::Path;
-use ic_types::messages::{
-    HttpCanisterUpdate, HttpReadState, HttpRequestEnvelope, HttpSubmitContent, MessageId,
-};
+use ic_types::messages::{HttpCanisterUpdate, HttpReadState};
 use ic_types::{CanisterId, PrincipalId};
 use ledger_canister::{
-    BlockHeight, HashOf, ICPTs, SendArgs, Subaccount, Transaction, Transfer, DECIMAL_PLACES,
-    TRANSACTION_FEE,
+    BlockHeight, HashOf, ICPTs, SendArgs, Subaccount, Transfer, DECIMAL_PLACES, TRANSACTION_FEE,
 };
 use on_wire::{FromWire, IntoWire};
 use serde_json::map::Map;
 use serde_json::{from_value, Number, Value};
 use std::convert::TryFrom;
-use std::iter;
-use std::str::FromStr;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::convert::TryInto;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// This module converts from ledger_canister data structures to Rosetta data
 /// structures
@@ -34,64 +36,24 @@ pub fn timestamp(timestamp: SystemTime) -> Result<Timestamp, ApiError> {
         .ok()
         .and_then(|x| i64::try_from(x).ok())
         .map(Timestamp::from)
-        .ok_or(ApiError::InternalError(false, None))
-}
-
-// Since our blockchain doesn't have smart contracts all operations are always a
-// single value
-const STATUS_COMPLETED: &str = "COMPLETED";
-const TRANSACTION: &str = "TRANSACTION";
-pub const MINT: &str = "MINT";
-pub const BURN: &str = "BURN";
-pub const FEE: &str = "FEE";
-pub const STAKE: &str = "STAKE";
-pub const START_DISSOLVE: &str = "START_DISSOLVE";
-pub const STOP_DISSOLVE: &str = "STOP_DISSOLVE";
-pub const SET_DISSOLVE_TIMESTAMP: &str = "SET_DISSOLVE_TIMESTAMP";
-pub const DISSOLVE_TIME_UTC_SECONDS: &str = "dissolve_time_utc_seconds";
-
-// TODO break Request into it's own file.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Request {
-    Transfer(Transfer),
-    Stake(Stake),
-    SetDissolveTimestamp(SetDissolveTimestamp),
-    StartDissolve(StartDissolve),
-    StopDissolve(StopDissolve),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SetDissolveTimestamp {
-    pub account: ledger_canister::AccountIdentifier,
-    /// The number of seconds since Unix epoch.
-    pub timestamp: Seconds,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StartDissolve {
-    pub account: ledger_canister::AccountIdentifier,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StopDissolve {
-    pub account: ledger_canister::AccountIdentifier,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Stake {
-    pub account: ledger_canister::AccountIdentifier,
+        .ok_or_else(|| {
+            ApiError::internal_error(format!(
+                "Could not create Timestamp from SystemTime: {:?}",
+                timestamp
+            ))
+        })
 }
 
 pub fn transaction(hb: &HashedBlock) -> Result<models::Transaction, ApiError> {
     let block = hb
         .block
         .decode()
-        .map_err(|err| internal_error(format!("Cannot decode block: {}", err)))?;
+        .map_err(|err| ApiError::internal_error(format!("Cannot decode block: {}", err)))?;
     let transaction = block.transaction;
-    let transaction_identifier = transaction_identifier(&transaction.hash());
+    let transaction_identifier = TransactionIdentifier::from(&transaction);
     let transfer = transaction.transfer;
     let operations = {
-        let mut ops = requests_to_operations(&[Request::Transfer(transfer)])?;
+        let mut ops = Request::requests_to_operations(&[Request::Transfer(transfer)])?;
         for op in ops.iter_mut() {
             op.status = Some(STATUS_COMPLETED.to_string());
         }
@@ -192,7 +154,10 @@ pub fn requests_to_operations(requests: &[Request]) -> Result<Vec<Operation>, Ap
                     metadata: None,
                 });
             }
-            Request::Stake(Stake { account }) => {
+            Request::Stake(Stake {
+                account,
+                neuron_identifier,
+            }) => {
                 ops.push(Operation {
                     operation_identifier: allocate_op_id(),
                     _type: STAKE.to_string(),
@@ -201,10 +166,19 @@ pub fn requests_to_operations(requests: &[Request]) -> Result<Vec<Operation>, Ap
                     amount: None,
                     related_operations: None,
                     coin_change: None,
-                    metadata: None,
+                    metadata: Some(
+                        NeuronIdentifierMetadata {
+                            neuron_identifier: *neuron_identifier,
+                        }
+                        .into(),
+                    ),
                 });
             }
-            Request::SetDissolveTimestamp(SetDissolveTimestamp { account, timestamp }) => {
+            Request::SetDissolveTimestamp(SetDissolveTimestamp {
+                account,
+                neuron_identifier,
+                timestamp,
+            }) => {
                 ops.push(Operation {
                     operation_identifier: allocate_op_id(),
                     _type: SET_DISSOLVE_TIMESTAMP.to_string(),
@@ -214,16 +188,18 @@ pub fn requests_to_operations(requests: &[Request]) -> Result<Vec<Operation>, Ap
                     related_operations: None,
                     coin_change: None,
                     metadata: Some(
-                        // Construct JSON object with single key `"dissolve_time_utc_seconds"`.
-                        iter::once((
-                            DISSOLVE_TIME_UTC_SECONDS.to_string(),
-                            Value::String(Duration::from(*timestamp).as_secs().to_string()),
-                        ))
-                        .collect(),
+                        SetDissolveTimestampMetadata {
+                            neuron_identifier: *neuron_identifier,
+                            timestamp: *timestamp,
+                        }
+                        .into(),
                     ),
                 });
             }
-            Request::StartDissolve(StartDissolve { account }) => {
+            Request::StartDissolve(StartDissolve {
+                account,
+                neuron_identifier,
+            }) => {
                 ops.push(Operation {
                     operation_identifier: allocate_op_id(),
                     _type: START_DISSOLVE.to_string(),
@@ -232,10 +208,18 @@ pub fn requests_to_operations(requests: &[Request]) -> Result<Vec<Operation>, Ap
                     amount: None,
                     related_operations: None,
                     coin_change: None,
-                    metadata: None,
+                    metadata: Some(
+                        NeuronIdentifierMetadata {
+                            neuron_identifier: *neuron_identifier,
+                        }
+                        .into(),
+                    ),
                 });
             }
-            Request::StopDissolve(StopDissolve { account }) => {
+            Request::StopDissolve(StopDissolve {
+                account,
+                neuron_identifier,
+            }) => {
                 ops.push(Operation {
                     operation_identifier: allocate_op_id(),
                     _type: STOP_DISSOLVE.to_string(),
@@ -244,7 +228,34 @@ pub fn requests_to_operations(requests: &[Request]) -> Result<Vec<Operation>, Ap
                     amount: None,
                     related_operations: None,
                     coin_change: None,
-                    metadata: None,
+                    metadata: Some(
+                        NeuronIdentifierMetadata {
+                            neuron_identifier: *neuron_identifier,
+                        }
+                        .into(),
+                    ),
+                });
+            }
+            Request::AddHotKey(AddHotKey {
+                account,
+                neuron_identifier,
+                key,
+            }) => {
+                ops.push(Operation {
+                    operation_identifier: allocate_op_id(),
+                    _type: ADD_HOT_KEY.to_string(),
+                    status: None,
+                    account: Some(to_model_account_identifier(account)),
+                    amount: None,
+                    related_operations: None,
+                    coin_change: None,
+                    metadata: Some(
+                        KeyMetadata {
+                            key: key.clone(),
+                            neuron_identifier: *neuron_identifier,
+                        }
+                        .into(),
+                    ),
                 });
             }
         }
@@ -268,7 +279,7 @@ impl State {
     fn flush(&mut self) -> Result<(), ApiError> {
         let trans_err = |msg| {
             let msg = format!("Bad transaction: {}", msg);
-            let err = ApiError::InvalidTransaction(false, into_error(msg));
+            let err = ApiError::InvalidTransaction(false, msg.into());
             Err(err)
         };
 
@@ -343,21 +354,30 @@ impl State {
         Ok(())
     }
 
-    fn stake(&mut self, account: ledger_canister::AccountIdentifier) -> Result<(), ApiError> {
+    fn stake(
+        &mut self,
+        account: ledger_canister::AccountIdentifier,
+        neuron_identifier: u64,
+    ) -> Result<(), ApiError> {
         self.flush()?;
-        self.actions.push(Request::Stake(Stake { account }));
+        self.actions.push(Request::Stake(Stake {
+            account,
+            neuron_identifier,
+        }));
         Ok(())
     }
 
     fn set_dissolve_timestamp(
         &mut self,
         account: ledger_canister::AccountIdentifier,
+        neuron_identifier: u64,
         timestamp: Seconds,
     ) -> Result<(), ApiError> {
         self.flush()?;
         self.actions
             .push(Request::SetDissolveTimestamp(SetDissolveTimestamp {
                 account,
+                neuron_identifier,
                 timestamp,
             }));
         Ok(())
@@ -366,11 +386,14 @@ impl State {
     fn start_dissolve(
         &mut self,
         account: ledger_canister::AccountIdentifier,
+        neuron_identifier: u64,
     ) -> Result<(), ApiError> {
         self.flush()?;
 
-        self.actions
-            .push(Request::StartDissolve(StartDissolve { account }));
+        self.actions.push(Request::StartDissolve(StartDissolve {
+            account,
+            neuron_identifier,
+        }));
 
         Ok(())
     }
@@ -378,11 +401,30 @@ impl State {
     fn stop_dissolve(
         &mut self,
         account: ledger_canister::AccountIdentifier,
+        neuron_identifier: u64,
     ) -> Result<(), ApiError> {
         self.flush()?;
 
-        self.actions
-            .push(Request::StopDissolve(StopDissolve { account }));
+        self.actions.push(Request::StopDissolve(StopDissolve {
+            account,
+            neuron_identifier,
+        }));
+
+        Ok(())
+    }
+    fn add_hot_key(
+        &mut self,
+        account: ledger_canister::AccountIdentifier,
+        neuron_identifier: u64,
+        key: PublicKeyOrPrincipal,
+    ) -> Result<(), ApiError> {
+        self.flush()?;
+
+        self.actions.push(Request::AddHotKey(AddHotKey {
+            account,
+            neuron_identifier,
+            key,
+        }));
 
         Ok(())
     }
@@ -391,7 +433,7 @@ impl State {
 pub fn from_operations(ops: &[Operation], preprocessing: bool) -> Result<Vec<Request>, ApiError> {
     let op_error = |op: &Operation, e| {
         let msg = format!("In operation '{:?}': {}", op, e);
-        ApiError::InvalidTransaction(false, into_error(msg))
+        ApiError::InvalidTransaction(false, msg.into())
     };
 
     let mut state = State {
@@ -457,31 +499,38 @@ pub fn from_operations(ops: &[Operation], preprocessing: bool) -> Result<Vec<Req
             }
             STAKE => {
                 validate_neuron_management_op()?;
-                state.stake(account)?;
+                let NeuronIdentifierMetadata { neuron_identifier } =
+                    o.metadata.clone().try_into()?;
+                state.stake(account, neuron_identifier)?;
             }
             SET_DISSOLVE_TIMESTAMP => {
                 validate_neuron_management_op()?;
-                let timestamp = o.metadata.as_ref()
-                    .and_then(|obj| obj.get(DISSOLVE_TIME_UTC_SECONDS))
-                    .and_then(|field| field.as_str().and_then(|s| u64::from_str(s).ok()))
-                    .map(Seconds)
-                    .ok_or_else(|| op_error(
-                            &o,
-                            "Set Dissolve Timestamp operation must have a 'dissolve_time_utc_seconds' metadata field.
-                            The timestamp is a number of seconds since the Unix epoch.
-                            This is represented as an unsigned 64 bit integer and encoded as a JSON string".into(),
-                        )
-                    )?;
+                let SetDissolveTimestampMetadata {
+                    neuron_identifier,
+                    timestamp,
+                } = o.metadata.clone().try_into()?;
 
-                state.set_dissolve_timestamp(account, timestamp)?;
+                state.set_dissolve_timestamp(account, neuron_identifier, timestamp)?;
             }
             START_DISSOLVE => {
                 validate_neuron_management_op()?;
-                state.start_dissolve(account)?;
+                let NeuronIdentifierMetadata { neuron_identifier } =
+                    o.metadata.clone().try_into()?;
+                state.start_dissolve(account, neuron_identifier)?;
             }
             STOP_DISSOLVE => {
                 validate_neuron_management_op()?;
-                state.stop_dissolve(account)?;
+                let NeuronIdentifierMetadata { neuron_identifier } =
+                    o.metadata.clone().try_into()?;
+                state.stop_dissolve(account, neuron_identifier)?;
+            }
+            ADD_HOT_KEY => {
+                let KeyMetadata {
+                    key,
+                    neuron_identifier,
+                } = o.metadata.clone().try_into()?;
+                validate_neuron_management_op()?;
+                state.add_hot_key(account, neuron_identifier, key)?;
             }
             _ => {
                 let msg = format!("Unsupported operation type: {}", o._type);
@@ -495,7 +544,7 @@ pub fn from_operations(ops: &[Operation], preprocessing: bool) -> Result<Vec<Req
     if state.actions.is_empty() {
         return Err(ApiError::InvalidTransaction(
             false,
-            into_error("Operations don't contain any actions.".to_owned()),
+            "Operations don't contain any actions.".into(),
         ));
     }
 
@@ -546,18 +595,10 @@ pub fn icp() -> Currency {
 }
 
 pub fn block_id(block: &HashedBlock) -> Result<BlockIdentifier, ApiError> {
-    let idx = i64::try_from(block.index).map_err(internal_error)?;
+    let idx = i64::try_from(block.index).map_err(|_| {
+        ApiError::internal_error("block index is too large to be converted from a u64 to an i64")
+    })?;
     Ok(BlockIdentifier::new(idx, from_hash(&block.hash)))
-}
-
-pub fn transaction_identifier(hash: &HashOf<Transaction>) -> TransactionIdentifier {
-    TransactionIdentifier::new(format!("{}", hash))
-}
-
-pub fn from_model_transaction_identifier(
-    tid: &TransactionIdentifier,
-) -> Result<HashOf<Transaction>, String> {
-    HashOf::from_str(&tid.hash)
 }
 
 pub fn to_model_account_identifier(aid: &ledger_canister::AccountIdentifier) -> AccountIdentifier {
@@ -576,17 +617,8 @@ const LAST_HEIGHT: &str = "last_height";
 pub fn from_metadata(mut ob: models::Object) -> Result<BlockHeight, ApiError> {
     let v = ob
         .remove(LAST_HEIGHT)
-        .ok_or(ApiError::InternalError(false, None))?;
-    from_value(v).map_err(|_| ApiError::InternalError(false, None))
-}
-
-// This converts an error message to something that ApiError can consume
-// This returns an option because it's what the error type expects, but it will
-// always return Some
-pub fn into_error(error_msg: impl Into<String>) -> Option<models::Object> {
-    let mut m = Map::new();
-    m.insert("error_message".into(), Value::from(error_msg.into()));
-    Some(m)
+        .ok_or_else(|| ApiError::internal_error("No value `LAST_HEIGHT` in object"))?;
+    from_value(v).map_err(|e| ApiError::internal_error(e.to_string()))
 }
 
 pub fn from_public_key(pk: &models::PublicKey) -> Result<Vec<u8>, ApiError> {
@@ -594,76 +626,12 @@ pub fn from_public_key(pk: &models::PublicKey) -> Result<Vec<u8>, ApiError> {
 }
 
 pub fn from_hex(hex: &str) -> Result<Vec<u8>, ApiError> {
-    hex::decode(hex).map_err(|e| invalid_request(format!("Hex could not be decoded {}", e)))
+    hex::decode(hex)
+        .map_err(|e| ApiError::invalid_request(format!("Hex could not be decoded {}", e)))
 }
 
 pub fn to_hex(v: &[u8]) -> String {
     hex::encode(v)
-}
-
-pub fn transaction_id(
-    request_type: RequestType,
-    signed_transaction: &HttpRequestEnvelope<HttpSubmitContent>,
-) -> Result<TransactionIdentifier, ApiError> {
-    match request_type {
-        RequestType::Send => {
-            let HttpSubmitContent::Call { update } = &signed_transaction.content;
-            let from = PrincipalId::try_from(update.sender.clone().0)
-                .map_err(|e| internal_error(e.to_string()))?;
-            let SendArgs {
-                memo,
-                amount,
-                fee,
-                from_subaccount,
-                to,
-                created_at_time,
-            } = from_arg(update.arg.clone().0)?;
-            let created_at_time = created_at_time.ok_or_else(|| internal_error(
-                "A transaction ID cannot be generated from a constructed transaction without an explicit 'created_at_time'"
-            ))?;
-
-            let from = ledger_canister::AccountIdentifier::new(from, from_subaccount);
-
-            let hash = Transaction::new(from, to, amount, fee, memo, created_at_time).hash();
-
-            Ok(transaction_identifier(&hash))
-        }
-        RequestType::CreateStake
-        | RequestType::StartDissolve
-        | RequestType::StopDissolve
-        | RequestType::SetDissolveTimestamp => {
-            // Unfortunately, staking operations don't really have a
-            // transaction ID, but we have to return something. Let's
-            // use the message ID.
-            let HttpSubmitContent::Call { mut update } = signed_transaction.content.clone();
-            update.ingress_expiry = 0;
-            let request_id = MessageId::from(update.representation_independent_hash());
-            Ok(TransactionIdentifier::new(format!("MSG:{}", request_id)))
-        }
-    }
-}
-
-pub fn internal_error<D: Display>(msg: D) -> ApiError {
-    ApiError::InternalError(false, into_error(format!("{}", msg)))
-}
-
-pub fn ic_error(http_status: u16, msg: String) -> ApiError {
-    let mut m = Map::new();
-    m.insert("error_message".to_string(), Value::from(msg));
-    m.insert("ic_http_status".to_string(), Value::from(http_status));
-    ApiError::ICError(false, Some(m))
-}
-
-pub fn invalid_request<D: Display>(msg: D) -> ApiError {
-    ApiError::InvalidRequest(false, into_error(format!("{}", msg)))
-}
-
-pub fn invalid_block_id<D: Display>(msg: D) -> ApiError {
-    ApiError::InvalidBlockId(false, into_error(format!("{}", msg)))
-}
-
-pub fn invalid_account_id<D: Display>(msg: D) -> ApiError {
-    ApiError::InvalidAccountId(false, into_error(format!("{}", msg)))
 }
 
 pub fn account_from_public_key(pk: &models::PublicKey) -> Result<AccountIdentifier, ApiError> {
@@ -671,30 +639,30 @@ pub fn account_from_public_key(pk: &models::PublicKey) -> Result<AccountIdentifi
     Ok(to_model_account_identifier(&pid.into()))
 }
 
+/// `neuron_identifier` must also be the `nonce` of neuron management commands.
 pub fn neuron_subaccount_bytes_from_public_key(
     pk: &models::PublicKey,
+    neuron_identifier: u64,
 ) -> Result<[u8; 32], ApiError> {
     let controller = principal_id_from_public_key(pk)?;
 
-    // We only allow 1 neuron account per public key, so the nonce is fixed to
-    // be 0.
-    const NONCE: u64 = 0;
-
     // FIXME: cut&paste from compute_neuron_staking_subaccount() in
     // rs/nns/governance/src/governance.rs.
-    let mut state = ic_crypto_sha256::Sha256::new();
+    let mut state = ic_crypto_sha::Sha256::new();
     state.write(&[0x0c]);
     state.write(b"neuron-stake");
     state.write(&controller.as_slice());
-    state.write(&NONCE.to_be_bytes());
+    state.write(&neuron_identifier.to_be_bytes());
     Ok(state.finish())
 }
 
+/// `neuron_identifier` must also be the `nonce` of neuron management commands.
 pub fn neuron_account_from_public_key(
     governance_canister_id: &CanisterId,
     pk: &models::PublicKey,
+    neuron_identifier: u64,
 ) -> Result<AccountIdentifier, ApiError> {
-    let subaccount_bytes = neuron_subaccount_bytes_from_public_key(pk)?;
+    let subaccount_bytes = neuron_subaccount_bytes_from_public_key(pk, neuron_identifier)?;
     Ok(to_model_account_identifier(
         &ledger_canister::AccountIdentifier::new(
             governance_canister_id.get(),
@@ -707,7 +675,7 @@ pub fn principal_id_from_public_key(pk: &models::PublicKey) -> Result<PrincipalI
     if pk.curve_type != models::CurveType::Edwards25519 {
         return Err(ApiError::InvalidPublicKey(
             false,
-            into_error("Only EDWARDS25519 curve type is supported".to_string()),
+            "Only EDWARDS25519 curve type is supported".into(),
         ));
     }
     let pid = PrincipalId::new_self_authenticating(&ic_canister_client::ed25519_public_key_to_der(
@@ -719,7 +687,7 @@ pub fn principal_id_from_public_key(pk: &models::PublicKey) -> Result<PrincipalI
 // This is so I can keep track of where this conversion is done
 pub fn from_arg(encoded: Vec<u8>) -> Result<SendArgs, ApiError> {
     ProtoBuf::from_bytes(encoded)
-        .map_err(internal_error)
+        .map_err(ApiError::internal_error)
         .map(|ProtoBuf(c)| c)
 }
 
@@ -732,7 +700,7 @@ pub fn from_hash<T>(hash: &HashOf<T>) -> String {
 }
 
 pub fn to_hash<T>(s: &str) -> Result<HashOf<T>, ApiError> {
-    s.parse().map_err(|_| ApiError::InternalError(false, None))
+    s.parse().map_err(ApiError::internal_error)
 }
 
 pub fn make_read_state_from_update(update: &HttpCanisterUpdate) -> HttpReadState {

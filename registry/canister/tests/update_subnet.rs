@@ -56,6 +56,7 @@ fn test_the_anonymous_user_cannot_update_a_subnets_configuration() {
             pfn_evaluation_period_ms: Some(0),
             registry_poll_period_ms: Some(0),
             retransmission_request_ms: Some(0),
+            relay_percentage: None,
             set_gossip_config_to_default: false,
             start_as_nns: None,
             subnet_type: None,
@@ -63,6 +64,7 @@ fn test_the_anonymous_user_cannot_update_a_subnets_configuration() {
             max_instructions_per_message: Some(6_000_000_000),
             max_instructions_per_round: Some(8_000_000_000),
             max_instructions_per_install_code: Some(300_000_000_000),
+            features: None,
         };
 
         // The anonymous end-user tries to update a subnet's configuration, bypassing
@@ -126,6 +128,7 @@ fn test_a_canister_other_than_the_proposals_canister_cannot_update_a_subnets_con
                 pfn_evaluation_period_ms: 0,
                 registry_poll_period_ms: 0,
                 retransmission_request_ms: 0,
+                relay_config: None,
             }),
             start_as_nns: false,
             subnet_type: SubnetType::Application.into(),
@@ -133,6 +136,7 @@ fn test_a_canister_other_than_the_proposals_canister_cannot_update_a_subnets_con
             max_instructions_per_message: 5_000_000_000,
             max_instructions_per_round: 7_000_000_000,
             max_instructions_per_install_code: 200_000_000_000,
+            features: None,
         };
 
         // An attacker got a canister that is trying to pass for the proposals
@@ -177,6 +181,7 @@ fn test_a_canister_other_than_the_proposals_canister_cannot_update_a_subnets_con
             pfn_evaluation_period_ms: Some(0),
             registry_poll_period_ms: Some(0),
             retransmission_request_ms: Some(0),
+            relay_percentage: None,
             set_gossip_config_to_default: false,
             start_as_nns: None,
             subnet_type: None,
@@ -184,6 +189,7 @@ fn test_a_canister_other_than_the_proposals_canister_cannot_update_a_subnets_con
             max_instructions_per_message: Some(6_000_000_000),
             max_instructions_per_round: Some(8_000_000_000),
             max_instructions_per_install_code: Some(300_000_000_000),
+            features: None,
         };
 
         // The attacker canister tries to update the subnet's configuration, pretending
@@ -248,6 +254,7 @@ fn test_the_proposals_canister_can_update_a_subnets_configuration() {
                                 pfn_evaluation_period_ms: 0,
                                 registry_poll_period_ms: 0,
                                 retransmission_request_ms: 0,
+                                relay_config: None,
                             }),
                             start_as_nns: false,
                             subnet_type: SubnetType::Application.into(),
@@ -255,6 +262,7 @@ fn test_the_proposals_canister_can_update_a_subnets_configuration() {
                             max_instructions_per_message: 5_000_000_000,
                             max_instructions_per_round: 7_000_000_000,
                             max_instructions_per_install_code: 200_000_000_000,
+                            features: None,
                         }),
                     )],
                     preconditions: vec![],
@@ -290,13 +298,15 @@ fn test_the_proposals_canister_can_update_a_subnets_configuration() {
             pfn_evaluation_period_ms: Some(0),
             registry_poll_period_ms: Some(0),
             retransmission_request_ms: Some(0),
+            relay_percentage: None,
             set_gossip_config_to_default: false,
             start_as_nns: None,
-            subnet_type: Some(SubnetType::System),
+            subnet_type: Some(SubnetType::Application),
             is_halted: Some(true),
             max_instructions_per_message: Some(6_000_000_000),
             max_instructions_per_round: Some(8_000_000_000),
             max_instructions_per_install_code: Some(300_000_000_000),
+            features: None,
         };
 
         // Attempt to update the subnet's configuration. Since the update happens from
@@ -337,13 +347,15 @@ fn test_the_proposals_canister_can_update_a_subnets_configuration() {
                     pfn_evaluation_period_ms: 0,
                     registry_poll_period_ms: 0,
                     retransmission_request_ms: 0,
+                    relay_config: None,
                 }),
                 start_as_nns: false,
-                subnet_type: SubnetType::System.into(),
+                subnet_type: SubnetType::Application.into(),
                 is_halted: true,
                 max_instructions_per_message: 6_000_000_000,
                 max_instructions_per_round: 8_000_000_000,
                 max_instructions_per_install_code: 300_000_000_000,
+                features: None,
             }
         );
 

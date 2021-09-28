@@ -83,7 +83,7 @@ fn should_correctly_convert_tls_cert_hash_as_key_id() {
     assert_eq!(key_id, KeyId(expected_key_id));
 }
 
-fn csprng_seeded_with(seed: u64) -> impl CryptoRng + Rng {
+fn csprng_seeded_with(seed: u64) -> impl CryptoRng + Rng + Clone {
     ChaCha20Rng::seed_from_u64(seed)
 }
 
@@ -311,7 +311,7 @@ mod tls {
         let _panic = csp.gen_tls_key_pair(node_test_id(NODE_1), &date_in_the_past);
     }
 
-    fn rng() -> impl CryptoRng + Rng {
+    fn rng() -> impl CryptoRng + Rng + Clone {
         csprng_seeded_with(42)
     }
 

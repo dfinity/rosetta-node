@@ -73,6 +73,7 @@ PACKAGES_TO_COPY=(
     registry/keys
     registry/provisional_whitelist
     registry/routing_table
+    registry/subnet_features
     registry/subnet_type
     registry/transport
     rosetta-api

@@ -2,7 +2,6 @@
 mod keygen;
 
 pub use keygen::KeyManager;
-pub use keygen::Keygen;
 
 mod hash;
 
@@ -31,6 +30,8 @@ pub use sign::ThresholdSigVerifier;
 pub use sign::ThresholdSigVerifierByPublicKey;
 pub use sign::ThresholdSigner;
 pub use sign::{Signable, SignableMock};
+
+pub use sign::canister_threshold_sig::*;
 
 use ic_types::consensus::certification::CertificationContent;
 use ic_types::consensus::dkg as consensus_dkg;

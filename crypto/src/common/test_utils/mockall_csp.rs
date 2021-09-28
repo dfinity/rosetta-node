@@ -100,12 +100,6 @@ mock! {
     }
 
     pub trait ThresholdSignatureCspClient {
-        fn threshold_sign_to_be_removed(
-            &self,
-            algorithm_id: AlgorithmId,
-            message: &[u8],
-            key_id: KeyId,
-        ) -> Result<CspSignature, CspThresholdSignError>;
 
         fn threshold_sign(
             &self,

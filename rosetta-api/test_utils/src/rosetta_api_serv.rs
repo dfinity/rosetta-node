@@ -155,12 +155,6 @@ impl RosettaApiHandle {
         NetworkIdentifier::new("Internet Computer".to_string(), net_id)
     }
 
-    /// Returns the identifier of the neuron network.
-    pub fn neuron_network_id(&self) -> NetworkIdentifier {
-        let net_id = hex::encode(self.governance_can_id.get().as_slice());
-        NetworkIdentifier::new("Internet Computer".to_string(), net_id)
-    }
-
     /// Returns the account address shared by all neuron subaccounts.
     pub fn neuron_account(&self) -> String {
         self.governance_can_id.to_string()
@@ -219,10 +213,18 @@ impl RosettaApiHandle {
         &self,
         pk: PublicKey,
     ) -> Result<Result<ConstructionDeriveResponse, RosettaError>, String> {
-        let req = ConstructionDeriveRequest::new(self.network_id(), pk);
+        let req = ConstructionDeriveRequest {
+            network_identifier: self.network_id(),
+            public_key: pk,
+            metadata: Some(ConstructionDeriveRequestMetadata {
+                account_type: AccountType::Neuron {
+                    neuron_identifier: 0,
+                },
+            }),
+        };
         to_rosetta_response(
             self.post_json_request(
-                &format!("http://{}/neuron/derive", self.api_url),
+                &format!("http://{}/construction/derive", self.api_url),
                 serde_json::to_vec(&req).unwrap(),
             )
             .await,
@@ -319,23 +321,13 @@ impl RosettaApiHandle {
 
     pub async fn construction_payloads(
         &self,
-        metadata: Option<Object>,
+        metadata: Option<ConstructionPayloadsRequestMetadata>,
         operations: Vec<Operation>,
         public_keys: Option<Vec<PublicKey>>,
-        ingress_expiry: Option<u64>,
-        created_at_time: Option<u64>,
     ) -> Result<Result<ConstructionPayloadsResponse, RosettaError>, String> {
-        let mut metadata = metadata.unwrap_or_else(Object::new);
-        metadata.insert("memo".to_owned(), 0.into());
-        if let Some(t) = ingress_expiry {
-            metadata.insert("ingress_end".to_owned(), t.into());
-        }
-        if let Some(t) = created_at_time {
-            metadata.insert("created_at_time".to_owned(), t.into());
-        }
         let req = ConstructionPayloadsRequest {
             network_identifier: self.network_id(),
-            metadata: Some(metadata),
+            metadata,
             operations,
             public_keys,
         };

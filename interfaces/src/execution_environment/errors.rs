@@ -1,5 +1,4 @@
 use ic_base_types::{CanisterIdError, PrincipalIdBlobParseError};
-use ic_registry_subnet_type::SubnetType;
 use ic_types::{
     methods::WasmMethod, user_error::UserError, CanisterId, CanisterStatusType, Cycles,
 };
@@ -12,9 +11,11 @@ pub enum TrapCode {
     StackOverflow,
     HeapOutOfBounds,
     StableMemoryOutOfBounds,
+    StableMemoryTooBigFor32Bit,
     IntegerDivByZero,
     Unreachable,
     TableOutOfBounds,
+    CyclesAmountTooBigFor64Bit,
     Other,
 }
 
@@ -24,9 +25,16 @@ impl std::fmt::Display for TrapCode {
             Self::StackOverflow => write!(f, "stack overflow"),
             Self::HeapOutOfBounds => write!(f, "heap out of bounds"),
             Self::StableMemoryOutOfBounds => write!(f, "stable memory out of bounds"),
+            Self::StableMemoryTooBigFor32Bit => write!(
+                f,
+                "32 bit stable memory api used on a memory larger than 4GB"
+            ),
             Self::IntegerDivByZero => write!(f, "integer division by 0"),
             Self::Unreachable => write!(f, "unreachable"),
             Self::TableOutOfBounds => write!(f, "table out of bounds"),
+            Self::CyclesAmountTooBigFor64Bit => {
+                write!(f, "cycles amount exceeds 64-bit representation")
+            }
             Self::Other => write!(f, "unknown"),
         }
     }
@@ -40,15 +48,24 @@ pub enum CanisterHeartbeatError {
         status: CanisterStatusType,
     },
 
-    /// The subnet type isn't a system subnet.
-    NotSystemSubnet {
-        subnet_type_given: SubnetType,
-    },
-
     OutOfCycles,
 
     /// Execution failed while executing the `canister_heartbeat`.
     CanisterExecutionFailed(HypervisorError),
+}
+
+impl CanisterHeartbeatError {
+    /// Does this error come from a problem in the execution environment?
+    /// Other errors could be caused by bad canister code.
+    pub fn is_system_error(&self) -> bool {
+        match self {
+            CanisterHeartbeatError::CanisterExecutionFailed(hypervisor_err) => {
+                hypervisor_err.is_system_error()
+            }
+            CanisterHeartbeatError::CanisterNotRunning { status: _ }
+            | CanisterHeartbeatError::OutOfCycles => false,
+        }
+    }
 }
 
 /// Different types of errors that can be returned from the function(s) that
@@ -125,6 +142,7 @@ pub enum HypervisorError {
     /// available in the canister's balance.
     InsufficientCyclesBalance {
         available: Cycles,
+        threshold: Cycles,
         requested: Cycles,
     },
     Cleanup {
@@ -262,12 +280,13 @@ impl HypervisorError {
             ),
             Self::InsufficientCyclesBalance {
                 available,
+                threshold,
                 requested,
             } => UserError::new(
                 E::CanisterOutOfCycles,
                 format!(
-                    "Canister {} attempted to send {} cycles when only {} were available in its balance",
-                    canister_id, requested, available
+                    "Canister {} has insufficient cycles: requested {} cycles when the balance is {} cycles and the freezing threshold is {} cycles",
+                    canister_id, requested, available, threshold
                 ),
             ),
             Self::Cleanup {
@@ -316,6 +335,40 @@ impl HypervisorError {
             HypervisorError::InsufficientCyclesBalance { .. } => "InsufficientCyclesBalance",
             HypervisorError::Cleanup { .. } => "Cleanup",
             HypervisorError::WasmEngineError(_) => "WasmEngineError",
+        }
+    }
+
+    /// Does this error come from a problem in the execution environment?
+    /// Other errors could be caused by bad canister code.
+    pub fn is_system_error(&self) -> bool {
+        match self {
+            HypervisorError::InstrumentationFailed(_) | HypervisorError::WasmEngineError(_) => true,
+            HypervisorError::Cleanup {
+                callback_err,
+                cleanup_err,
+            } => callback_err.is_system_error() || cleanup_err.is_system_error(),
+            HypervisorError::FunctionNotFound(_, _)
+            | HypervisorError::MethodNotFound(_)
+            | HypervisorError::ContractViolation(_)
+            | HypervisorError::OutOfInstructions
+            | HypervisorError::InvalidWasm(_)
+            | HypervisorError::Trapped(_)
+            | HypervisorError::CalledTrap(_)
+            | HypervisorError::WasmModuleNotFound
+            | HypervisorError::OutOfMemory
+            | HypervisorError::CanisterStopped
+            | HypervisorError::InsufficientCyclesInCall {
+                available: _,
+                requested: _,
+            }
+            | HypervisorError::InvalidPrincipalId(_)
+            | HypervisorError::InvalidCanisterId(_)
+            | HypervisorError::MessageRejected
+            | HypervisorError::InsufficientCyclesBalance {
+                available: _,
+                threshold: _,
+                requested: _,
+            } => false,
         }
     }
 }

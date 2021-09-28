@@ -1,14 +1,18 @@
 use ic_rosetta_api::convert::{
     amount_, from_hex, from_model_account_identifier, from_operations, from_public_key,
-    principal_id_from_public_key, requests_to_operations, signed_amount, to_hex,
-    to_model_account_identifier, Request, SetDissolveTimestamp, Stake, StartDissolve, StopDissolve,
-    SET_DISSOLVE_TIMESTAMP, START_DISSOLVE, STOP_DISSOLVE,
+    principal_id_from_public_key, signed_amount, to_hex, to_model_account_identifier,
 };
+use ic_rosetta_api::errors::ApiError;
 use ic_rosetta_api::models::Error as RosettaError;
 use ic_rosetta_api::models::{
-    ConstructionCombineResponse, ConstructionPayloadsResponse, CurveType, PublicKey, Signature,
-    SignatureType, TransactionIdentifier,
+    ConstructionCombineResponse, ConstructionPayloadsRequestMetadata, ConstructionPayloadsResponse,
+    CurveType, PublicKey, Signature, SignatureType,
 };
+use ic_rosetta_api::request_types::{
+    AddHotKey, Request, RequestResult, SetDissolveTimestamp, Stake, StartDissolve, StopDissolve,
+    TransactionResults, ADD_HOT_KEY, SET_DISSOLVE_TIMESTAMP, START_DISSOLVE, STOP_DISSOLVE,
+};
+use ic_rosetta_api::transaction_id::TransactionIdentifier;
 use ic_types::{messages::Blob, time, PrincipalId};
 
 use ledger_canister::{AccountIdentifier, BlockHeight, ICPTs, Transfer};
@@ -17,6 +21,7 @@ pub use ed25519_dalek::Keypair as EdKeypair;
 use log::debug;
 use rand::{rngs::StdRng, seq::SliceRandom, thread_rng, SeedableRng};
 use std::collections::HashMap;
+use std::convert::TryInto;
 use std::sync::Arc;
 
 pub mod rosetta_api_serv;
@@ -84,7 +89,7 @@ pub async fn prepare_multiple_txn(
     for request in requests {
         // first ask for the fee
         let mut fee_found = false;
-        for o in requests_to_operations(&[request.request.clone()]).unwrap() {
+        for o in Request::requests_to_operations(&[request.request.clone()]).unwrap() {
             if o._type == "FEE" {
                 fee_found = true;
             } else {
@@ -104,7 +109,8 @@ pub async fn prepare_multiple_txn(
             Request::Stake(Stake { account, .. })
             | Request::StartDissolve(StartDissolve { account, .. })
             | Request::StopDissolve(StopDissolve { account, .. })
-            | Request::SetDissolveTimestamp(SetDissolveTimestamp { account, .. }) => {
+            | Request::SetDissolveTimestamp(SetDissolveTimestamp { account, .. })
+            | Request::AddHotKey(AddHotKey { account, .. }) => {
                 all_sender_account_ids.push(to_model_account_identifier(&account));
             }
             _ => panic!("Only Send/Stake supported here"),
@@ -146,10 +152,15 @@ pub async fn prepare_multiple_txn(
         // we assume here that we've got a correct transaction; double check that the
         // fee really is what it should be.
         // Set Dissolve does not have a fee.
-        if !all_ops
-            .iter()
-            .all(|op| [START_DISSOLVE, STOP_DISSOLVE, SET_DISSOLVE_TIMESTAMP].contains(&&*op._type))
-        {
+        if !all_ops.iter().all(|op| {
+            [
+                START_DISSOLVE,
+                STOP_DISSOLVE,
+                SET_DISSOLVE_TIMESTAMP,
+                ADD_HOT_KEY,
+            ]
+            .contains(&&*op._type)
+        }) {
             assert_eq!(Some(&dry_run_suggested_fee), trans_fee_amount.as_ref());
         }
     }
@@ -177,11 +188,14 @@ pub async fn prepare_multiple_txn(
     assert_eq!(suggested_fee, dry_run_suggested_fee);
 
     ros.construction_payloads(
-        Some(metadata_res.metadata.clone()),
+        Some(ConstructionPayloadsRequestMetadata {
+            memo: Some(0),
+            ingress_end,
+            created_at_time,
+            ..metadata_res.metadata
+        }),
         all_ops,
         Some(all_sender_pks),
-        ingress_end,
-        created_at_time,
     )
     .await
     .unwrap()
@@ -271,7 +285,7 @@ pub async fn do_txn(
 ) -> Result<
     (
         TransactionIdentifier,
-        Option<BlockHeight>,
+        TransactionResults,
         ICPTs, // charged fee
     ),
     RosettaError,
@@ -298,7 +312,7 @@ pub async fn do_multiple_txn(
 ) -> Result<
     (
         TransactionIdentifier,
-        Option<BlockHeight>,
+        TransactionResults,
         ICPTs, // charged fee
     ),
     RosettaError,
@@ -368,11 +382,32 @@ pub async fn do_multiple_txn(
         .unwrap()?;
     assert_eq!(submit_res, submit_res2);
 
-    Ok((
-        submit_res.transaction_identifier,
-        submit_res.block_index,
-        charged_fee,
-    ))
+    let mut txn = signed.signed_transaction().unwrap();
+    for (_, request) in txn.iter_mut() {
+        *request = vec![request.last().unwrap().clone()];
+    }
+
+    let submit_res3 = ros
+        .construction_submit(signed.signed_transaction().unwrap())
+        .await
+        .unwrap()?;
+    assert_eq!(submit_res, submit_res3);
+
+    let results: TransactionResults = submit_res.metadata.try_into()?;
+
+    if let Some(RequestResult {
+        _type: Request::Transfer(_),
+        transaction_identifier,
+        ..
+    }) = results.operations.last()
+    {
+        assert_eq!(
+            submit_res.transaction_identifier,
+            transaction_identifier.clone().unwrap()
+        );
+    }
+
+    Ok((submit_res.transaction_identifier, results, charged_fee))
 }
 
 pub async fn send_icpts(
@@ -418,10 +453,38 @@ pub async fn send_icpts_with_window(
         fee: ICPTs::ZERO,
     };
 
-    do_txn(ros, keypair, t, true, ingress_end, created_at_time).await
+    do_txn(ros, keypair, t, true, ingress_end, created_at_time)
+        .await
+        .and_then(|(_, results, fee)| {
+            if let Some(RequestResult {
+                _type: Request::Transfer(Transfer::Send { .. }),
+                transaction_identifier,
+                block_index,
+                ..
+            }) = results.operations.last()
+            {
+                Ok((
+                    transaction_identifier
+                        .clone()
+                        .expect("Transfers must return a real transaction identifier"),
+                    *block_index,
+                    fee,
+                ))
+            } else {
+                Err(RosettaError::from(ic_rosetta_api::errors::ApiError::from(
+                    results,
+                )))
+            }
+        })
 }
 
 pub fn assert_ic_error(err: &RosettaError, code: u32, ic_http_status: u64, text: &str) {
+    let err = if let ApiError::OperationsErrors(results) = err.clone().into() {
+        results.error().unwrap().clone().into()
+    } else {
+        err.clone()
+    };
+
     assert_eq!(err.code, code);
     let details = err.details.as_ref().unwrap();
     assert_eq!(
@@ -437,7 +500,17 @@ pub fn assert_ic_error(err: &RosettaError, code: u32, ic_http_status: u64, text:
 }
 
 pub fn assert_canister_error(err: &RosettaError, code: u32, text: &str) {
-    assert_eq!(err.code, code);
+    let err = if let ApiError::OperationsErrors(results) = err.clone().into() {
+        results.error().unwrap().clone().into()
+    } else {
+        err.clone()
+    };
+
+    assert_eq!(
+        err.code, code,
+        "rosetta error {:?} does not have code: {}",
+        err, code
+    );
     let details = err.details.as_ref().unwrap();
     assert!(
         details

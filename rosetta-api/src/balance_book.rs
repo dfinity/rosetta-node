@@ -1,5 +1,4 @@
-use crate::convert::into_error;
-use crate::models::ApiError;
+use crate::errors::ApiError;
 use ledger_canister::{AccountIdentifier, BalancesStore, BlockHeight, ICPTs};
 use std::collections::HashMap;
 
@@ -55,11 +54,12 @@ impl BalanceHistory {
             // TODO Add a new error type (ApiError::BlockPruned or something like that)
             return Err(ApiError::InvalidBlockId(
                 false,
-                into_error(format!(
+                format!(
                     "Block not available for query: {}. Oldest block: {}",
                     height,
                     self.inner.first().unwrap().0
-                )),
+                )
+                .into(),
             ));
         }
         let idx = match self.inner.binary_search_by_key(&height, |&(h, _)| h) {

@@ -35,7 +35,7 @@ struct Opt {
     #[structopt(long = "root-key")]
     root_key: Option<PathBuf>,
     /// Supported options: on-disk, sqlite, in-memory
-    #[structopt(long = "store-type", default_value = "on-disk")]
+    #[structopt(long = "store-type", default_value = "sqlite")]
     store_type: String,
     #[structopt(long = "store-location", default_value = "./data")]
     store_location: PathBuf,
@@ -53,6 +53,8 @@ struct Opt {
     disable_fsync: bool,
     #[structopt(long = "database-url", default_value = "data.sqlite")]
     database_url: String,
+    #[structopt(long = "expose-metrics")]
+    expose_metrics: bool,
 }
 
 #[actix_web::main]
@@ -180,6 +182,7 @@ async fn main() -> std::io::Result<()> {
         exit_on_sync,
         mainnet,
         not_whitelisted,
+        expose_metrics,
         ..
     } = opt;
     let client = ledger_client::LedgerClient::new(
@@ -204,8 +207,8 @@ async fn main() -> std::io::Result<()> {
     let req_handler = RosettaRequestHandler::new(ledger.clone());
 
     log::info!("Network id: {:?}", req_handler.network_id());
-    let serv =
-        RosettaApiServer::new(ledger, req_handler, addr).expect("Error creating RosettaApiServer");
+    let serv = RosettaApiServer::new(ledger, req_handler, addr, expose_metrics)
+        .expect("Error creating RosettaApiServer");
 
     // actix server catches kill signals. After that we still need to stop our
     // server properly

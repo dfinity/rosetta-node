@@ -34,19 +34,6 @@ fn main() {
     dk = SecretKey::deserialize(&v);
     */
 
-    let message = 123;
-    println!("plaintext: {}", message);
-    let ct = enc_single(&pk.key_value, message, &epoch10, rng, sys);
-    println!(
-        "encrypted: {} {} {} {}",
-        ct.cc.tostring(),
-        ct.rr.tostring(),
-        ct.ss.tostring(),
-        ct.zz.tostring()
-    );
-    let plain = dec_single(&mut dk, &ct, sys);
-    println!("decrypted: {}", plain);
-
     let mut keys = Vec::new();
     for i in 0..4 {
         println!("generating key pair {}...", i);
@@ -68,7 +55,7 @@ fn main() {
         "integrity check: {:?}",
         verify_ciphertext_integrity(&crsz, &epoch10, &associated_data, sys)
     );
-    let out = dec_chunks(&dk, 1, &crsz, &epoch10, &associated_data, sys);
+    let out = dec_chunks(&dk, 1, &crsz, &epoch10, &associated_data);
     println!("dec_chunks initially: {:?}", out);
 
     for _i in 0..3 {
@@ -76,7 +63,7 @@ fn main() {
         dk.update(sys, rng);
     }
 
-    let out = dec_chunks(&dk, 1, &crsz, &epoch10, &associated_data, sys);
+    let out = dec_chunks(&dk, 1, &crsz, &epoch10, &associated_data);
     println!("dec_chunks after 3 upgrades: {:?}", out);
 
     for _i in 0..8 {
@@ -84,6 +71,6 @@ fn main() {
         dk.update(sys, rng);
     }
     // Should be impossible to decrypt now.
-    let out = dec_chunks(&dk, 1, &crsz, &epoch10, &associated_data, sys);
+    let out = dec_chunks(&dk, 1, &crsz, &epoch10, &associated_data);
     println!("dec_chunks after 8 additional upgrades: {:?}", out);
 }

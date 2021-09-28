@@ -38,19 +38,6 @@ fn potpourri() {
     }
     let epoch10 = Epoch::from(10);
     let tau10 = tau_from_epoch(sys, epoch10);
-    let message = 123;
-    println!("plaintext: {}", message);
-    let ct = enc_single(&pk.key_value, message, &tau10, rng, sys);
-    println!(
-        "encrypted: {} {} {} {}",
-        ct.cc.tostring(),
-        ct.rr.tostring(),
-        ct.ss.tostring(),
-        ct.zz.tostring()
-    );
-    let plain = dec_single(&mut dk, &ct, sys);
-    println!("decrypted: {}", plain);
-    assert!(plain == message, "decrypt . encrypt == id");
 
     let mut keys = Vec::new();
     for i in 0..3 {
@@ -76,7 +63,7 @@ fn potpourri() {
     verify_ciphertext_integrity(&crsz, &tau10, &associated_data, sys)
         .expect("ciphertext integrity check failed");
 
-    let out = dec_chunks(&dk, 1, &crsz, &tau10, &associated_data, sys)
+    let out = dec_chunks(&dk, 1, &crsz, &tau10, &associated_data)
         .expect("It should be possible to decrypt");
     println!("decrypted: {:?}", out);
     let mut last3 = vec![0; 3];
@@ -90,7 +77,7 @@ fn potpourri() {
         dk.update(sys, rng);
     }
     // Should be impossible to decrypt now.
-    let out = dec_chunks(&dk, 1, &crsz, &tau10, &associated_data, sys);
+    let out = dec_chunks(&dk, 1, &crsz, &tau10, &associated_data);
     match out {
         Err(DecErr::ExpiredKey) => (),
         _ => panic!("old ciphertexts should be lost forever"),
@@ -202,7 +189,7 @@ fn encrypted_chunks_should_validate(epoch: Epoch) {
 
     // Check that decryption succeeds
     let dk = &receiver_fs_keys[1].1;
-    let out = dec_chunks(&dk, 1, &crsz, &tau, &associated_data, sys);
+    let out = dec_chunks(&dk, 1, &crsz, &tau, &associated_data);
     println!("decrypted: {:?}", out);
     assert!(
         out.unwrap() == plaintext_chunks[1],

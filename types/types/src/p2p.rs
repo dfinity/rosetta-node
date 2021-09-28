@@ -73,6 +73,7 @@ pub fn build_default_gossip_config() -> GossipConfig {
         pfn_evaluation_period_ms: PFN_EVALUATION_PERIOD_MS,
         registry_poll_period_ms: REGISTRY_POLL_PERIOD_MS,
         retransmission_request_ms: RETRANSMISSION_REQUEST_MS,
+        relay_config: None,
     }
 }
 

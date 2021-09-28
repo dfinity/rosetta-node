@@ -26,8 +26,9 @@ async fn rosetta_cli_data_test() {
     let serv_ledger = ledger.clone();
     let serv_req_handler = req_handler.clone();
 
-    let serv =
-        Arc::new(RosettaApiServer::new(serv_ledger, serv_req_handler, addr.clone()).unwrap());
+    let serv = Arc::new(
+        RosettaApiServer::new(serv_ledger, serv_req_handler, addr.clone(), false).unwrap(),
+    );
     let serv_run = serv.clone();
     let arbiter = actix_rt::Arbiter::new();
     arbiter.spawn(Box::pin(async move {
@@ -36,8 +37,10 @@ async fn rosetta_cli_data_test() {
         debug!("Server thread done");
     }));
 
-    let output = Command::new("rosetta-cli")
+    let output = Command::new("timeout")
         .args(&[
+            "300s",
+            "rosetta-cli",
             "check:data",
             "--configuration-file",
             "test/rosetta-cli_data_test.json",
@@ -90,8 +93,9 @@ async fn rosetta_cli_construction_create_account_test() {
     let serv_ledger = ledger.clone();
     let serv_req_handler = req_handler.clone();
 
-    let serv =
-        Arc::new(RosettaApiServer::new(serv_ledger, serv_req_handler, addr.clone()).unwrap());
+    let serv = Arc::new(
+        RosettaApiServer::new(serv_ledger, serv_req_handler, addr.clone(), false).unwrap(),
+    );
     let serv_run = serv.clone();
     let arbiter = actix_rt::Arbiter::new();
     arbiter.spawn(Box::pin(async move {
@@ -100,8 +104,10 @@ async fn rosetta_cli_construction_create_account_test() {
         debug!("Server thread done");
     }));
 
-    let output = Command::new("rosetta-cli")
+    let output = Command::new("timeout")
         .args(&[
+            "300s",
+            "rosetta-cli",
             "check:construction",
             "--configuration-file",
             "test/rosetta-cli_construction_create_account_test.json",
@@ -173,8 +179,9 @@ async fn rosetta_cli_construction_test() {
     let serv_ledger = ledger.clone();
     let serv_req_handler = req_handler.clone();
 
-    let serv =
-        Arc::new(RosettaApiServer::new(serv_ledger, serv_req_handler, addr.clone()).unwrap());
+    let serv = Arc::new(
+        RosettaApiServer::new(serv_ledger, serv_req_handler, addr.clone(), false).unwrap(),
+    );
     let serv_run = serv.clone();
     let arbiter = actix_rt::Arbiter::new();
     arbiter.spawn(Box::pin(async move {
@@ -183,8 +190,10 @@ async fn rosetta_cli_construction_test() {
         debug!("Server thread done");
     }));
 
-    let output = Command::new("rosetta-cli")
+    let output = Command::new("timeout")
         .args(&[
+            "300s",
+            "rosetta-cli",
             "check:construction",
             "--configuration-file",
             "test/rosetta-cli_construction_test.json",

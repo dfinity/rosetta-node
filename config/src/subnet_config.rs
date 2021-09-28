@@ -7,6 +7,7 @@ use ic_registry_subnet_type::SubnetType;
 use ic_types::{Cycles, NumInstructions};
 
 const B: u64 = 1_000_000_000;
+const M: u64 = 1_000_000;
 
 // We assume 1 cycles unit ≅ 1 CPU cycle, so on a 2 GHz CPU one message has
 // approximately 2.5 seconds to be processed.
@@ -36,7 +37,17 @@ const MAX_INSTRUCTIONS_PER_ROUND: NumInstructions = NumInstructions::new(7 * B);
 const MAX_INSTRUCTIONS_PER_INSTALL_CODE: NumInstructions = NumInstructions::new(40 * 5 * B);
 
 // The factor to bump the instruction limit for system subnets.
-const SYSTEM_SUBNET_INSTRUCTIONS_FACTOR: u64 = 10;
+const SYSTEM_SUBNET_FACTOR: u64 = 10;
+
+// The maximum amount of heap delta per iteration. Data from production shows
+// memory throughput of 100MB/s. Subnets run with different finalization rate,
+// so a round may take 1 to 4 seconds. To avoid regressing the throughput of
+// slow subnets while maintaining the speed of fast subnets, we use the middle
+// value of 200MB.
+const MAX_HEAP_DELTA_PER_ITERATION: NumBytes = NumBytes::new(200 * M);
+
+// Log all messages that took more than this value to execute.
+pub const MAX_MESSAGE_DURATION_BEFORE_WARN_IN_SECONDS: f64 = 5.0;
 
 /// The per subnet type configuration for the scheduler component
 #[derive(Clone)]
@@ -63,6 +74,25 @@ pub struct SchedulerConfig {
     /// size is above this limit. Hence, it is possible that the actual usage of
     /// the subnet goes above this limit.
     pub subnet_heap_delta_capacity: NumBytes,
+
+    /// The maximum amount of heap delta per iteration. This number if checked
+    /// after each iteration in an execution round to decided whether to
+    /// continue iterations or not. This serves as a proxy for memory bound
+    /// instructions that are more expensive and may slow down finalization.
+    pub max_heap_delta_per_iteration: NumBytes,
+
+    /// This value is used to decide whether to emit a warn log after
+    /// message execution or not.
+    /// Once execution duration of a message exceeds this value,
+    /// specific information about the message is logged as a warn.
+    pub max_message_duration_before_warn_in_seconds: f64,
+
+    /// Indicates whether we want to limit tracking of heartbeat errors to
+    /// system level errors. Generally this should be `false` for system subnets
+    /// because we should monitor all errors in the system subnets, but should
+    /// be `true` for other subnets because we don't want to raise alerts for
+    /// errors in user code.
+    pub only_track_system_heartbeat_errors: bool,
 }
 
 impl SchedulerConfig {
@@ -78,6 +108,10 @@ impl SchedulerConfig {
             max_instructions_per_round: MAX_INSTRUCTIONS_PER_ROUND,
             max_instructions_per_message: MAX_INSTRUCTIONS_PER_MESSAGE,
             max_instructions_per_install_code: MAX_INSTRUCTIONS_PER_INSTALL_CODE,
+            max_heap_delta_per_iteration: MAX_HEAP_DELTA_PER_ITERATION,
+            max_message_duration_before_warn_in_seconds:
+                MAX_MESSAGE_DURATION_BEFORE_WARN_IN_SECONDS,
+            only_track_system_heartbeat_errors: true,
         }
     }
 
@@ -91,11 +125,13 @@ impl SchedulerConfig {
             scheduler_cores: 32,
 
             subnet_heap_delta_capacity: SUBNET_HEAP_DELTA_CAPACITY,
-            max_instructions_per_round: MAX_INSTRUCTIONS_PER_ROUND
-                * SYSTEM_SUBNET_INSTRUCTIONS_FACTOR,
-            max_instructions_per_message: MAX_INSTRUCTIONS_PER_MESSAGE
-                * SYSTEM_SUBNET_INSTRUCTIONS_FACTOR,
+            max_instructions_per_round: MAX_INSTRUCTIONS_PER_ROUND * SYSTEM_SUBNET_FACTOR,
+            max_instructions_per_message: MAX_INSTRUCTIONS_PER_MESSAGE * SYSTEM_SUBNET_FACTOR,
             max_instructions_per_install_code,
+            max_heap_delta_per_iteration: MAX_HEAP_DELTA_PER_ITERATION * SYSTEM_SUBNET_FACTOR,
+            max_message_duration_before_warn_in_seconds:
+                MAX_MESSAGE_DURATION_BEFORE_WARN_IN_SECONDS,
+            only_track_system_heartbeat_errors: false,
         }
     }
 
@@ -111,6 +147,10 @@ impl SchedulerConfig {
             max_instructions_per_round: MAX_INSTRUCTIONS_PER_ROUND,
             max_instructions_per_message: MAX_INSTRUCTIONS_PER_MESSAGE,
             max_instructions_per_install_code: NumInstructions::from(1_000 * B),
+            max_heap_delta_per_iteration: MAX_HEAP_DELTA_PER_ITERATION,
+            max_message_duration_before_warn_in_seconds:
+                MAX_MESSAGE_DURATION_BEFORE_WARN_IN_SECONDS,
+            only_track_system_heartbeat_errors: true,
         }
     }
 

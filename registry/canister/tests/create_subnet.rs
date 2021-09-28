@@ -21,6 +21,7 @@ use ic_registry_keys::{
     make_routing_table_record_key, make_subnet_list_record_key, make_subnet_record_key,
 };
 use ic_registry_routing_table::RoutingTable;
+use ic_registry_subnet_features::SubnetFeatures;
 use ic_registry_subnet_type::SubnetType;
 use ic_registry_transport::{
     insert,
@@ -119,12 +120,14 @@ fn test_the_anonymous_user_cannot_create_a_subnet() {
             gossip_pfn_evaluation_period_ms: 0,
             gossip_registry_poll_period_ms: 0,
             gossip_retransmission_request_ms: 0,
+            relay_percentage: None,
             start_as_nns: false,
             subnet_type: SubnetType::Application,
             is_halted: false,
             max_instructions_per_message: 5_000_000_000,
             max_instructions_per_round: 7_000_000_000,
             max_instructions_per_install_code: 200_000_000_000,
+            features: SubnetFeatures::default(),
         };
 
         // The anonymous end-user tries to create a subnet, bypassing the proposals
@@ -203,12 +206,14 @@ fn test_a_canister_other_than_the_proposals_canister_cannot_create_a_subnet() {
             gossip_pfn_evaluation_period_ms: 0,
             gossip_registry_poll_period_ms: 0,
             gossip_retransmission_request_ms: 0,
+            relay_percentage: Some(50),
             start_as_nns: false,
             subnet_type: SubnetType::Application,
             is_halted: false,
             max_instructions_per_message: 5_000_000_000,
             max_instructions_per_round: 7_000_000_000,
             max_instructions_per_install_code: 200_000_000_000,
+            features: SubnetFeatures::default(),
         };
 
         // The attacker canister tries to create a subnet, pretending to be the
@@ -297,12 +302,14 @@ fn test_accepted_proposal_mutates_the_registry_no_subnet_apriori() {
             gossip_pfn_evaluation_period_ms: 0,
             gossip_registry_poll_period_ms: 0,
             gossip_retransmission_request_ms: 0,
+            relay_percentage: None,
             start_as_nns: false,
             subnet_type: SubnetType::Application,
             is_halted: false,
             max_instructions_per_message: 5_000_000_000,
             max_instructions_per_round: 7_000_000_000,
             max_instructions_per_install_code: 200_000_000_000,
+            features: SubnetFeatures::default(),
         };
 
         assert!(
@@ -447,12 +454,14 @@ fn test_accepted_proposal_mutates_the_registry_some_subnets_present() {
             gossip_pfn_evaluation_period_ms: 0,
             gossip_registry_poll_period_ms: 0,
             gossip_retransmission_request_ms: 0,
+            relay_percentage: Some(10),
             start_as_nns: false,
             subnet_type: SubnetType::Application,
             is_halted: false,
             max_instructions_per_message: 5_000_000_000,
             max_instructions_per_round: 7_000_000_000,
             max_instructions_per_install_code: 200_000_000_000,
+            features: SubnetFeatures::default(),
         };
 
         assert!(

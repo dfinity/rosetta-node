@@ -17,6 +17,7 @@ use strum::IntoEnumIterator;
 pub mod util {
     use super::*;
     use crate::api::CspThresholdSignError;
+    use crate::server::api::ThresholdSignatureCspServer;
     use ic_crypto_internal_threshold_sig_bls12381::types::public_coefficients::conversions::try_number_of_nodes_from_csp_pub_coeffs;
 
     /// Test that a set of threshold signatures behaves correctly.
@@ -56,7 +57,8 @@ pub mod util {
         let signatures: Result<Vec<CspSignature>, CspThresholdSignError> = signers
             .iter()
             .map(|(csp, key_id)| {
-                csp.threshold_sign_to_be_removed(AlgorithmId::ThresBls12_381, message, *key_id)
+                csp.csp_server
+                    .threshold_sign(AlgorithmId::ThresBls12_381, message, *key_id)
             })
             .collect();
         let signatures = signatures.expect("Signing failed");
@@ -67,7 +69,8 @@ pub mod util {
                 if algorithm_id != AlgorithmId::ThresBls12_381 {
                     if let Some((csp, key_id)) = signers.get(0) {
                         assert!(
-                            csp.threshold_sign_to_be_removed(algorithm_id, message, *key_id)
+                            csp.csp_server
+                                .threshold_sign(algorithm_id, message, *key_id)
                                 .is_err(),
                             "Managed to threshold sign with algorithm ID {:?}",
                             algorithm_id
@@ -85,12 +88,9 @@ pub mod util {
                     "Bad RNG: A randomly generated KeyId was in the list of keys"
                 );
                 assert!(
-                    csp.threshold_sign_to_be_removed(
-                        AlgorithmId::ThresBls12_381,
-                        message,
-                        wrong_key_id
-                    )
-                    .is_err(),
+                    csp.csp_server
+                        .threshold_sign(AlgorithmId::ThresBls12_381, message, wrong_key_id)
+                        .is_err(),
                     "A randomly generated key_id managed to sign"
                 );
             }
@@ -322,7 +322,7 @@ mod secret_key_injector {
         csp.insert_secret_key(key_id, secret_key);
     }
 
-    fn dummy_csprng() -> impl CryptoRng + Rng {
+    fn dummy_csprng() -> impl CryptoRng + Rng + Clone {
         ChaChaRng::seed_from_u64(42)
     }
 

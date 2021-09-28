@@ -1,14 +1,13 @@
 //! Utilities for key generation and key identifier generation
 
 use crate::api::{CspKeyGenerator, CspSecretKeyStoreChecker};
-use crate::hash::Sha256Hasher;
 use crate::secret_key_store::{SecretKeyStore, SecretKeyStoreError};
 use crate::types::{CspPop, CspPublicKey, CspSecretKey};
 use crate::Csp;
 use ic_crypto_internal_basic_sig_ed25519 as ed25519;
 use ic_crypto_internal_multi_sig_bls12381 as multi_sig;
 use ic_crypto_internal_tls::keygen::generate_tls_key_pair_der;
-use ic_crypto_internal_types::context::{Context, DomainSeparationContext};
+use ic_crypto_sha::{Context, DomainSeparationContext};
 use ic_crypto_tls_interfaces::TlsPublicKeyCert;
 use ic_types::crypto::{AlgorithmId, CryptoError, KeyId};
 use ic_types::NodeId;
@@ -19,7 +18,7 @@ use std::convert::TryFrom;
 const KEY_ID_DOMAIN: &str = "ic-key-id";
 
 use ic_crypto_internal_types::encrypt::forward_secure::CspFsEncryptionPublicKey;
-use ic_crypto_sha256::Sha256;
+use ic_crypto_sha::Sha256;
 pub use tls_keygen::tls_cert_hash_as_key_id;
 
 #[cfg(test)]
@@ -131,18 +130,20 @@ pub fn public_key_hash_as_key_id(pk: &CspPublicKey) -> KeyId {
 // algorithm_id is a 1-byte value, and size(pk_bytes) is the size of
 // pk_bytes as u32 in BigEndian format.
 fn bytes_hash_as_key_id(alg_id: AlgorithmId, bytes: &[u8]) -> KeyId {
-    let mut hasher = Sha256Hasher::new(&DomainSeparationContext::new(KEY_ID_DOMAIN.to_string()));
-    hasher.update(&[alg_id as u8]);
+    let mut hash =
+        Sha256::new_with_context(&DomainSeparationContext::new(KEY_ID_DOMAIN.to_string()));
+    hash.write(&[alg_id as u8]);
     let bytes_size = u32::try_from(bytes.len()).expect("type conversion error");
-    hasher.update(&bytes_size.to_be_bytes());
-    hasher.update(bytes);
-    KeyId::from(hasher.finalize())
+    hash.write(&bytes_size.to_be_bytes());
+    hash.write(bytes);
+    KeyId::from(hash.finish())
 }
 
 /// Compute the key identifier for a forward secure encryption public key
 pub fn forward_secure_key_id(public_key: &CspFsEncryptionPublicKey) -> KeyId {
-    let mut hash = Sha256::new();
-    hash.write(DomainSeparationContext::new("KeyId from CspFsEncryptionPublicKey").as_bytes());
+    let mut hash = Sha256::new_with_context(&DomainSeparationContext::new(
+        "KeyId from CspFsEncryptionPublicKey",
+    ));
     let variant: &'static str = public_key.into();
     hash.write(DomainSeparationContext::new(variant).as_bytes());
     match public_key {

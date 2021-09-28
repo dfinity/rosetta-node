@@ -13,9 +13,9 @@ Instead, `/construction/submit` returns the status of all the operations in the 
 
 ## Deriving neuron address
 
-Neuron account address must be computed to make staking is possible.
-Call `/neuron/derive` endpoint with exactly the same arguments as `/construction/derive` to compute the ledger address corresponding to the neuron controlled by the public key.
-For now only a one key can only control a single neuron, but this restriction might be lifted in the future.
+Neuron account address must be computed to make staking possible.
+Call `/construction/derive` endpoint with metadata field `account_type` set to `"neuron"` to compute the ledger address corresponding to the neuron controlled by the public key.
+For now one key can only control a single neuron, but this restriction might be lifted in the future.
 
 ### Request
 
@@ -28,6 +28,9 @@ For now only a one key can only control a single neuron, but this restriction mi
   "public_key": {
     "hex_bytes": "1b400d60aaf34eaf6dcbab9bba46001a23497886cf11066f7846933d30e5ad3f",
     "curve_type": "edwards25519"
+  },
+  "metadata": {
+    "account_type": "neuron"
   }
 }
 ```

@@ -6,14 +6,16 @@ pub use errors::{CanisterHeartbeatError, MessageAcceptanceError};
 pub use errors::{HypervisorError, TrapCode};
 use ic_base_types::NumBytes;
 use ic_registry_provisional_whitelist::ProvisionalWhitelist;
+use ic_types::ComputeAllocation;
 use ic_types::{
     ingress::{IngressStatus, WasmResult},
-    messages::{MessageId, SignedIngressContent, UserQuery},
+    messages::{CertificateDelegation, MessageId, SignedIngressContent, UserQuery},
     user_error::UserError,
-    ExecutionRound, Height, NumInstructions, Randomness, Time,
+    Cycles, ExecutionRound, Height, NumInstructions, Randomness, Time,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, RwLock};
+use tower::util::BoxService;
 
 /// Instance execution statistics. The stats are cumulative and
 /// contain measurements from the point in time when the instance was
@@ -46,7 +48,7 @@ pub enum SubnetAvailableMemoryError {
 /// subnet's capacity. As we execute canisters in parallel, we need to
 /// provide them with a way to view the latest state of memory availble in a
 /// thread safe way. Hence, we use `Arc<RwLock<>>` here.
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SubnetAvailableMemory(Arc<RwLock<NumBytes>>);
 
 impl SubnetAvailableMemory {
@@ -78,6 +80,15 @@ impl SubnetAvailableMemory {
     }
 }
 
+// Canister and subnet configuration parameters required for execution.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ExecutionParameters {
+    pub instruction_limit: NumInstructions,
+    pub canister_memory_limit: NumBytes,
+    pub subnet_available_memory: SubnetAvailableMemory,
+    pub compute_allocation: ComputeAllocation,
+}
+
 /// The data structure returned by
 /// `ExecutionEnvironment.execute_canister_message()`.
 pub struct ExecuteMessageResult<CanisterState> {
@@ -95,6 +106,9 @@ pub struct ExecuteMessageResult<CanisterState> {
 
 pub type HypervisorResult<T> = Result<T, HypervisorError>;
 
+pub type QueryExecutionService =
+    BoxService<(UserQuery, Option<CertificateDelegation>), WasmResult, UserError>;
+
 /// Interface for the component to execute queries on canisters.  It can be used
 /// by the HttpHandler and other system components to execute queries.
 pub trait QueryHandler: Send + Sync {
@@ -107,8 +121,8 @@ pub trait QueryHandler: Send + Sync {
     /// Handle a query of type `UserQuery` which was sent by an end user.
     fn query(
         &self,
-        q: UserQuery,
-        processing_state: Arc<Self::State>,
+        query: UserQuery,
+        state: Arc<Self::State>,
         data_certificate: Vec<u8>,
     ) -> Result<WasmResult, UserError>;
 }
@@ -372,6 +386,20 @@ pub trait SystemApi {
     /// See https://sdk.dfinity.org/docs/interface-spec/index.html#system-api-call
     fn ic0_call_on_cleanup(&mut self, fun: u32, env: u32) -> HypervisorResult<()>;
 
+    /// (deprecated) Please use `ic0_call_cycles_add128` instead, as this API
+    /// can only add a 64-bit value.
+    ///
+    /// Adds cycles to a call by moving them from the
+    /// canister's balance onto the call under construction.
+    /// The cycles are deducted immediately from the canister's
+    /// balance and moved back if the call cannot be performed (e.g. if
+    /// `ic0.call_perform` signals an error or if the canister invokes
+    /// `ic0.call_new` or returns without invoking `ic0.call_perform`).
+    ///
+    /// This traps if trying to transfer more cycles than are in the current
+    /// balance of the canister.
+    fn ic0_call_cycles_add(&mut self, amount: u64) -> HypervisorResult<()>;
+
     /// Adds cycles to a call by moving them from the canister's balance onto
     /// the call under construction. The cycles are deducted immediately
     /// from the canister's balance and moved back if the call cannot be
@@ -381,7 +409,7 @@ pub trait SystemApi {
     ///
     /// This traps if trying to transfer more cycles than are in the current
     /// balance of the canister.
-    fn ic0_call_cycles_add(&mut self, amount: u64) -> HypervisorResult<()>;
+    fn ic0_call_cycles_add128(&mut self, amount: Cycles) -> HypervisorResult<()>;
 
     /// This call concludes assembling the call. It queues the call message to
     /// the given destination, but does not actually act on it until the current
@@ -432,9 +460,7 @@ pub trait SystemApi {
     /// Returns the current size of the stable memory in WebAssembly pages.
     ///
     /// It supports bigger stable memory sizes indexed by 64 bit pointers.
-    ///
-    /// Note: This API is not fully implemented yet.
-    fn ic0_stable_size64(&self) -> HypervisorResult<u64>;
+    fn ic0_stable64_size(&self) -> HypervisorResult<u64>;
 
     /// Tries to grow the stable memory by additional_pages many pages
     /// containing zeros.
@@ -442,9 +468,7 @@ pub trait SystemApi {
     /// Otherwise, returns -1
     ///
     /// It supports bigger stable memory sizes indexed by 64 bit pointers.
-    ///
-    /// Note: This API is not fully implemented yet.
-    fn ic0_stable_grow64(&mut self, additional_pages: u64) -> HypervisorResult<i64>;
+    fn ic0_stable64_grow(&mut self, additional_pages: u64) -> HypervisorResult<i64>;
 
     /// Copies the data from location [offset, offset+size) of the stable memory
     /// to the location [dst, dst+size) in the canister memory.
@@ -453,9 +477,7 @@ pub trait SystemApi {
     /// memory or offset+size exceeds the size of the stable memory.
     ///
     /// It supports bigger stable memory sizes indexed by 64 bit pointers.
-    ///
-    /// Note: This API is not fully implemented yet.
-    fn ic0_stable_read64(
+    fn ic0_stable64_read(
         &self,
         dst: u64,
         offset: u64,
@@ -470,9 +492,7 @@ pub trait SystemApi {
     /// memory or offset+size exceeds the size of the stable memory.
     ///
     /// It supports bigger stable memory sizes indexed by 64 bit pointers.
-    ///
-    /// Note: This API is not fully implemented yet.
-    fn ic0_stable_write64(
+    fn ic0_stable64_write(
         &mut self,
         offset: u64,
         src: u64,
@@ -495,18 +515,45 @@ pub trait SystemApi {
         additional_pages: u32,
     ) -> HypervisorResult<i32>;
 
+    /// (deprecated) Please use `ic0_canister_cycles_balance128` instead.
+    /// This API supports only 64-bit values.
+    ///
     /// Returns the current balance in cycles.
+    ///
+    /// Traps if current canister balance cannot fit in a 64-bit value.
     fn ic0_canister_cycle_balance(&self) -> HypervisorResult<u64>;
 
+    /// Returns the current balance in cycles.
+    fn ic0_canister_cycles_balance128(&self) -> HypervisorResult<(u64, u64)>;
+
+    /// (deprecated) Please use `ic0_msg_cycles_available128` instead.
+    /// This API supports only 64-bit values.
+    ///
     /// Cycles sent in the current call and still available.
+    ///
+    /// Traps if the amount of cycles available cannot fit in a 64-bit value.
     fn ic0_msg_cycles_available(&self) -> HypervisorResult<u64>;
 
+    /// Cycles sent in the current call and still available.
+    fn ic0_msg_cycles_available128(&self) -> HypervisorResult<(u64, u64)>;
+
+    /// (deprecated) Please use `ic0_msg_cycles_refunded128` instead.
+    /// This API supports only 64-bit values.
+    ///
     /// Cycles that came back with the response, as a refund.
+    ///
+    /// Traps if the amount of refunded cycles cannot fit in a 64-bit value.
     fn ic0_msg_cycles_refunded(&self) -> HypervisorResult<u64>;
 
-    /// This moves cycles from the call to the canister balance.
-    /// It can be called multiple times, each time adding more cycles to the
-    /// balance.
+    /// Cycles that came back with the response, as a refund.
+    fn ic0_msg_cycles_refunded128(&self) -> HypervisorResult<(u64, u64)>;
+
+    /// (deprecated) Please use `ic0_msg_cycles_accept128` instead.
+    /// This API supports only 64-bit values.
+    ///
+    /// This moves cycles from the
+    /// call to the canister balance. It can be called multiple times, each
+    /// time adding more cycles to the balance.
     ///
     /// It moves no more cycles than `max_amount`.
     ///
@@ -523,6 +570,26 @@ pub trait SystemApi {
     /// refund can come back to the canister after this call finishes which
     /// causes the canister's balance to overflow.
     fn ic0_msg_cycles_accept(&mut self, max_amount: u64) -> HypervisorResult<u64>;
+
+    /// This moves cycles from the call to the canister balance.
+    /// It can be called multiple times, each time adding more cycles to the
+    /// balance.
+    ///
+    /// It moves no more cycles than `max_amount`.
+    ///
+    /// It moves no more cycles than available according to
+    /// `ic0.msg_cycles_available128`, and
+    ///
+    /// The canister balance afterwards does not exceed
+    /// maximum amount of cycles it can hold (public spec refers to this
+    /// constant as MAX_CANISTER_BALANCE) minus any possible outstanding
+    /// balances. However, canisters on system subnets have no balance
+    /// limit.
+    ///
+    /// EXE-117: the last point is not properly handled yet.  In particular, a
+    /// refund can come back to the canister after this call finishes which
+    /// causes the canister's balance to overflow.
+    fn ic0_msg_cycles_accept128(&mut self, max_amount: Cycles) -> HypervisorResult<(u64, u64)>;
 
     /// Sets the certified data for the canister.
     /// See: https://sdk.dfinity.org/docs/interface-spec/index.html#system-api-certified-data

@@ -167,7 +167,9 @@ impl LockableThresholdSigDataStore {
     }
 }
 
-impl<R: Rng + CryptoRng + Send + Sync> CryptoComponentFatClient<Csp<R, ProtoSecretKeyStore>> {
+impl<R: Rng + CryptoRng + Send + Sync + Clone>
+    CryptoComponentFatClient<Csp<R, ProtoSecretKeyStore>>
+{
     /// Creates a crypto component using the given `csprng` and fake `node_id`.
     pub fn new_with_rng_and_fake_node_id(
         csprng: R,

@@ -1,3 +1,5 @@
+use crate::models::OperationIdentifier;
+
 use super::*;
 use ledger_canister::AccountIdentifier;
 
@@ -30,6 +32,18 @@ impl OperationBuilder {
         })
     }
 
+    fn neuron_identifier(self, neuron_identifier: u64) -> Self {
+        let mut metadata = self.0.metadata.unwrap_or_default();
+        metadata.insert(
+            "neuron_identifier".to_owned(),
+            serde_json::to_value(neuron_identifier).unwrap(),
+        );
+        Self(Operation {
+            metadata: Some(metadata),
+            ..self.0
+        })
+    }
+
     fn build(self) -> Operation {
         self.0
     }
@@ -44,7 +58,7 @@ fn test_account(n: u64) -> AccountIdentifier {
 #[test]
 fn test_transfer_request_to_operations() {
     assert_eq!(
-        requests_to_operations(&[Request::Transfer(Transfer::Send {
+        Request::requests_to_operations(&[Request::Transfer(Transfer::Send {
             from: test_account(1),
             to: test_account(2),
             amount: ICPTs::from_e8s(100),
@@ -70,7 +84,7 @@ fn test_transfer_request_to_operations() {
 #[test]
 fn test_transfer_and_stake_requests_to_operations() {
     assert_eq!(
-        requests_to_operations(&[
+        Request::requests_to_operations(&[
             Request::Transfer(Transfer::Send {
                 from: test_account(1),
                 to: test_account(2),
@@ -78,7 +92,8 @@ fn test_transfer_and_stake_requests_to_operations() {
                 fee: ICPTs::from_e8s(10),
             }),
             Request::Stake(Stake {
-                account: test_account(2)
+                account: test_account(2),
+                neuron_identifier: 1,
             })
         ]),
         Ok(vec![
@@ -96,6 +111,7 @@ fn test_transfer_and_stake_requests_to_operations() {
                 .build(),
             OperationBuilder::new(3, "STAKE")
                 .account(test_account(2))
+                .neuron_identifier(1)
                 .build(),
         ])
     );
@@ -104,7 +120,7 @@ fn test_transfer_and_stake_requests_to_operations() {
 #[test]
 fn test_can_handle_multiple_transfers() {
     assert_eq!(
-        requests_to_operations(&[
+        Request::requests_to_operations(&[
             Request::Transfer(Transfer::Send {
                 from: test_account(1),
                 to: test_account(2),
@@ -145,4 +161,33 @@ fn test_can_handle_multiple_transfers() {
                 .build(),
         ])
     );
+}
+
+#[test]
+fn account_identifier_decode_test() {
+    // a good address
+    AccountIdentifier::from_hex("42a3eb61d549dc9fe6429ce2361ec60a569b8befe43eb15a3fc5c88516711bc5")
+        .unwrap();
+    // too long
+    AccountIdentifier::from_hex(
+        "42a3eb61d549dc9fe6429ce2361ec60a569b8befe43eb15a3fc5c88516711bc50",
+    )
+    .unwrap_err();
+    // invalid character
+    AccountIdentifier::from_hex("42a3eb61d549dc9fe6429ce2361ec60a569b8befe43eb15a3fc5c88516711bcz")
+        .unwrap_err();
+    AccountIdentifier::from_hex("42a3eb61d549dc9fe6429ce2361ec6Oa569b8befe43eb15a3fc5c88516711bc5")
+        .unwrap_err();
+    // too short
+    AccountIdentifier::from_hex("42a3eb61d549dc9fe6429ce2361ec60a569b8befe43eb15a3fc5c88516711bc")
+        .unwrap_err();
+    AccountIdentifier::from_hex("abcd").unwrap_err();
+    // wrong crc
+    AccountIdentifier::from_hex("32a3eb61d549dc9fe6429ce2361ec60a569b8befe43eb15a3fc5c88516711bc5")
+        .unwrap_err();
+    // 0x not allowed
+    AccountIdentifier::from_hex(
+        "0x42a3eb61d549dc9fe6429ce2361ec60a569b8befe43eb15a3fc5c88516711bc5",
+    )
+    .unwrap_err();
 }

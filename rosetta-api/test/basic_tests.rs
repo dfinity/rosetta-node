@@ -4,6 +4,7 @@ use ic_rosetta_api::models::*;
 
 use ic_rosetta_api::convert::{amount_, block_id, from_hash, timestamp, to_hash};
 use ic_rosetta_api::ledger_client::LedgerAccess;
+use ic_rosetta_api::transaction_id::TransactionIdentifier;
 use ic_rosetta_api::{RosettaRequestHandler, API_VERSION, NODE_VERSION};
 
 use std::path::PathBuf;
@@ -68,7 +69,12 @@ async fn smoke_test() {
             .unwrap(),
             block_id(&scribe.blockchain.front().unwrap()).unwrap(),
             None,
-            SyncStatus::new(scribe.blockchain.back().unwrap().index as i64, None),
+            SyncStatus {
+                current_index: scribe.blockchain.back().unwrap().index as i64,
+                target_index: None,
+                stage: None,
+                synced: None
+            },
             vec![]
         ))
     );
@@ -142,10 +148,18 @@ async fn smoke_test() {
 
     let msg = MempoolTransactionRequest::new(
         req_handler.network_id(),
-        TransactionIdentifier::new("hello there".to_string()),
+        TransactionIdentifier {
+            hash: "hello there".to_string(),
+        },
     );
     let res = req_handler.mempool_transaction(msg).await;
-    assert_eq!(res, Err(ApiError::MempoolTransactionMissing(false, None)));
+    assert_eq!(
+        res,
+        Err(ApiError::MempoolTransactionMissing(
+            false,
+            Default::default()
+        ))
+    );
 
     let msg = AccountBalanceRequest::new(
         req_handler.network_id(),
@@ -269,6 +283,48 @@ async fn blocks_test() {
         vec![BlockTransaction::new(block_id, trans)]
     );
     assert_eq!(resp.total_count, 1);
+
+    let resp = req_handler
+        .search_transactions(SearchTransactionsRequest::new(
+            req_handler.network_id(),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.total_count, scribe.blockchain.len() as i64);
+    assert_eq!(resp.transactions.len(), scribe.blockchain.len());
+    assert_eq!(resp.next_offset, None);
+
+    let mut req = SearchTransactionsRequest::new(req_handler.network_id(), None, None);
+    req.max_block = Some(100);
+    req.limit = Some(10);
+    req.offset = Some(30);
+
+    let resp = req_handler.search_transactions(req.clone()).await.unwrap();
+
+    assert_eq!(resp.total_count, 71);
+    assert_eq!(resp.transactions.len(), 10);
+    assert_eq!(
+        resp.transactions.first().unwrap().block_identifier.index,
+        70
+    );
+    assert_eq!(resp.transactions.last().unwrap().block_identifier.index, 61);
+    assert_eq!(resp.next_offset, Some(40));
+
+    req.offset = Some(40);
+
+    let resp = req_handler.search_transactions(req.clone()).await.unwrap();
+
+    assert_eq!(resp.total_count, 61);
+    assert_eq!(resp.transactions.len(), 10);
+    assert_eq!(
+        resp.transactions.first().unwrap().block_identifier.index,
+        60
+    );
+    assert_eq!(resp.transactions.last().unwrap().block_identifier.index, 51);
+    assert_eq!(resp.next_offset, Some(50));
 }
 
 #[actix_rt::test]
@@ -607,6 +663,24 @@ async fn load_from_store_test(sqlite: bool, location: PathBuf) {
     let ledger = Arc::new(TestLedger::from_blockchain(blocks));
     let req_handler = RosettaRequestHandler::new(ledger);
     verify_account_search(&scribe, &req_handler, 11, last_verified).await;
+
+    let resp = req_handler
+        .search_transactions(SearchTransactionsRequest::new(
+            req_handler.network_id(),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.total_count as u64, last_verified - 10 + 1);
+    assert_eq!(resp.transactions.len() as u64, last_verified - 10 + 1);
+    assert_eq!(resp.next_offset, None);
+    assert_eq!(
+        resp.transactions.first().unwrap().block_identifier.index as u64,
+        last_verified
+    );
+    assert_eq!(resp.transactions.last().unwrap().block_identifier.index, 10);
 }
 
 // remove this test if it's in the way of a new spec
@@ -646,4 +720,67 @@ async fn load_unverified_test(sqlite: bool, location: PathBuf) {
     let ledger = Arc::new(TestLedger::from_blockchain(blocks));
     let req_handler = RosettaRequestHandler::new(ledger);
     verify_account_search(&scribe, &req_handler, 51, last_verified).await;
+}
+
+#[actix_rt::test]
+async fn store_batch_test_on_disk_store() {
+    init_test_logger();
+    let tmpdir = create_tmp_dir();
+    store_batch_test(false, tmpdir.path().into()).await;
+}
+
+#[actix_rt::test]
+async fn store_batch_test_sqlite_store() {
+    init_test_logger();
+    let tmpdir = create_tmp_dir();
+    store_batch_test(true, tmpdir.path().into()).await;
+}
+
+async fn store_batch_test(sqlite: bool, location: PathBuf) {
+    let scribe = Scribe::new_with_sample_data(10, 150);
+
+    let mut blocks = create_blocks(sqlite, location);
+    for hb in &scribe.blockchain {
+        if hb.index < 21 {
+            blocks.add_block(hb.clone()).unwrap();
+        }
+    }
+
+    assert_eq!(
+        blocks.block_store.get_at(20).unwrap(),
+        *scribe.blockchain.get(20).unwrap()
+    );
+    assert!(blocks.block_store.get_at(21).is_err());
+
+    let mut part2: Vec<HashedBlock> = scribe.blockchain.iter().skip(21).cloned().collect();
+
+    let mut part3 = part2.split_off(10);
+    part3.push(scribe.blockchain.get(30).unwrap().clone()); // this will cause an error
+
+    blocks.add_blocks_batch(part2).unwrap();
+    assert_eq!(
+        blocks.block_store.get_at(30).unwrap(),
+        *scribe.blockchain.get(30).unwrap()
+    );
+    assert!(blocks.block_store.get_at(31).is_err());
+
+    assert!(blocks.add_blocks_batch(part3.clone()).is_err());
+    assert_eq!(
+        blocks.block_store.get_at(30).unwrap(),
+        *scribe.blockchain.get(30).unwrap()
+    );
+    assert!(blocks.block_store.get_at(31).is_err());
+
+    part3.pop();
+
+    blocks.add_blocks_batch(part3).unwrap();
+    let last_idx = scribe.blockchain.back().unwrap().index;
+    assert_eq!(
+        blocks.block_store.get_at(last_idx).unwrap(),
+        *scribe.blockchain.back().unwrap()
+    );
+    assert!(blocks.block_store.get_at(last_idx + 1).is_err());
+
+    blocks.block_store.mark_last_verified(last_idx).unwrap();
+    verify_balances(&scribe, &blocks, 0);
 }

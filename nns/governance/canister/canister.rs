@@ -37,12 +37,17 @@ use ic_nns_governance::stable_mem_utils::{BufferedStableMemReader, BufferedStabl
 use ic_nns_governance::{
     governance::{Environment, Governance, Ledger},
     pb::v1::{
-        governance_error::ErrorType, manage_neuron::Command, manage_neuron::RegisterVote,
-        ClaimOrRefreshNeuronFromAccount, ClaimOrRefreshNeuronFromAccountResponse,
-        ExecuteNnsFunction, Governance as GovernanceProto, GovernanceError, ListNeurons,
-        ListNeuronsResponse, ListProposalInfo, ListProposalInfoResponse, ManageNeuron,
-        ManageNeuronResponse, Neuron, NeuronInfo, NeuronStakeTransfer, NnsFunction, Proposal,
-        ProposalInfo, Vote,
+        claim_or_refresh_neuron_from_account_response::Result as ClaimOrRefreshNeuronFromAccountResponseResult,
+        governance_error::ErrorType,
+        manage_neuron::{
+            claim_or_refresh::{By, MemoAndController},
+            ClaimOrRefresh, Command, RegisterVote,
+        },
+        manage_neuron_response, ClaimOrRefreshNeuronFromAccount,
+        ClaimOrRefreshNeuronFromAccountResponse, ExecuteNnsFunction, Governance as GovernanceProto,
+        GovernanceError, ListNeurons, ListNeuronsResponse, ListProposalInfo,
+        ListProposalInfoResponse, ManageNeuron, ManageNeuronResponse, Neuron, NeuronInfo,
+        NnsFunction, Proposal, ProposalInfo, Vote,
     },
 };
 
@@ -51,7 +56,7 @@ use ic_nns_common::access_control::check_caller_is_gtc;
 use ic_nns_governance::governance::HeapGrowthPotential;
 use ledger_canister::{
     metrics_encoder, AccountBalanceArgs, AccountIdentifier, ICPTs, Memo, SendArgs, Subaccount,
-    TotalSupplyArgs, TransactionNotification,
+    TotalSupplyArgs,
 };
 
 /// Size of the buffer for stable memory reads and writes.
@@ -420,54 +425,55 @@ fn vote() {
 fn neuron_stake_transfer_notification() {
     println!("{}neuron_stake_transfer_notification", LOG_PREFIX);
     check_caller_is_ledger();
-    over_async(candid_one, claim_or_top_up_neuron_from_notification);
+    panic!("Method removed. Please use ManageNeuron::ClaimOrRefresh.",)
 }
 
 #[export_name = "canister_update transaction_notification_pb"]
 fn neuron_stake_transfer_notification_pb() {
     println!("{}neuron_stake_transfer_notification_pb", LOG_PREFIX);
     check_caller_is_ledger();
-    over_async(protobuf, claim_or_top_up_neuron_from_notification);
+    panic!("Method removed. Please use ManageNeuron::ClaimOrRefresh.",)
 }
 
-async fn claim_or_top_up_neuron_from_notification(
-    txn: TransactionNotification,
-) -> ic_nns_common::pb::v1::NeuronId {
-    let now = governance_mut().env.now();
-    let result = governance_mut()
-        .claim_or_top_up_neuron_from_notification(NeuronStakeTransfer {
-            transfer_timestamp: now,
-            from: Some(txn.from),
-            from_subaccount: txn.from_subaccount.map(|s| s.to_vec()).unwrap_or_default(),
-            to_subaccount: txn.to_subaccount.map(|s| s.to_vec()).unwrap_or_default(),
-            neuron_stake_e8s: txn.amount.get_e8s(),
-            block_height: txn.block_height,
-            memo: txn.memo.0,
-        })
-        .await;
-    // Panic if we couldn't create or refresh the stake. The ledger is expecting
-    // this.
-    result.unwrap_or_else(|err| {
-        panic!(
-            "Couldn\'t create or refresh the stake of the neuron. Error: {:?}",
-            err
-        )
-    })
-}
-
+// DEPRECATED: Please use ManageNeuron::ClaimOrRefresh.
 #[export_name = "canister_update claim_or_refresh_neuron_from_account"]
 fn claim_or_refresh_neuron_from_account() {
     println!("{}claim_or_refresh_neuron_from_account", LOG_PREFIX);
     over_async(candid_one, claim_or_refresh_neuron_from_account_)
 }
 
+// DEPRECATED: Please use ManageNeuron::ClaimOrRefresh.
+//
+// Just redirects to ManageNeuron.
 #[candid_method(update, rename = "claim_or_refresh_neuron_from_account")]
 async fn claim_or_refresh_neuron_from_account_(
     claim_or_refresh: ClaimOrRefreshNeuronFromAccount,
 ) -> ClaimOrRefreshNeuronFromAccountResponse {
-    governance_mut()
-        .claim_or_refresh_neuron_from_account(&caller(), &claim_or_refresh)
-        .await
+    let manage_neuron_response = manage_neuron_(ManageNeuron {
+        id: None,
+        command: Some(Command::ClaimOrRefresh(ClaimOrRefresh {
+            by: Some(By::MemoAndController(MemoAndController {
+                memo: claim_or_refresh.memo,
+                controller: claim_or_refresh.controller,
+            })),
+        })),
+        neuron_id_or_subaccount: None,
+    })
+    .await;
+
+    match manage_neuron_response.command.unwrap() {
+        manage_neuron_response::Command::Error(error) => ClaimOrRefreshNeuronFromAccountResponse {
+            result: Some(ClaimOrRefreshNeuronFromAccountResponseResult::Error(error)),
+        },
+        manage_neuron_response::Command::ClaimOrRefresh(response) => {
+            ClaimOrRefreshNeuronFromAccountResponse {
+                result: Some(ClaimOrRefreshNeuronFromAccountResponseResult::NeuronId(
+                    response.refreshed_neuron_id.unwrap(),
+                )),
+            }
+        }
+        _ => panic!("Invalid command response"),
+    }
 }
 
 #[export_name = "canister_update claim_gtc_neurons"]
@@ -727,6 +733,11 @@ fn encode_metrics(w: &mut metrics_encoder::MetricsEncoder<Vec<u8>>) -> std::io::
         "Timestamp of the latest reward event, in seconds since the Unix epoch.",
     )?;
     w.encode_gauge(
+        "governance_seconds_since_latest_reward_event",
+        (governance.env.now() - governance.latest_reward_event().actual_timestamp_seconds) as f64,
+        "Seconds since the latest reward event",
+    )?;
+    w.encode_gauge(
         "governance_last_rewards_event_e8s",
         governance.latest_reward_event().distributed_e8s_equivalent as f64,
         "Total number of e8s distributed in the latest reward event.",
@@ -745,6 +756,65 @@ fn encode_metrics(w: &mut metrics_encoder::MetricsEncoder<Vec<u8>>) -> std::io::
         total_voting_power,
         "The total voting power, according to the most recent proposal.",
     )?;
+
+    if let Some(metrics) = &governance.proto.metrics {
+        w.encode_gauge(
+            "governance_total_supply_icp",
+            metrics.total_supply_icp as f64,
+            "Total number of minted ICP, at the time the metrics were last calculated, as reported by the ledger canister.",
+        )?;
+
+        w.encode_gauge(
+            "governance_total_staked_e8s",
+            metrics.total_staked_e8s as f64,
+            "Total number of e8s that are staked.",
+        )?;
+
+        w.encode_gauge(
+            "governance_dissolved_neurons_count",
+            metrics.dissolved_neurons_count as f64,
+            "Total number of neurons in the \"dissolved\" state.",
+        )?;
+
+        w.encode_gauge(
+            "governance_dissolved_neurons_e8s",
+            metrics.dissolved_neurons_e8s as f64,
+            "Total e8s held in neurons that are in the \"dissolved\" state.",
+        )?;
+
+        w.encode_gauge(
+            "governance_garbage_collectable_neurons_count",
+            metrics.garbage_collectable_neurons_count as f64,
+            "Total number of neurons that can be garbage collected.",
+        )?;
+
+        w.encode_gauge(
+            "governance_neurons_with_invalid_stake_count",
+            metrics.neurons_with_invalid_stake_count as f64,
+            "Total number of neurons having an invalid stake, e.g. less than the minimum allowed stake.",
+        )?;
+
+        w.encode_histogram(
+            "governance_dissolving_neurons_e8s",
+            metrics
+                .dissolving_neurons_e8s_buckets
+                .iter()
+                .map(|(k, v)| (*k as f64, *v)),
+            metrics.dissolving_neurons_count as f64,
+            "Total e8s held in dissolving neurons, grouped by dissolve delay (in years)",
+        )?;
+
+        w.encode_histogram(
+            "governance_not_dissolving_neurons_e8s",
+            metrics
+                .not_dissolving_neurons_e8s_buckets
+                .iter()
+                .map(|(k, v)| (*k as f64, *v)),
+            metrics.not_dissolving_neurons_count as f64,
+            "Total e8s held in not dissolving neurons, grouped by dissolve delay (in years)",
+        )?;
+    }
+
     Ok(())
 }
 

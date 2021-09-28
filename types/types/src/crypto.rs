@@ -1,4 +1,5 @@
 //! Defines crypto component types.
+pub mod canister_threshold_sig;
 pub mod dkg;
 pub mod error;
 pub mod threshold_sig;
@@ -171,39 +172,8 @@ impl From<i32> for AlgorithmId {
             11 => AlgorithmId::EcdsaP256,
             12 => AlgorithmId::EcdsaSecp256k1,
             13 => AlgorithmId::IcCanisterSignature,
+            14 => AlgorithmId::RsaSha256,
             _ => AlgorithmId::Placeholder,
-        }
-    }
-}
-
-impl From<KeyPurpose> for AlgorithmId {
-    fn from(key_purpose: KeyPurpose) -> Self {
-        match key_purpose {
-            KeyPurpose::QueryResponseSigning => AlgorithmId::Ed25519,
-            KeyPurpose::NodeSigning => AlgorithmId::Ed25519,
-            KeyPurpose::DkgDealingEncryption => AlgorithmId::StaticDhSecp256k1,
-            KeyPurpose::CommitteeSigning => AlgorithmId::MultiBls12_381,
-            KeyPurpose::Placeholder => AlgorithmId::Placeholder,
-        }
-    }
-}
-
-/// A public key.
-#[derive(Debug)]
-pub enum PublicKey {
-    UserPublicKey(UserPublicKey),
-    NodePublicKey(NodePublicKey),
-    IcpPublicKey(IcpPublicKey),
-    CommitteeMemberPublicKey(CommitteeMemberPublicKey),
-}
-
-impl CountBytes for PublicKey {
-    fn count_bytes(&self) -> usize {
-        match self {
-            PublicKey::UserPublicKey(key) => key.count_bytes(),
-            PublicKey::NodePublicKey(key) => key.count_bytes(),
-            PublicKey::IcpPublicKey(key) => key.count_bytes(),
-            PublicKey::CommitteeMemberPublicKey(key) => key.count_bytes(),
         }
     }
 }
@@ -230,46 +200,6 @@ impl fmt::Display for UserPublicKey {
 impl CountBytes for UserPublicKey {
     fn count_bytes(&self) -> usize {
         self.key.len()
-    }
-}
-
-/// A public key of an IC node.
-#[derive(Debug)]
-pub struct NodePublicKey {
-    pub key: Vec<u8>,
-    pub proof_of_possession: Vec<u8>,
-}
-
-impl CountBytes for NodePublicKey {
-    fn count_bytes(&self) -> usize {
-        self.key.len() + self.proof_of_possession.len()
-    }
-}
-
-/// An ICP public key.
-#[derive(Debug)]
-pub struct IcpPublicKey {
-    pub key: Vec<u8>,
-}
-
-impl CountBytes for IcpPublicKey {
-    fn count_bytes(&self) -> usize {
-        self.key.len()
-    }
-}
-
-/// A public key of a committee member.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct CommitteeMemberPublicKey {
-    #[serde(with = "serde_bytes")]
-    pub key: Vec<u8>,
-    #[serde(with = "serde_bytes")]
-    pub proof_of_possession: Vec<u8>,
-}
-
-impl CountBytes for CommitteeMemberPublicKey {
-    fn count_bytes(&self) -> usize {
-        self.key.len() + self.proof_of_possession.len()
     }
 }
 
@@ -424,6 +354,10 @@ impl CryptoError {
 
     pub fn is_dkg_transcript_not_found(&self) -> bool {
         matches!(self, CryptoError::DkgTranscriptNotFound { .. })
+    }
+
+    pub fn is_invalid_argument(&self) -> bool {
+        matches!(self, CryptoError::InvalidArgument { .. })
     }
 }
 

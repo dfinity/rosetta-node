@@ -1,11 +1,16 @@
-use crate::convert::{from_hex, invalid_request};
+use crate::{
+    convert::from_hex, errors::ApiError, request_types::RequestType,
+    transaction_id::TransactionIdentifier,
+};
 use ic_types::{
     messages::{HttpCanisterUpdate, HttpReadContent, HttpRequestEnvelope, HttpSubmitContent},
     CanisterId,
 };
-use ledger_canister::BlockHeight;
-use serde::{Deserialize, Serialize, Serializer};
-use std::convert::{TryFrom, TryInto};
+use serde::{Deserialize, Serialize};
+use std::{
+    convert::{TryFrom, TryInto},
+    fmt::Display,
+};
 
 // This file is generated from https://github.com/coinbase/rosetta-specifications using openapi-generator
 // Then heavily tweaked because openapi-generator no longer generates valid rust
@@ -15,12 +20,13 @@ pub type Object = serde_json::map::Map<String, serde_json::Value>;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConstructionSubmitResponse {
+    /// Transfers produce a real transaction identifier,
+    /// Neuron management requests produce a constant (pseudo) identifier.
+    ///
+    /// This field contains the transaction id of the last transfer operation.
+    /// If a transaction only contains neuron management operations
+    /// the constant identifier will be returned.
     pub transaction_identifier: TransactionIdentifier,
-
-    /// The index of the block just created, if known (i.e. if the ledger
-    /// canister responds within the deadline).
-    // FIXME: put this in metadata?
-    pub block_index: Option<BlockHeight>,
 
     pub metadata: Object,
 }
@@ -495,7 +501,7 @@ impl ConstructionCombineRequest {
 
     pub fn unsigned_transaction(&self) -> Result<UnsignedTransaction, ApiError> {
         serde_cbor::from_slice(&from_hex(&self.unsigned_transaction)?).map_err(|e| {
-            invalid_request(format!("Could not deserialize unsigned transaction: {}", e))
+            ApiError::invalid_request(format!("Could not deserialize unsigned transaction: {}", e))
         })
     }
 }
@@ -516,7 +522,7 @@ impl ConstructionCombineResponse {
 
     pub fn signed_transaction(&self) -> Result<SignedTransaction, ApiError> {
         serde_cbor::from_slice(&from_hex(&self.signed_transaction)?).map_err(|e| {
-            invalid_request(format!(
+            ApiError::invalid_request(format!(
                 "Cannot deserialize signed transaction in /construction/combine response: {}",
                 e
             ))
@@ -540,13 +546,50 @@ pub struct EnvelopePair {
     pub read_state: HttpRequestEnvelope<HttpReadContent>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub enum RequestType {
-    Send,
-    CreateStake,
-    SetDissolveTimestamp,
-    StartDissolve,
-    StopDissolve,
+impl EnvelopePair {
+    pub fn update_content(&self) -> &HttpCanisterUpdate {
+        match self.update.content {
+            HttpSubmitContent::Call { ref update } => update,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[serde(tag = "account_type")]
+pub enum AccountType {
+    Ledger,
+    Neuron {
+        #[serde(default)]
+        neuron_identifier: u64,
+    },
+}
+
+impl Default for AccountType {
+    fn default() -> Self {
+        Self::Ledger
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConstructionDeriveRequestMetadata {
+    #[serde(flatten)]
+    pub account_type: AccountType,
+}
+
+#[test]
+fn test_construction_derive_request_metadata() {
+    let r0 = ConstructionDeriveRequestMetadata {
+        account_type: AccountType::Neuron {
+            neuron_identifier: 1,
+        },
+    };
+
+    let s = serde_json::to_string(&r0).unwrap();
+    let r1 = serde_json::from_str(s.as_str()).unwrap();
+
+    assert_eq!(s, r#"{"account_type":"neuron","neuron_identifier":1}"#);
+    assert_eq!(r0, r1);
 }
 
 /// ConstructionDeriveRequest is passed to the `/construction/derive` endpoint.
@@ -565,7 +608,7 @@ pub struct ConstructionDeriveRequest {
 
     #[serde(rename = "metadata")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<Object>,
+    pub metadata: Option<ConstructionDeriveRequestMetadata>,
 }
 
 impl ConstructionDeriveRequest {
@@ -635,7 +678,7 @@ impl ConstructionHashRequest {
 
     pub fn signed_transaction(&self) -> Result<SignedTransaction, ApiError> {
         serde_cbor::from_slice(&from_hex(&self.signed_transaction)?).map_err(|e| {
-            invalid_request(format!(
+            ApiError::invalid_request(format!(
                 "Cannot deserialize the hash request in CBOR format because of: {}",
                 e
             ))
@@ -691,24 +734,12 @@ impl ConstructionMetadataRequest {
 #[cfg_attr(feature = "conversion", derive(LabelledGeneric))]
 pub struct ConstructionMetadataResponse {
     #[serde(rename = "metadata")]
-    pub metadata: Object,
+    pub metadata: ConstructionPayloadsRequestMetadata,
 
     #[serde(rename = "suggested_fee")]
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]
     pub suggested_fee: Option<Vec<Amount>>,
-}
-
-impl ConstructionMetadataResponse {
-    pub fn new(
-        metadata: Object,
-        suggested_fee: Option<Vec<Amount>>,
-    ) -> ConstructionMetadataResponse {
-        ConstructionMetadataResponse {
-            metadata,
-            suggested_fee,
-        }
-    }
 }
 
 /// ConstructionParseRequest is the input to the `/construction/parse` endpoint.
@@ -751,11 +782,18 @@ impl ConstructionParseRequest {
     pub fn transaction(&self) -> Result<ParsedTransaction, ApiError> {
         if self.signed {
             Ok(ParsedTransaction::Signed(
-                serde_cbor::from_slice(&from_hex(&self.transaction)?).map_err(invalid_request)?,
+                serde_cbor::from_slice(&from_hex(&self.transaction)?).map_err(|e| {
+                    ApiError::invalid_request(format!("Could not decode signed transaction: {}", e))
+                })?,
             ))
         } else {
             Ok(ParsedTransaction::Unsigned(
-                serde_cbor::from_slice(&from_hex(&self.transaction)?).map_err(invalid_request)?,
+                serde_cbor::from_slice(&from_hex(&self.transaction)?).map_err(|e| {
+                    ApiError::invalid_request(format!(
+                        "Could not decode unsigned transaction: {}",
+                        e
+                    ))
+                })?,
             ))
         }
     }
@@ -797,6 +835,32 @@ impl ConstructionParseResponse {
     }
 }
 
+/// Typed metadata of ConstructionPayloadsRequest.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ConstructionPayloadsRequestMetadata {
+    /// The memo to use for a ledger transfer.
+    /// A random number is used by default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memo: Option<u64>,
+
+    /// The earliest acceptable expiry date for a ledger transfer.
+    /// Must be withing 24 hours from created_at_time.
+    /// Represents number of nanoseconds since UNIX epoch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ingress_start: Option<u64>,
+
+    /// The latest acceptable expiry date for a ledger transfer.
+    /// Must be withing 24 hours from created_at_time.
+    /// Represents number of nanoseconds since UNIX epoch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ingress_end: Option<u64>,
+
+    /// If present, overrides ledger transaction creation time.
+    /// Represents number of nanoseconds since UNIX epoch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at_time: Option<u64>,
+}
+
 /// ConstructionPayloadsRequest is the request to `/construction/payloads`. It
 /// contains the network, a slice of operations, and arbitrary metadata that was
 /// returned by the call to `/construction/metadata`.  Optionally, the request
@@ -813,7 +877,7 @@ pub struct ConstructionPayloadsRequest {
 
     #[serde(rename = "metadata")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<Object>,
+    pub metadata: Option<ConstructionPayloadsRequestMetadata>,
 
     #[serde(rename = "public_keys")]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -975,7 +1039,7 @@ impl ConstructionSubmitRequest {
 
     pub fn signed_transaction(&self) -> Result<SignedTransaction, ApiError> {
         serde_cbor::from_slice(&from_hex(&self.signed_transaction)?).map_err(|e| {
-            invalid_request(format!(
+            ApiError::invalid_request(format!(
                 "Cannot deserialize the submit request in CBOR format because of: {}",
                 e
             ))
@@ -1094,32 +1158,7 @@ pub struct Error {
 
 impl Error {
     pub fn new(err_type: &ApiError) -> Self {
-        let (code, msg, retriable, details) = match err_type {
-            ApiError::InternalError(r, d) => (700, "Internal server error", r, d),
-            ApiError::InvalidRequest(r, d) => (701, "Invalid request", r, d),
-            ApiError::NotAvailableOffline(r, d) => (702, "Not available in offline mode", r, d),
-            ApiError::InvalidNetworkId(r, d) => (710, "Invalid NetworkId", r, d),
-            ApiError::InvalidAccountId(r, d) => (711, "Account not found", r, d),
-            ApiError::InvalidBlockId(r, d) => (712, "Block not found", r, d),
-            ApiError::InvalidPublicKey(r, d) => (713, "Invalid public key", r, d),
-            ApiError::InvalidTransactionId(r, d) => (714, "Invalid transaction id", r, d),
-            ApiError::MempoolTransactionMissing(r, d) => {
-                (720, "Transaction not in the mempool", r, d)
-            }
-            ApiError::BlockchainEmpty(r, d) => (721, "Blockchain is empty", r, d),
-            ApiError::InvalidTransaction(r, d) => {
-                (730, "An invalid transaction has been detected", r, d)
-            }
-            ApiError::ICError(r, d) => (740, "Internet Computer error", r, d),
-            ApiError::TransactionRejected(r, d) => (750, "Transaction rejected", r, d),
-            ApiError::TransactionExpired => (760, "Transaction expired", &false, &None),
-        };
-        Self {
-            code,
-            message: msg.to_string(),
-            retriable: *retriable,
-            details: details.clone(),
-        }
+        Self::from(err_type)
     }
 
     pub fn serialization_error_json_str() -> String {
@@ -1128,43 +1167,24 @@ impl Error {
     }
 }
 
-/// Each error has a "retriable" flag and optional "details"
-/// Rosetta error code and message are determined by the error type
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub enum ApiError {
-    InternalError(bool, Option<Object>),
-    InvalidRequest(bool, Option<Object>),
-    InvalidNetworkId(bool, Option<Object>),
-    InvalidAccountId(bool, Option<Object>),
-    InvalidBlockId(bool, Option<Object>),
-    InvalidPublicKey(bool, Option<Object>),
-    InvalidTransactionId(bool, Option<Object>),
-    MempoolTransactionMissing(bool, Option<Object>),
-    BlockchainEmpty(bool, Option<Object>),
-    InvalidTransaction(bool, Option<Object>),
-    NotAvailableOffline(bool, Option<Object>),
-    ICError(bool, Option<Object>),
-    TransactionRejected(bool, Option<Object>),
-    TransactionExpired,
-}
-
-impl serde::Serialize for ApiError {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        Error::new(self).serialize(s)
+impl Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            serde_json::to_string(self)
+                .expect("This should be impossible, all errors must be serializable")
+        )
     }
 }
 
-impl ApiError {
-    pub fn is_internal_error_403(&self) -> bool {
-        if let ApiError::InternalError(_, Some(err_obj)) = self {
-            err_obj
-                .get("error_message")
-                .map(|em| em.as_str().map(|e| e.contains("status: 403")))
-                .flatten()
-                .unwrap_or(false)
-        } else {
-            false
-        }
+impl actix_web::ResponseError for Error {
+    fn status_code(&self) -> ic_canister_client::HttpStatusCode {
+        self.code
+            .try_into()
+            .ok()
+            .and_then(|c| actix_web::http::StatusCode::from_u16(c).ok())
+            .unwrap_or_default()
     }
 }
 
@@ -1280,15 +1300,14 @@ impl NetworkIdentifier {
 impl TryInto<CanisterId> for &NetworkIdentifier {
     type Error = ApiError;
     fn try_into(self) -> Result<CanisterId, Self::Error> {
-        use crate::convert::into_error;
         use ic_types::PrincipalId;
 
         let principal_bytes = hex::decode(&self.network)
-            .map_err(|_| ApiError::InvalidNetworkId(false, into_error("not hex")))?;
+            .map_err(|_| ApiError::InvalidNetworkId(false, "not hex".into()))?;
         let principal_id = PrincipalId::try_from(&principal_bytes)
-            .map_err(|_| ApiError::InvalidNetworkId(false, into_error("invalid principal id")))?;
+            .map_err(|_| ApiError::InvalidNetworkId(false, "invalid principal id".into()))?;
         CanisterId::try_from(principal_id)
-            .map_err(|_| ApiError::InvalidNetworkId(false, into_error("invalid canister id")))
+            .map_err(|_| ApiError::InvalidNetworkId(false, "invalid canister id".into()))
     }
 }
 
@@ -1876,23 +1895,6 @@ impl Transaction {
             operations,
             metadata: None,
         }
-    }
-}
-
-/// The transaction_identifier uniquely identifies a transaction in a particular
-/// network and block or in the mempool.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "conversion", derive(LabelledGeneric))]
-pub struct TransactionIdentifier {
-    /// Any transactions that are attributable only to a block (ex: a block
-    /// event) should use the hash of the block as the identifier.
-    #[serde(rename = "hash")]
-    pub hash: String,
-}
-
-impl TransactionIdentifier {
-    pub fn new(hash: String) -> TransactionIdentifier {
-        TransactionIdentifier { hash }
     }
 }
 

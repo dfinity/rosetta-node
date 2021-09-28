@@ -71,6 +71,9 @@ message SubnetRecord {
   // The maximum number of instructions an `install_code` message can execute.
   // See the comments in `subnet_config.rs` for more details.
   uint64 max_instructions_per_install_code = 22;
+
+  // Information on whether a feature is supported by this subnet.
+  SubnetFeatures features = 23;
 }
 
 // Contains the initial DKG transcripts for the subnet and materials to construct a base CUP (i.e.
@@ -100,7 +103,7 @@ message RegistryStoreUri {
 	/// The uri at which the registry store data should be retrieved. The data
 	/// must be provided as gzipped tar archive
 	string uri = 1;
-	/// A SHA-265, hex encoded hash of the contents of the data stored at the
+	/// A SHA-256, hex encoded hash of the contents of the data stored at the
 	/// provided URI
 	string hash = 2;
 	/// The registry version that should be used for the catch up package contents
@@ -141,6 +144,16 @@ message GossipConfig {
   uint32 registry_poll_period_ms = 7;
   // period for sending a retransmission request    
   uint32 retransmission_request_ms = 8;
+  // config for advert relay optimization.
+  // If this field is not specified, the feature is turned off.
+  GossipAdvertRelayConfig relay_config = 9;
+}
+
+// Per subnet config for advert relay optimization.
+message GossipAdvertRelayConfig {
+  // The subset of peers to broadcast relays to, specified in percentage.
+  // 0 < relay_percentage <= 100
+  uint32 relay_percentage = 1;
 }
 
 // Represents the type of subnet. Subnets of different type might exhibit different
@@ -159,4 +172,8 @@ enum SubnetType {
     // A subnet type that is like application subnets but can have some
     // additional features.
     SUBNET_TYPE_VERIFIED_APPLICATION = 4;
+}
+
+message SubnetFeatures {
+    bool ecdsa_signatures = 1;
 }

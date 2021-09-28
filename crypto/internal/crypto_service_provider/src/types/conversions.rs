@@ -17,13 +17,14 @@ use ic_types::crypto::dkg::EncryptionPublicKeyPop;
 use ic_types::crypto::dkg::{Transcript, TranscriptBytes};
 use ic_types::crypto::{AlgorithmId, CryptoError, KeyId, UserPublicKey};
 use std::convert::TryFrom;
+use std::fmt;
 
 pub mod dkg_id_to_key_id;
 
 use crate::types::CspEncryptedSecretKey;
 use ic_crypto_internal_multi_sig_bls12381::types::conversions::protobuf::PopBytesFromProtoError;
 use ic_crypto_internal_threshold_sig_bls12381::dkg::secp256k1::types::CLibDealingBytes;
-use ic_crypto_internal_types::context::{Context, DomainSeparationContext};
+use ic_crypto_sha::{Context, DomainSeparationContext};
 use openssl::sha::Sha256;
 
 #[cfg(test)]
@@ -134,7 +135,7 @@ impl TryFrom<&PublicKeyProto> for CspPop {
 }
 
 /// A problem while reading PoP from a public key protobuf
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum CspPopFromPublicKeyProtoError {
     NoPopForAlgorithm {
         algorithm: AlgorithmId,
@@ -144,6 +145,20 @@ pub enum CspPopFromPublicKeyProtoError {
         pop_bytes: Vec<u8>,
         internal_error: String,
     },
+}
+impl fmt::Debug for CspPopFromPublicKeyProtoError {
+    /// Prints in a developer-friendly format.
+    ///
+    /// The standard rust encoding is used for all fields except the PoP, which
+    /// is encoded as hex rather than arrays of integers.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use CspPopFromPublicKeyProtoError::*;
+        match self {
+            NoPopForAlgorithm{ algorithm } => write!(f, "CspPopFromPublicKeyProtoError::NoPopForAlgorithm{{ algorithm: {:?} }}", algorithm),
+            MissingProofData => write!(f, "CspPopFromPublicKeyProtoError::MissingProofData"),
+            MalformedPop{ pop_bytes, internal_error } => write!(f, "CspPopFromPublicKeyProtoError::MalformedPop{{ pop_bytes: {:?}, internal_error: {} }}", hex::encode(&pop_bytes[..]), internal_error),
+        }
+    }
 }
 
 impl From<PopBytesFromProtoError> for CspPopFromPublicKeyProtoError {

@@ -20,26 +20,6 @@ fn fs_keys_should_be_valid() {
     );
 }
 
-#[test]
-fn encrypt_decrypt_single() {
-    let sys = &mk_sys_params();
-    let rng = &mut RAND_ChaCha20::new([45; 32]);
-    const KEY_GEN_ASSOCIATED_DATA: &[u8] = &[2u8, 5u8, 0u8, 4u8];
-
-    let (mut pk, mut dk) = kgen(KEY_GEN_ASSOCIATED_DATA, sys, rng);
-    let v = pk.serialize();
-    pk = PublicKeyWithPop::deserialize(&v);
-    assert!(
-        pk.verify(KEY_GEN_ASSOCIATED_DATA),
-        "Forward secure public key failed validation"
-    );
-    let epoch0 = vec![Bit::Zero; 5];
-    let message = 123;
-    let ct = enc_single(&pk.key_value, message, &epoch0, rng, sys);
-    let plain = dec_single(&mut dk, &ct, sys);
-    assert!(plain == message, "plaintext mismatch");
-}
-
 fn keys_and_ciphertext_for(
     epoch: Epoch,
     associated_data: &[u8],
@@ -109,7 +89,7 @@ fn should_encrypt_with_empty_associated_data() {
     );
 
     for i in 0..keys.len() {
-        let out = dec_chunks(&keys[i].1, i, &crsz, &tau, &associated_data, sys);
+        let out = dec_chunks(&keys[i].1, i, &crsz, &tau, &associated_data);
         assert_eq!(out.unwrap(), message[i], "Message decrypted wrongly");
     }
 }
@@ -130,7 +110,7 @@ fn should_decrypt_correctly_for_epoch_0() {
 
     for i in 0..keys.len() {
         let secret_key = &keys[i].1;
-        let out = dec_chunks(secret_key, i, &crsz, &tau, &associated_data, sys);
+        let out = dec_chunks(secret_key, i, &crsz, &tau, &associated_data);
         assert_eq!(out.unwrap(), message[i], "Message decrypted wrongly");
     }
 }
@@ -150,7 +130,7 @@ fn should_decrypt_correctly_for_epoch_1() {
 
     for i in 0..keys.len() {
         let secret_key = &keys[i].1;
-        let out = dec_chunks(secret_key, i, &crsz, &tau, &associated_data, sys);
+        let out = dec_chunks(secret_key, i, &crsz, &tau, &associated_data);
         assert_eq!(out.unwrap(), message[i], "Message decrypted wrongly");
     }
 }
@@ -170,7 +150,7 @@ fn should_decrypt_correctly_for_epoch_5() {
 
     for i in 0..keys.len() {
         let secret_key = &keys[i].1;
-        let out = dec_chunks(secret_key, i, &crsz, &tau, &associated_data, sys);
+        let out = dec_chunks(secret_key, i, &crsz, &tau, &associated_data);
         assert_eq!(out.unwrap(), message[i], "Message decrypted wrongly");
     }
 }
@@ -190,7 +170,7 @@ fn should_decrypt_correctly_for_epoch_10() {
 
     for i in 0..keys.len() {
         let secret_key = &keys[i].1;
-        let out = dec_chunks(secret_key, i, &crsz, &tau, &associated_data, sys);
+        let out = dec_chunks(secret_key, i, &crsz, &tau, &associated_data);
         assert_eq!(out.unwrap(), message[i], "Message decrypted wrongly");
     }
 }
