@@ -26,6 +26,7 @@ pub struct SummaryPayload {
 }
 
 /// Block payload is either summary or a data payload).
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum BlockPayload {
     /// A BlockPayload::Summary contains only a DKG Summary
@@ -66,37 +67,20 @@ impl BlockPayload {
         }
     }
 
-    /// Returns a reference to DKG dealings. Panics if called on a summary
+    /// Returns a reference to DKG data. Panics if called on a summary
     /// payload.
-    pub fn as_dealings(&self) -> &dkg::Dealings {
+    pub fn as_data(&self) -> &DataPayload {
         match self {
-            BlockPayload::Data(data) => &data.dealings,
-            _ => panic!("No DKG dealings available on a summary block."),
+            BlockPayload::Data(data) => data,
+            _ => panic!("No data payload available on a summary block."),
         }
     }
 
-    /// Returns DKG dealings. Panics if called on a summary payload.
-    pub fn into_dealings(self) -> dkg::Dealings {
+    /// Returns DKG data. Panics if called on a summary payload.
+    pub fn into_data(self) -> DataPayload {
         match self {
-            BlockPayload::Data(data) => data.dealings,
-            _ => panic!("No DKG dealings available on a summary block."),
-        }
-    }
-
-    /// Return a reference to batch payload. Panics if called on a summary
-    /// payload.
-    pub fn as_batch_payload(&self) -> &BatchPayload {
-        match self {
-            BlockPayload::Data(data) => &data.batch,
-            _ => panic!("No batch payload available on a summary block."),
-        }
-    }
-
-    /// Return the batch payload. Panics if called on a summary payload.
-    pub fn into_batch_payload(self) -> BatchPayload {
-        match self {
-            BlockPayload::Data(data) => data.batch,
-            _ => panic!("No batch payload available on a summary block."),
+            BlockPayload::Data(data) => data,
+            _ => panic!("No data payload available on a summary block."),
         }
     }
 
@@ -143,6 +127,10 @@ impl std::fmt::Display for PayloadType {
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub struct Payload {
     payload_type: PayloadType,
+    // It is not crucial that Arc used here is unique, because the data referenced remains
+    // immutable. We use Arc only to optimize cloning cost.
+    #[serde(serialize_with = "ic_utils::serde_arc::serialize_arc")]
+    #[serde(deserialize_with = "ic_utils::serde_arc::deserialize_arc")]
     payload: Arc<Hashed<CryptoHashOf<BlockPayload>, Thunk<BlockPayload>>>,
 }
 
@@ -220,16 +208,16 @@ impl From<Payload> for BlockPayload {
     }
 }
 
-impl From<dkg::Summary> for BlockPayload {
-    fn from(dkg: dkg::Summary) -> BlockPayload {
-        let ecdsa = ecdsa::Summary::default();
+impl From<(dkg::Summary, ecdsa::Summary)> for BlockPayload {
+    fn from((dkg, ecdsa): (dkg::Summary, ecdsa::Summary)) -> BlockPayload {
         BlockPayload::Summary(SummaryPayload { dkg, ecdsa })
     }
 }
 
-impl From<(BatchPayload, dkg::Dealings)> for BlockPayload {
-    fn from((batch, dealings): (BatchPayload, dkg::Dealings)) -> BlockPayload {
-        let ecdsa = ecdsa::Payload::default();
+impl From<(BatchPayload, dkg::Dealings, ecdsa::Payload)> for BlockPayload {
+    fn from(
+        (batch, dealings, ecdsa): (BatchPayload, dkg::Dealings, ecdsa::Payload),
+    ) -> BlockPayload {
         BlockPayload::Data(DataPayload {
             batch,
             dealings,
@@ -241,7 +229,7 @@ impl From<(BatchPayload, dkg::Dealings)> for BlockPayload {
 impl From<dkg::Payload> for BlockPayload {
     fn from(payload: dkg::Payload) -> BlockPayload {
         match payload {
-            dkg::Payload::Summary(summary) => summary.into(),
+            dkg::Payload::Summary(summary) => (summary, None).into(),
             dkg::Payload::Dealings(dealings) => BlockPayload::Data(DataPayload {
                 batch: BatchPayload::default(),
                 dealings,

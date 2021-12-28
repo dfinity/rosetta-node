@@ -18,7 +18,8 @@
 use crate::{
     artifact::{Artifact, StateSyncMessage},
     consensus::{
-        certification::CertificationMessage, dkg::Message as DkgMessage, ConsensusMessage,
+        certification::CertificationMessage, dkg::Message as DkgMessage, ecdsa::EcdsaMessage,
+        ConsensusMessage,
     },
     crypto::CryptoHash,
     messages::SignedIngress,
@@ -129,6 +130,9 @@ chunkable_artifact_impl! {CertificationMessage, |self|
 chunkable_artifact_impl! {DkgMessage, |self|
     ArtifactChunkData::UnitChunkData(Artifact::DkgMessage(*self))
 }
+chunkable_artifact_impl! {EcdsaMessage, |self|
+    ArtifactChunkData::UnitChunkData(Artifact::EcdsaMessage(*self))
+}
 
 impl ChunkableArtifact for StateSyncMessage {
     fn get_chunk(self: Box<Self>, chunk_id: ChunkId) -> Option<ArtifactChunk> {
@@ -224,7 +228,7 @@ impl TryFrom<pb::ArtifactChunk> for ArtifactChunk {
     type Error = ProxyDecodeError;
 
     fn try_from(chunk: pb::ArtifactChunk) -> Result<Self, Self::Error> {
-        let witness = chunk.witnesses.iter().map(|w| deserialize(&w)).collect();
+        let witness = chunk.witnesses.iter().map(|w| deserialize(w)).collect();
         let witness = match witness {
             Ok(witness) => witness,
             Err(_) => {

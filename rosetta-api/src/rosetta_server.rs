@@ -1,13 +1,11 @@
-use actix_rt::{spawn, time::interval};
+use actix_rt::time::interval;
+use actix_web::dev::Server;
 use actix_web::{get, post, web, App, HttpResponse, HttpServer};
 
 use crate::errors::ApiError;
 use crate::models::*;
 use crate::{ledger_client::LedgerAccess, RosettaRequestHandler};
 
-use futures::channel::oneshot;
-
-use actix_web::dev::Server;
 use log::{debug, error, info};
 use prometheus::{
     register_gauge, register_histogram, register_histogram_vec, register_int_counter,
@@ -303,7 +301,7 @@ pub struct RosettaApiServer {
     stopped: Arc<AtomicBool>,
     ledger: Arc<dyn LedgerAccess + Send + Sync>,
     server: Server,
-    sync_thread_join_handle: Mutex<Option<oneshot::Receiver<()>>>,
+    sync_thread_join_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl RosettaApiServer {
@@ -375,11 +373,9 @@ impl RosettaApiServer {
 
         let ledger = self.ledger.clone();
         let stopped = self.stopped.clone();
-        let (tx, rx) = oneshot::channel::<()>();
-        *self.sync_thread_join_handle.lock().unwrap() = Some(rx);
         let server = self.server.clone();
         // Every second start downloading new blocks, when that's done update the index
-        spawn(async move {
+        *self.sync_thread_join_handle.lock().unwrap() = Some(tokio::task::spawn(async move {
             let mut interval = interval(Duration::from_secs(1));
             let mut synced_at = std::time::Instant::now();
             while !stopped.load(Relaxed) {
@@ -409,10 +405,8 @@ impl RosettaApiServer {
                 }
             }
             ledger.cleanup().await;
-            tx.send(())
-                .expect("Blockchain sync thread: failed to send finish notification");
             info!("Blockchain sync thread finished");
-        });
+        }));
         self.server.clone().await
     }
 
@@ -421,8 +415,8 @@ impl RosettaApiServer {
         self.stopped.store(true, SeqCst);
         self.server.stop(true).await;
         // wait for the sync_thread to finish
-        if let Some(rx) = self.sync_thread_join_handle.lock().unwrap().take() {
-            rx.await
+        if let Some(jh) = self.sync_thread_join_handle.lock().unwrap().take() {
+            jh.await
                 .expect("Error on waiting for sync thread to finish");
         }
         debug!("Joined with blockchain sync thread");

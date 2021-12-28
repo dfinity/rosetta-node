@@ -7,9 +7,8 @@ edition = "2018"
 arrayvec = "0.5.1"
 async-trait = "0.1.41"
 base64 = "0.11.0"
+clap = "2.33.3"
 ed25519-dalek = "1.0.1"
-ff = "0.5.0"
-group = "0.2.0"
 hex = "0.4.2"
 ic-config = { path = "../config" }
 ic-crypto-internal-basic-sig-ed25519 = { path = "internal/crypto_lib/basic_sig/ed25519" }
@@ -22,7 +21,9 @@ ic-crypto-internal-basic-sig-iccsa = { path = "internal/crypto_lib/basic_sig/icc
 ic-crypto-internal-test-vectors = { path = "internal/test_vectors" }
 ic-crypto-internal-types = { path = "internal/crypto_lib/types" }
 ic-crypto-sha = { path = "sha" }
+ic-crypto-tls-cert-validation = { path = "node_key_validation/tls_cert_validation" }
 ic-crypto-tls-interfaces = { path = "tls_interfaces" }
+ic-crypto-utils-basic-sig = { path = "utils/basic_sig" }
 ic-interfaces = { path = "../interfaces" }
 ic-logger = { path = "../monitoring/logger" }
 ic-metrics = { path = "../monitoring/metrics" }
@@ -37,12 +38,11 @@ libsecp256k1 = "0.5.0"
 miracl_core = { version = "4.1.0", package = "miracl_core_bls12381" }
 num-integer = "0.1.41"
 openssl = "0.10.29"
-pairing = "0.15.0"
 parking_lot = "0.11.1"
 phantom_newtype = { path = "../phantom_newtype" }
 prometheus = { version = "0.12.0", features = [ "process" ] }
-prost = "0.7.0"
-prost-types = "0.7.0"
+prost = "0.9.0"
+prost-types = "0.9.0"
 rand = "0.7.3"
 rand_chacha = "0.2.2"
 rand_core = "0.5.1"
@@ -55,13 +55,17 @@ slog = { version = "2.5.2", features = ["nested-values", "max_level_trace", "rel
 slog-scope = "4.1.2"
 strum = "0.18.0"
 strum_macros = "0.18.0"
+tecdsa = { path = "internal/crypto_lib/threshold_sig/tecdsa" }
 tempfile = "3.1.0"
 tokio = { version = "1.9.0", features = ["full"] }
 tokio-openssl = "0.6.0"
-zeroize = { version = "1.1.0", features = ["zeroize_derive"] }
+# We use the `dangerous_configuration` flag for rustls to be able to set custom `ClientCertVerifier` and
+# `ServerCertVerifier` in order to verify node certificates.
+tokio-rustls = { version = "0.22.0", features = ["dangerous_configuration"] }
+zeroize = { version = "1.4.3", features = ["zeroize_derive"] }
 
 [build-dependencies]
-prost-build = "0.7.0"
+prost-build = "0.9.0"
 
 [dev-dependencies]
 criterion = "0.3.4"
@@ -71,7 +75,9 @@ ic-crypto-internal-basic-sig-ecdsa-secp256r1 = { path = "internal/crypto_lib/bas
 ic-crypto-internal-basic-sig-rsa-pkcs1 = { path = "internal/crypto_lib/basic_sig/rsa_pkcs1" }
 ic-crypto-internal-csp-test-utils = { path = "internal/csp_test_utils" }
 ic-crypto-test-utils = { path = "test_utils" }
+ic-crypto-test-utils-multi-sigs = { path = "test_utils/multi_sigs" }
 ic-crypto-test-utils-threshold-sigs = { path = "test_utils/threshold_sigs" }
+ic-crypto-test-utils-canister-threshold-sigs = { path = "test_utils/canister_threshold_sigs" }
 ic-test-utilities = { path = "../test_utilities" }
 json5 = "0.2.7"
 maplit = "1.0.2"
@@ -94,4 +100,8 @@ harness = false
 
 [[bench]]
 name = "ni_dkg"
+harness = false
+
+[[bench]]
+name = "multi_sig"
 harness = false

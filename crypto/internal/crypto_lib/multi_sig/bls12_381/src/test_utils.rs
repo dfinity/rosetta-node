@@ -4,9 +4,13 @@ use crate::{
     crypto as multi_crypto,
     types::{CombinedSignature, IndividualSignature, PublicKey, SecretKey},
 };
-use pairing::bls12_381::G1;
+use bls12_381::G1Projective;
 
-pub fn single_point_signature_verifies(secret_key: SecretKey, public_key: PublicKey, point: G1) {
+pub fn single_point_signature_verifies(
+    secret_key: SecretKey,
+    public_key: PublicKey,
+    point: G1Projective,
+) {
     let signature = multi_crypto::sign_point(point, secret_key);
     assert!(multi_crypto::verify_point(point, signature, public_key));
 }
@@ -15,7 +19,7 @@ pub fn individual_multi_signature_contribution_verifies(
     public_key: PublicKey,
     message: &[u8],
 ) {
-    let signature = multi_crypto::sign_message(&message, secret_key);
+    let signature = multi_crypto::sign_message(message, secret_key);
     assert!(multi_crypto::verify_individual_message_signature(
         message, signature, public_key
     ));

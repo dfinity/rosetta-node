@@ -3,7 +3,7 @@ use crate::{
     transaction_id::TransactionIdentifier,
 };
 use ic_types::{
-    messages::{HttpCanisterUpdate, HttpReadContent, HttpRequestEnvelope, HttpSubmitContent},
+    messages::{HttpCanisterUpdate, HttpReadStateContent, HttpRequestEnvelope, HttpSubmitContent},
     CanisterId,
 };
 use serde::{Deserialize, Serialize};
@@ -52,6 +52,10 @@ pub struct AccountBalanceRequest {
     #[serde(rename = "block_identifier")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub block_identifier: Option<PartialBlockIdentifier>,
+
+    #[serde(rename = "metadata")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<AccountBalanceMetadata>,
 }
 
 impl AccountBalanceRequest {
@@ -63,6 +67,7 @@ impl AccountBalanceRequest {
             network_identifier,
             account_identifier,
             block_identifier: None,
+            metadata: None,
         }
     }
 }
@@ -86,7 +91,7 @@ pub struct AccountBalanceResponse {
     /// identifier or global across the account address.
     #[serde(rename = "metadata")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<Object>,
+    pub metadata: Option<NeuronInfoResponse>,
 }
 
 impl AccountBalanceResponse {
@@ -543,7 +548,7 @@ pub type Request = (RequestType, Vec<EnvelopePair>);
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EnvelopePair {
     pub update: HttpRequestEnvelope<HttpSubmitContent>,
-    pub read_state: HttpRequestEnvelope<HttpReadContent>,
+    pub read_state: HttpRequestEnvelope<HttpReadStateContent>,
 }
 
 impl EnvelopePair {
@@ -561,7 +566,7 @@ pub enum AccountType {
     Ledger,
     Neuron {
         #[serde(default)]
-        neuron_identifier: u64,
+        neuron_index: u64,
     },
 }
 
@@ -580,15 +585,13 @@ pub struct ConstructionDeriveRequestMetadata {
 #[test]
 fn test_construction_derive_request_metadata() {
     let r0 = ConstructionDeriveRequestMetadata {
-        account_type: AccountType::Neuron {
-            neuron_identifier: 1,
-        },
+        account_type: AccountType::Neuron { neuron_index: 1 },
     };
 
     let s = serde_json::to_string(&r0).unwrap();
     let r1 = serde_json::from_str(s.as_str()).unwrap();
 
-    assert_eq!(s, r#"{"account_type":"neuron","neuron_identifier":1}"#);
+    assert_eq!(s, r#"{"account_type":"neuron","neuron_index":1}"#);
     assert_eq!(r0, r1);
 }
 
@@ -706,11 +709,17 @@ pub struct ConstructionMetadataRequest {
     /// subset required.
     #[serde(rename = "options")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub options: Option<Object>,
+    #[serde(default)]
+    pub options: Option<ConstructionMetadataRequestOptions>,
 
     #[serde(rename = "public_keys")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub public_keys: Option<Vec<PublicKey>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConstructionMetadataRequestOptions {
+    pub request_types: Vec<RequestType>,
 }
 
 impl ConstructionMetadataRequest {
@@ -999,7 +1008,7 @@ pub struct ConstructionPreprocessResponse {
     /// the caller.
     #[serde(rename = "options")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub options: Option<Object>,
+    pub options: Option<ConstructionMetadataRequestOptions>,
 
     #[serde(rename = "required_public_keys")]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2120,4 +2129,176 @@ impl Version {
             metadata,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "conversion", derive(LabelledGeneric))]
+pub struct NeuronSubaccountComponents {
+    #[serde(rename = "public_key")]
+    pub public_key: PublicKey,
+
+    #[serde(rename = "neuron_index")]
+    #[serde(default)]
+    pub neuron_index: u64,
+}
+
+/// We use this type to make query to the governance
+/// canister about the current neuron information.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "conversion", derive(LabelledGeneric))]
+#[serde(tag = "account_type")]
+pub enum BalanceAccountType {
+    #[serde(rename = "ledger")]
+    Ledger,
+    #[serde(rename = "neuron")]
+    Neuron {
+        #[serde(rename = "neuron_id")]
+        neuron_id: Option<u64>,
+
+        #[serde(flatten)]
+        subaccount_components: Option<NeuronSubaccountComponents>,
+
+        /// If is set to true, the information is
+        /// retrieved through an IC update call which may take significantly
+        /// longer to execute, but gives strong guarantees that the received
+        /// data has not been tampered with.
+        /// Otherwise the information is retrieved through a fast query call.
+        #[serde(rename = "verified_query")]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        verified_query: Option<bool>,
+    },
+}
+
+impl Default for BalanceAccountType {
+    fn default() -> Self {
+        Self::Ledger
+    }
+}
+
+/// The type of metadata for the /account/balance endpoint.
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "conversion", derive(LabelledGeneric))]
+pub struct AccountBalanceMetadata {
+    #[serde(rename = "account_type")]
+    #[serde(flatten)]
+    #[serde(default)]
+    pub account_type: BalanceAccountType,
+}
+
+#[test]
+fn test_neuron_info_request_parsing() {
+    let r1: AccountBalanceMetadata =
+        serde_json::from_str(r#"{ "account_type": "neuron", "neuron_id": 5 }"#).unwrap();
+    assert_eq!(
+        r1,
+        AccountBalanceMetadata {
+            account_type: BalanceAccountType::Neuron {
+                neuron_id: Some(5),
+                subaccount_components: None,
+                verified_query: None,
+            }
+        }
+    );
+    let r2: AccountBalanceMetadata = serde_json::from_str(
+        r#"{
+            "account_type": "neuron",
+            "neuron_index": 5,
+            "public_key": {
+              "hex_bytes": "1b400d60aaf34eaf6dcbab9bba46001a23497886cf11066f7846933d30e5ad3f",
+              "curve_type": "edwards25519"
+            }
+        }"#,
+    )
+    .unwrap();
+    assert_eq!(
+        r2,
+        AccountBalanceMetadata {
+            account_type: BalanceAccountType::Neuron {
+                neuron_id: None,
+                subaccount_components: Some(NeuronSubaccountComponents {
+                    neuron_index: 5,
+                    public_key: PublicKey {
+                        hex_bytes:
+                            "1b400d60aaf34eaf6dcbab9bba46001a23497886cf11066f7846933d30e5ad3f"
+                                .to_string(),
+                        curve_type: CurveType::Edwards25519
+                    }
+                }),
+                verified_query: None,
+            }
+        }
+    );
+
+    let r3: AccountBalanceMetadata = serde_json::from_str(
+        r#"{
+            "account_type": "neuron",
+            "public_key": {
+              "hex_bytes": "1b400d60aaf34eaf6dcbab9bba46001a23497886cf11066f7846933d30e5ad3f",
+              "curve_type": "edwards25519"
+            }
+        }"#,
+    )
+    .unwrap();
+    assert_eq!(
+        r3,
+        AccountBalanceMetadata {
+            account_type: BalanceAccountType::Neuron {
+                neuron_id: None,
+                subaccount_components: Some(NeuronSubaccountComponents {
+                    neuron_index: 0,
+                    public_key: PublicKey {
+                        hex_bytes:
+                            "1b400d60aaf34eaf6dcbab9bba46001a23497886cf11066f7846933d30e5ad3f"
+                                .to_string(),
+                        curve_type: CurveType::Edwards25519
+                    }
+                }),
+                verified_query: None,
+            }
+        }
+    );
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "conversion", derive(LabelledGeneric))]
+pub enum NeuronState {
+    #[serde(rename = "NOT_DISSOLVING")]
+    NotDissolving,
+    #[serde(rename = "DISSOLVING")]
+    Dissolving,
+    #[serde(rename = "DISSOLVED")]
+    Dissolved,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "conversion", derive(LabelledGeneric))]
+pub struct NeuronInfoResponse {
+    //    #[serde(rename = "neuron_id")]
+    //    pub neuron_id: u64,
+    #[serde(rename = "verified_query")]
+    pub verified_query: bool,
+
+    #[serde(rename = "retrieved_at_timestamp_seconds")]
+    pub retrieved_at_timestamp_seconds: u64,
+
+    /// The current state of the neuron.
+    #[serde(rename = "state")]
+    pub state: NeuronState,
+
+    /// The current age of the neuron.
+    #[serde(rename = "age_seconds")]
+    pub age_seconds: u64,
+
+    /// The current dissolve delay of the neuron.
+    #[serde(rename = "dissolve_delay_seconds")]
+    pub dissolve_delay_seconds: u64,
+
+    /// Current voting power of the neuron.
+    #[serde(rename = "voting_power")]
+    pub voting_power: u64,
+
+    /// When the Neuron was created. A neuron can only vote on proposals
+    /// submitted after its creation date.
+    #[serde(rename = "created_timestamp_seconds")]
+    pub created_timestamp_seconds: u64,
 }

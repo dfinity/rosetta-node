@@ -8,17 +8,17 @@ mod query;
 mod read_state;
 mod webauthn;
 
+pub use self::http::{
+    Authentication, Certificate, CertificateDelegation, Delegation, HasCanisterId,
+    HttpCanisterUpdate, HttpQueryContent, HttpQueryResponse, HttpQueryResponseReply, HttpReadState,
+    HttpReadStateContent, HttpReadStateResponse, HttpReply, HttpRequest, HttpRequestContent,
+    HttpRequestEnvelope, HttpRequestError, HttpResponseStatus, HttpStatusResponse,
+    HttpSubmitContent, HttpUserQuery, RawHttpRequestVal, ReplicaHealthStatus, SignedDelegation,
+};
 use crate::{user_id_into_protobuf, user_id_try_from_protobuf, Cycles, Funds, NumBytes, UserId};
 pub use blob::Blob;
-pub use http::{
-    Authentication, Certificate, CertificateDelegation, Delegation, HasCanisterId,
-    HttpCanisterUpdate, HttpQueryResponse, HttpQueryResponseReply, HttpReadContent, HttpReadState,
-    HttpReadStateResponse, HttpReply, HttpRequest, HttpRequestContent, HttpRequestEnvelope,
-    HttpResponseStatus, HttpStatusResponse, HttpSubmitContent, HttpUserQuery, RawHttpRequestVal,
-    ReadContent, ReplicaHealthStatus, SignedDelegation,
-};
 pub use ic_base_types::CanisterInstallMode;
-use ic_base_types::{CanisterId, CanisterIdError, PrincipalId};
+use ic_base_types::{CanisterId, PrincipalId};
 use ic_protobuf::proxy::{try_from_option_field, ProxyDecodeError};
 use ic_protobuf::state::canister_state_bits::v1 as pb;
 use ic_protobuf::types::v1 as pb_types;
@@ -30,8 +30,13 @@ pub use message_id::{MessageId, MessageIdError, EXPECTED_MESSAGE_ID_LENGTH};
 pub use query::UserQuery;
 pub use read_state::ReadState;
 use serde::{Deserialize, Serialize};
-use std::{convert::TryFrom, error::Error, fmt};
+use std::convert::TryFrom;
+use std::mem::size_of;
 pub use webauthn::{WebAuthnEnvelope, WebAuthnSignature};
+
+/// Same as [MAX_INTER_CANISTER_PAYLOAD_IN_BYTES], but of a primitive type
+/// that can be used for computation in const context.
+pub const MAX_INTER_CANISTER_PAYLOAD_IN_BYTES_U64: u64 = 2 * 1024 * 1024; // 2 MiB
 
 /// This sets the upper bound on how big a single inter-canister request or
 /// response can be.  We know that allowing messages larger than around 2MB has
@@ -40,7 +45,8 @@ pub use webauthn::{WebAuthnEnvelope, WebAuthnSignature};
 /// their blocks notarized; and when the consensus protocol is configured for
 /// smaller messages, a large message in the network can cause the finalization
 /// rate to drop.
-pub const MAX_INTER_CANISTER_PAYLOAD_IN_BYTES: NumBytes = NumBytes::new(2 * 1024 * 1024); // 2 MiB
+pub const MAX_INTER_CANISTER_PAYLOAD_IN_BYTES: NumBytes =
+    NumBytes::new(MAX_INTER_CANISTER_PAYLOAD_IN_BYTES_U64); // 2 MiB
 
 /// The maximum size of an inter-canister request or response that the IC can
 /// support.
@@ -51,7 +57,12 @@ pub const MAX_INTER_CANISTER_PAYLOAD_IN_BYTES: NumBytes = NumBytes::new(2 * 1024
 /// fields (e.g. sender: CanisterId), so it is not possible to statically
 /// compute an upper bound on their sizes.  Hopefully the additional space we
 /// have allocated here is sufficient.
-pub const MAX_XNET_PAYLOAD_IN_BYTES: NumBytes = NumBytes::new(2202009); // 2.1 MiB
+pub const MAX_XNET_PAYLOAD_IN_BYTES: NumBytes =
+    NumBytes::new(MAX_INTER_CANISTER_PAYLOAD_IN_BYTES_U64 * 21 / 20); // 2.1 MiB
+
+/// Maximum byte size of a valid inter-canister `Response`.
+pub const MAX_RESPONSE_COUNT_BYTES: usize =
+    size_of::<RequestOrResponse>() + MAX_INTER_CANISTER_PAYLOAD_IN_BYTES_U64 as usize;
 
 /// An end user's signature.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -178,46 +189,6 @@ impl TryFrom<pb::StopCanisterContext> for StopCanisterContext {
                 }
             };
         Ok(stop_canister_context)
-    }
-}
-
-/// Errors returned by `HttpHandler` when processing ingress messages.
-#[derive(Debug, Clone, Serialize)]
-pub enum HttpHandlerError {
-    InvalidMessageId(String),
-    InvalidIngressExpiry(String),
-    InvalidDelegationExpiry(String),
-    InvalidPrincipalId(String),
-    MissingPubkeyOrSignature(String),
-    InvalidEncoding(String),
-}
-
-impl From<serde_cbor::Error> for HttpHandlerError {
-    fn from(err: serde_cbor::Error) -> Self {
-        HttpHandlerError::InvalidEncoding(format!("{}", err))
-    }
-}
-
-impl fmt::Display for HttpHandlerError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            HttpHandlerError::InvalidMessageId(msg) => write!(f, "invalid message ID: {}", msg),
-            HttpHandlerError::InvalidIngressExpiry(msg) => write!(f, "{}", msg),
-            HttpHandlerError::InvalidDelegationExpiry(msg) => write!(f, "{}", msg),
-            HttpHandlerError::InvalidPrincipalId(msg) => write!(f, "invalid princial id: {}", msg),
-            HttpHandlerError::MissingPubkeyOrSignature(msg) => {
-                write!(f, "missing pubkey or signature: {}", msg)
-            }
-            HttpHandlerError::InvalidEncoding(err) => write!(f, "Invalid CBOR encoding: {}", err),
-        }
-    }
-}
-
-impl Error for HttpHandlerError {}
-
-impl From<CanisterIdError> for HttpHandlerError {
-    fn from(err: CanisterIdError) -> Self {
-        Self::InvalidPrincipalId(format!("Converting to canister id failed with {}", err))
     }
 }
 

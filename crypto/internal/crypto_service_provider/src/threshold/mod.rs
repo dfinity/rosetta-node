@@ -1,26 +1,29 @@
 //! Threshold signature implementation for the CSP
-use crate::api::{CspSecretKeyInjector, CspThresholdSignError, ThresholdSignatureCspClient};
+use crate::api::{CspThresholdSignError, ThresholdSignatureCspClient};
 use crate::secret_key_store::SecretKeyStore;
-use crate::server::api::ThresholdSignatureCspServer;
-use crate::threshold::dkg::public_coefficients_key_id;
-use crate::types::{CspPublicCoefficients, CspSecretKey, CspSignature, ThresBls12_381_Signature};
+use crate::types::conversions::key_id_from_csp_pub_coeffs;
+use crate::types::{CspPublicCoefficients, CspSignature, ThresBls12_381_Signature};
 use crate::Csp;
 use ic_crypto_internal_threshold_sig_bls12381 as clib;
 use ic_crypto_internal_threshold_sig_bls12381::types::public_coefficients::conversions::try_number_of_nodes_from_pub_coeff_bytes;
 use ic_crypto_internal_types::sign::threshold_sig::public_coefficients::bls12_381::PublicCoefficientsBytes;
 use ic_crypto_internal_types::sign::threshold_sig::public_key::bls12_381::PublicKeyBytes;
 use ic_crypto_internal_types::sign::threshold_sig::public_key::CspThresholdSigPublicKey;
-use ic_types::crypto::{AlgorithmId, CryptoError, CryptoResult, KeyId};
+#[cfg(test)]
+use ic_types::crypto::KeyId;
+use ic_types::crypto::{AlgorithmId, CryptoError, CryptoResult};
 use ic_types::NodeIndex;
 use rand::{CryptoRng, Rng};
 use std::convert::TryFrom;
-pub mod dkg;
+
 pub mod ni_dkg;
 
 #[cfg(test)]
 mod tests;
 
-impl<R: Rng + CryptoRng, S: SecretKeyStore> ThresholdSignatureCspClient for Csp<R, S> {
+impl<R: Rng + CryptoRng + Send + Sync, S: SecretKeyStore, C: SecretKeyStore>
+    ThresholdSignatureCspClient for Csp<R, S, C>
+{
     /// See the trait for documentation.
     ///
     /// Warning: The secret key store has no transactions, so in the event of
@@ -32,7 +35,7 @@ impl<R: Rng + CryptoRng, S: SecretKeyStore> ThresholdSignatureCspClient for Csp<
         threshold: ic_types::NumberOfNodes,
         signatory_eligibilty: &[bool],
     ) -> CryptoResult<(CspPublicCoefficients, Vec<Option<KeyId>>)> {
-        self.csp_server
+        self.csp_vault
             .threshold_keygen_for_test(algorithm_id, threshold, signatory_eligibilty)
             .map_err(CryptoError::from)
     }
@@ -43,9 +46,8 @@ impl<R: Rng + CryptoRng, S: SecretKeyStore> ThresholdSignatureCspClient for Csp<
         message: &[u8],
         public_coefficients: CspPublicCoefficients,
     ) -> Result<CspSignature, CspThresholdSignError> {
-        let key_id = public_coefficients_key_id(&public_coefficients);
-        self.csp_server
-            .threshold_sign(algorithm_id, message, key_id)
+        let key_id = key_id_from_csp_pub_coeffs(&public_coefficients);
+        self.csp_vault.threshold_sign(algorithm_id, message, key_id)
     }
 
     fn threshold_combine_signatures(
@@ -93,8 +95,10 @@ impl<R: Rng + CryptoRng, S: SecretKeyStore> ThresholdSignatureCspClient for Csp<
             AlgorithmId::ThresBls12_381 => {
                 let clib_public_coefficients_bytes =
                     PublicCoefficientsBytes::from(public_coefficients);
-                let public_key_bytes =
-                    clib::api::individual_public_key(&clib_public_coefficients_bytes, node_index)?;
+                let public_key_bytes = clib::api::individual_public_key_from_trusted_bytes(
+                    &clib_public_coefficients_bytes,
+                    node_index,
+                )?;
                 Ok(CspThresholdSigPublicKey::ThresBls12_381(public_key_bytes))
             }
             _ => Err(CryptoError::InvalidArgument {
@@ -140,11 +144,5 @@ impl<R: Rng + CryptoRng, S: SecretKeyStore> ThresholdSignatureCspClient for Csp<
                 message: format!("Unsupported algorithm: {:?}", algorithm_id),
             }),
         }
-    }
-}
-
-impl<R: Rng + CryptoRng, S: SecretKeyStore> CspSecretKeyInjector for Csp<R, S> {
-    fn insert_secret_key(&mut self, key_id: KeyId, sk: CspSecretKey) {
-        let _ignore_result = self.sks_write_lock().insert(key_id, sk, None);
     }
 }

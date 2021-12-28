@@ -17,8 +17,20 @@ import "ic_ledger/pb/v1/types.proto";
 // Note: The NodeOperatorRecord is defined in:
 // rs/protobuf/def/registry/node_operator/v1/node_operator.proto.
 message NodeProvider {
-    // The ID of the node provider.
+  // The ID of the node provider.
   ic_base_types.pb.v1.PrincipalId id = 1;
+
+  // The account where rewards earned from providing nodes will be sent.
+  ic_ledger.pb.v1.AccountIdentifier reward_account = 2;
+}
+
+// Used to update node provider records
+//
+// There is no need to specify a node provider Principal ID here, as Governance
+// uses the Principal ID of the caller as the Node Provider Principal ID.
+message UpdateNodeProvider {
+  // The account where rewards earned from providing nodes will be sent.
+  ic_ledger.pb.v1.AccountIdentifier reward_account = 1;
 }
 
 // Proposal types are organized into topics. Neurons can automatically
@@ -158,6 +170,10 @@ message NeuronInfo {
   // When the Neuron was created. A neuron can only vote on proposals
   // submitted after its creation date.
   uint64 created_timestamp_seconds = 7;
+  // Current stake of the neuron, in e8s.
+  uint64 stake_e8s = 8;
+  // Timestamp when this neuron joined the community fund.
+  optional uint64 joined_community_fund_timestamp_seconds = 9;
 }
 
 // A transfer performed from some account to stake a new neuron.
@@ -304,6 +320,12 @@ message Neuron {
   // Whether this neuron is "Not for profit", making it dissolvable
   // by voting.
   bool not_for_profit = 16;
+
+  // If set, this neuron participates with all of its stake in the
+  // Internet Computer's community fund. Setting this value is an
+  // irreversible decision that can only be made by the neuron's
+  // controller.
+  optional uint64 joined_community_fund_timestamp_seconds = 17;
 }
 
 // The types of votes the Neuron can issue.
@@ -415,6 +437,12 @@ enum NnsFunction {
   NNS_FUNCTION_REMOVE_NODES = 18;
   // Uninstall code of a canister.
   NNS_FUNCTION_UNINSTALL_CODE = 19;
+  // Update the node rewards table.
+  NNS_FUNCTION_UPDATE_NODE_REWARDS_TABLE = 20;
+  // Add or remove Data Center records.
+  NNS_FUNCTION_ADD_OR_REMOVE_DATA_CENTERS = 21;
+  // Update the config for all unassigned nodes.
+  NNS_FUNCTION_UPDATE_UNASSIGNED_NODES_CONFIG = 22;
 }
 
 // Payload of a proposal that calls a function on another NNS
@@ -516,8 +544,11 @@ message SetDefaultFollowees {
 //
 // Making a proposal implicitly votes yes.
 message Proposal {
+  // Text with the title of the proposal.
+   // Can have a max of 256 bytes.
+  optional string title = 20;
   // Text providing a short description of the proposal, composed
-  // using a maximum of 280 bytes of characters.
+  // using a maximum of 15000 bytes of characters.
   string summary = 1;
 
   // The Web address of additional content required to evaluate the
@@ -610,11 +641,6 @@ message ManageNeuron {
   message IncreaseDissolveDelay {
     uint32 additional_dissolve_delay_seconds = 1 [(ic_base_types.pb.v1.tui_signed_display_q2_2021) = true];
   }
-  // An (idempotent) alternative to IncreaseDissolveDelay where the dissolve delay
-  // is passed as an absolute timestamp in seconds since the unix epoch.
-  message SetDissolveTimestamp {
-    uint64 dissolve_timestamp_seconds = 1 [(ic_base_types.pb.v1.tui_signed_display_q2_2021) = true];
-  }
   message StartDissolving {}
   message StopDissolving {}
   // Add a new hot key that can be used to manage the neuron. This
@@ -630,6 +656,14 @@ message ManageNeuron {
   message RemoveHotKey {
     ic_base_types.pb.v1.PrincipalId hot_key_to_remove = 1 [(ic_base_types.pb.v1.tui_signed_display_q2_2021) = true];
   }
+  // An (idempotent) alternative to IncreaseDissolveDelay where the dissolve delay
+  // is passed as an absolute timestamp in seconds since the unix epoch.
+  message SetDissolveTimestamp {
+    uint64 dissolve_timestamp_seconds = 1 [(ic_base_types.pb.v1.tui_signed_display_q2_2021) = true];
+  }
+  // Join the Internet Computer's community fund with this neuron's
+  // entire stake. Caution: this operation is not reversible.
+  message JoinCommunityFund {}
   // Commands that only configure a given neuron, but do not interact
   // with the outside world. They all require the caller to be the
   // controller of the neuron.
@@ -641,6 +675,7 @@ message ManageNeuron {
       AddHotKey add_hot_key = 4;
       RemoveHotKey remove_hot_key = 5;
       SetDissolveTimestamp set_dissolve_timestamp = 6;
+      JoinCommunityFund join_community_fund = 7;
     }
   }
   // Disburse this neuron's stake: transfer the staked ICP to the
@@ -675,6 +710,9 @@ message ManageNeuron {
     // If not set, the spawned neuron will have the same controller as
     // this neuron.
     ic_base_types.pb.v1.PrincipalId new_controller = 1 [(ic_base_types.pb.v1.tui_signed_display_q2_2021) = true];
+
+    // The nonce with which to create the subaccount.
+    optional uint64 nonce = 2;
   }
 
   // Merge the maturity of a neuron into the current stake.
@@ -698,7 +736,7 @@ message ManageNeuron {
     uint64 dissolve_delay_seconds = 3;
     // Whether the new neuron has been kyc verified.
     bool kyc_verified = 4;
-    // The nonce with whitch to create the subaccount.
+    // The nonce with which to create the subaccount.
     uint64 nonce = 5;
   }
 
@@ -881,6 +919,9 @@ message GovernanceError {
      ERROR_TYPE_INVALID_PRINCIPAL = 15;
      // The proposal's parameters violate size restrictions.
      ERROR_TYPE_INVALID_PROPOSAL = 16;
+     // The neuron attempted to join the community fund while already
+     // a member.
+     ERROR_TYPE_ALREADY_JOINED_COMMUNITY_FUND = 17;
   }
 
   ErrorType error_type = 1;
@@ -1012,6 +1053,14 @@ message ProposalData {
   //
   // This field matches field day_after_genesis in RewardEvent.
   uint64 reward_event_round = 14;
+
+  // Wait-for-quiet state that needs to be saved in stable memory.
+  WaitForQuietState wait_for_quiet_state = 16;
+}
+
+// Stores data relevant to the "wait for quiet" implementation.
+message WaitForQuietState {
+  uint64 current_deadline_timestamp_seconds = 1;
 }
 
 // This is a view of the ProposalData returned by API queries and is NOT used
@@ -1063,6 +1112,8 @@ message ProposalInfo {
 
   // Derived - see [ProposalRewardStatus] for more information
   ProposalRewardStatus reward_status = 17;
+
+  optional uint64 deadline_timestamp_seconds = 19;
 }
 
 // Network economics contains the parameters for several operations related
@@ -1196,6 +1247,7 @@ message Governance {
       ManageNeuron.DisburseToNeuron disburse_to_neuron = 5;
       ManageNeuron.MergeMaturity merge_maturity = 7;
       ManageNeuron.ClaimOrRefresh claim_or_refresh_neuron = 8;
+      ManageNeuron.Configure configure = 9;
     }
   }
 
@@ -1264,6 +1316,7 @@ message Governance {
     uint64 total_staked_e8s = 13;
     uint64 neurons_with_less_than_6_months_dissolve_delay_count = 14;
     uint64 neurons_with_less_than_6_months_dissolve_delay_e8s = 15;
+    uint64 community_fund_total_staked_e8s = 16;
   }
 
   GovernanceCachedMetrics metrics = 15;

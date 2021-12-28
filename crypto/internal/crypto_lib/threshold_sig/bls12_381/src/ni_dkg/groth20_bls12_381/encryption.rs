@@ -12,13 +12,12 @@ use crate::api::ni_dkg_errors::{
 use conversions::{
     chunking_proof_from_miracl, chunking_proof_into_miracl, ciphertext_from_miracl,
     ciphertext_into_miracl, epoch_from_miracl_secret_key, plaintext_from_bytes, plaintext_to_bytes,
-    public_coefficients_to_miracl, public_key_from_miracl, public_key_into_miracl,
-    secret_key_from_miracl, sharing_proof_from_miracl, sharing_proof_into_miracl, Tau,
+    public_coefficients_to_miracl, public_key_from_miracl, secret_key_from_miracl,
+    sharing_proof_from_miracl, sharing_proof_into_miracl, Tau,
 };
 use ic_crypto_internal_bls12381_serde_miracl::miracl_g1_from_bytes;
 use ic_crypto_internal_types::sign::threshold_sig::ni_dkg::ni_dkg_groth20_bls12_381::{
-    FsEncryptionCiphertext, FsEncryptionPlaintext, FsEncryptionPop, FsEncryptionPublicKey,
-    NodeIndex,
+    FsEncryptionCiphertext, FsEncryptionPlaintext, FsEncryptionPublicKey, NodeIndex,
 };
 use ic_crypto_internal_types::sign::threshold_sig::ni_dkg::ni_dkg_groth20_bls12_381::{
     ZKProofDec, ZKProofShare,
@@ -86,28 +85,6 @@ pub fn create_forward_secure_key_pair(
         public_key,
         pop,
         secret_key,
-    }
-}
-
-// TODO(IDX-1866)
-#[allow(clippy::result_unit_err)]
-/// Verifies that a public key is a point on the curve and that the proof of
-/// possession holds.
-///
-/// # Errors
-/// * `Err(())` if
-///   - Any of the components of `public_key` is not a correct group element.
-///   - The proof of possession doesn't verify.
-pub fn verify_forward_secure_key(
-    public_key: &FsEncryptionPublicKey,
-    pop: &FsEncryptionPop,
-    associated_data: &[u8],
-) -> Result<(), ()> {
-    let crypto_public_key_with_pop = public_key_into_miracl((public_key, pop))?;
-    if crypto_public_key_with_pop.verify(associated_data) {
-        Ok(())
-    } else {
-        Err(())
     }
 }
 
@@ -281,17 +258,17 @@ pub fn decrypt(
             node_index,
         });
     }
-    if epoch < epoch_from_miracl_secret_key(&secret_key) {
+    if epoch < epoch_from_miracl_secret_key(secret_key) {
         return Err(DecryptError::EpochTooOld {
             ciphertext_epoch: epoch,
-            secret_key_epoch: epoch_from_miracl_secret_key(&secret_key),
+            secret_key_epoch: epoch_from_miracl_secret_key(secret_key),
         });
     }
     let ciphertext =
         ciphertext_into_miracl(ciphertext).map_err(DecryptError::MalformedCiphertext)?;
     let tau = Tau::from(epoch);
     let decrypt_maybe =
-        crypto::dec_chunks(&secret_key, index, &ciphertext, &tau.0[..], associated_data);
+        crypto::dec_chunks(secret_key, index, &ciphertext, &tau.0[..], associated_data);
 
     decrypt_maybe
         .map(|decrypt| plaintext_to_bytes(&decrypt))
@@ -424,7 +401,7 @@ pub fn verify_zk_proofs(
         .collect();
     let public_keys = public_keys?;
 
-    let ciphertext = ciphertext_into_miracl(&ciphertexts).map_err(|error| {
+    let ciphertext = ciphertext_into_miracl(ciphertexts).map_err(|error| {
         CspDkgVerifyDealingError::MalformedDealingError(InvalidArgumentError {
             message: error.to_string(),
         })
@@ -438,7 +415,7 @@ pub fn verify_zk_proofs(
             })
         })?;
 
-    let chunking_proof = chunking_proof_into_miracl(&chunking_proof).map_err(|_| {
+    let chunking_proof = chunking_proof_into_miracl(chunking_proof).map_err(|_| {
         CspDkgVerifyDealingError::MalformedDealingError(InvalidArgumentError {
             message: "Could not parse proof of correct encryption".to_string(),
         })
@@ -531,7 +508,7 @@ mod util {
         let curve_order = miracl::BIG::new_ints(&miracl::rom::CURVE_ORDER);
         data.iter().fold(miracl::BIG::new(), |mut acc, term| {
             acc.shl(16);
-            let mut reduced_term = miracl::BIG::new_big(&term);
+            let mut reduced_term = miracl::BIG::new_big(term);
             reduced_term.rmod(&curve_order);
             acc.add(&reduced_term);
             acc.rmod(&curve_order); // Needed to avoid getting a buffer overflow.

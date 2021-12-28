@@ -35,7 +35,7 @@ fn should_retrieve_newly_generated_secret_key_from_store() {
     let csp = Csp::of(csprng, volatile_key_store());
     let (key_id, _) = csp.gen_key_pair(AlgorithmId::Ed25519).unwrap();
 
-    let retrieved_sk = csp.sks_read_lock().get(&key_id);
+    let retrieved_sk = csp.csp_vault.get_secret_key(&key_id);
 
     assert_eq!(
         retrieved_sk,
@@ -153,12 +153,13 @@ mod multi {
 mod tls {
     use super::*;
     use crate::secret_key_store::test_utils::MockSecretKeyStore;
+    use crate::vault::api::CspVault;
     use openssl::pkey::{Id, PKey};
     use openssl::x509::X509VerifyResult;
+    use std::collections::BTreeSet;
+    use std::sync::Arc;
 
     const NODE_1: u64 = 4241;
-    const NODE_2: u64 = 4242;
-    const NODE_3: u64 = 4243;
     const FIXED_SEED: u64 = 42;
     const NOT_AFTER: &str = "25670102030405Z";
 
@@ -169,7 +170,7 @@ mod tls {
 
         let cert = csp.gen_tls_key_pair(node_test_id(NODE_1), NOT_AFTER);
 
-        let secret_key = secret_key_from_store(&mut csp, cert.as_x509().clone());
+        let secret_key = secret_key_from_store(Arc::clone(&csp.csp_vault), cert.as_x509().clone());
         if let CspSecretKey::TlsEd25519(sk_der_bytes) = secret_key {
             let private_key = PKey::private_key_from_der(&sk_der_bytes.bytes)
                 .expect("unable to parse DER secret key");
@@ -204,7 +205,7 @@ mod tls {
         let x509_cert = cert.as_x509();
         let public_key = x509_cert.public_key().unwrap();
         assert_eq!(x509_cert.verify(&public_key).ok(), Some(true));
-        assert_eq!(x509_cert.issued(&x509_cert), X509VerifyResult::OK);
+        assert_eq!(x509_cert.issued(x509_cert), X509VerifyResult::OK);
     }
 
     #[test]
@@ -214,8 +215,8 @@ mod tls {
         let cert = csp.gen_tls_key_pair(node_test_id(NODE_1), NOT_AFTER);
 
         let x509_cert = cert.as_x509();
-        assert_eq!(cn_entries(&x509_cert).count(), 1);
-        let subject_cn = cn_entries(&x509_cert).next().unwrap();
+        assert_eq!(cn_entries(x509_cert).count(), 1);
+        let subject_cn = cn_entries(x509_cert).next().unwrap();
         let expected_subject_cn = node_test_id(NODE_1).get().to_string();
         assert_eq!(expected_subject_cn.as_bytes(), subject_cn.data().as_slice());
     }
@@ -226,7 +227,7 @@ mod tls {
 
         let cert = csp.gen_tls_key_pair(node_test_id(NODE_1), NOT_AFTER);
 
-        let subject_cn = cn_entries(&cert.as_x509()).next().unwrap();
+        let subject_cn = cn_entries(cert.as_x509()).next().unwrap();
         assert_eq!(b"w43gn-nurca-aaaaa-aaaap-2ai", subject_cn.data().as_slice());
     }
 
@@ -272,16 +273,13 @@ mod tls {
     fn should_set_different_serial_numbers_for_multiple_certs() {
         let mut csp = Csp::of(rng(), volatile_key_store());
 
-        let cert_1 = csp.gen_tls_key_pair(node_test_id(NODE_1), NOT_AFTER);
-        let cert_2 = csp.gen_tls_key_pair(node_test_id(NODE_2), NOT_AFTER);
-        let cert_3 = csp.gen_tls_key_pair(node_test_id(NODE_3), NOT_AFTER);
-
-        let serial_1 = serial_number(&cert_1);
-        let serial_2 = serial_number(&cert_2);
-        let serial_3 = serial_number(&cert_3);
-        assert_ne!(serial_1, serial_2);
-        assert_ne!(serial_2, serial_3);
-        assert_ne!(serial_1, serial_3);
+        const SAMPLE_SIZE: usize = 20;
+        let mut serial_samples = BTreeSet::new();
+        for _i in 0..SAMPLE_SIZE {
+            let cert = csp.gen_tls_key_pair(node_test_id(NODE_1), NOT_AFTER);
+            serial_samples.insert(serial_number(&cert));
+        }
+        assert_eq!(serial_samples.len(), SAMPLE_SIZE);
     }
 
     #[test]
@@ -306,24 +304,21 @@ mod tls {
     #[should_panic(expected = "'not after' date must not be in the past")]
     fn should_panic_if_not_after_date_is_in_the_past() {
         let mut csp = Csp::of(rng(), volatile_key_store());
-        let date_in_the_past = "20000102030405Z";
+        let date_in_the_past = "20211004235959Z";
 
-        let _panic = csp.gen_tls_key_pair(node_test_id(NODE_1), &date_in_the_past);
+        let _panic = csp.gen_tls_key_pair(node_test_id(NODE_1), date_in_the_past);
     }
 
     fn rng() -> impl CryptoRng + Rng + Clone {
         csprng_seeded_with(42)
     }
 
-    fn secret_key_from_store(
-        csp: &mut Csp<impl CryptoRng + Rng, VolatileSecretKeyStore>,
-        x509_cert: X509,
-    ) -> CspSecretKey {
+    fn secret_key_from_store(csp_vault: Arc<dyn CspVault>, x509_cert: X509) -> CspSecretKey {
         let cert = TlsPublicKeyCert::new_from_x509(x509_cert)
             .expect("failed to convert X509 into TlsPublicKeyCert");
         let key_id = tls_keygen::tls_cert_hash_as_key_id(&cert);
-        csp.sks_read_lock()
-            .get(&key_id)
+        csp_vault
+            .get_secret_key(&key_id)
             .expect("secret key not found")
     }
 

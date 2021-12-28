@@ -4,30 +4,32 @@ use crate::api::tls_errors::{
     CspMalformedPeerCertificateError, CspTlsClientHandshakeError, CspTlsServerHandshakeError,
 };
 use crate::keygen::tls_cert_hash_as_key_id;
-use crate::secret_key_store::SecretKeyStore;
 use crate::tls_stub::cert_chain::CspCertificateChainCreationError;
 use crate::types::CspSecretKey;
+use crate::vault::api::CspVault;
 use cert_chain::CspCertificateChain;
 use ic_crypto_tls_interfaces::TlsPublicKeyCert;
 use openssl::pkey::{PKey, Private};
 use openssl::x509::X509VerifyResult;
 use std::convert::TryFrom;
+use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio_openssl::SslStream;
 
 pub mod cert_chain;
 mod client_handshake;
+mod handshake_signer;
 mod server_handshake;
 
 #[cfg(test)]
 mod test_utils;
 
-fn key_from_secret_key_store<S: SecretKeyStore>(
-    secret_key_store: &S,
+fn key_from_secret_key_store(
+    csp_vault: Arc<dyn CspVault>,
     self_cert: &TlsPublicKeyCert,
 ) -> Result<PKey<Private>, CspTlsSecretKeyError> {
-    let secret_key: CspSecretKey = secret_key_store
-        .get(&tls_cert_hash_as_key_id(&self_cert))
+    let secret_key: CspSecretKey = csp_vault
+        .get_secret_key(&tls_cert_hash_as_key_id(self_cert))
         .ok_or(CspTlsSecretKeyError::SecretKeyNotFound)?;
     let secret_key_der_bytes = match secret_key {
         CspSecretKey::TlsEd25519(secret_key_der_bytes) => Ok(secret_key_der_bytes),
@@ -118,7 +120,7 @@ fn peer_cert_chain_from_stream(
         (None, _) => Ok(None),
         (Some(verified_chain), true) => {
             let cert_chain = CspCertificateChain::try_from(verified_chain)?;
-            let peer_cert = peer_cert_from_stream(&tls_stream)?;
+            let peer_cert = peer_cert_from_stream(tls_stream)?;
             ensure_chain_leaf_consistency(&cert_chain, &peer_cert)?;
             Ok(Some(cert_chain))
         }

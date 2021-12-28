@@ -10,15 +10,16 @@ use ic_types::{NodeId, RegistryVersion};
 use openssl::hash::MessageDigest;
 use openssl::x509::X509;
 use serde::{Deserialize, Deserializer, Serialize};
+use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashSet};
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::io;
+use std::ops::DerefMut;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
-use tokio_openssl::SslStream;
 
 #[cfg(test)]
 mod tests;
@@ -104,6 +105,18 @@ impl Eq for TlsPublicKeyCert {}
 impl Hash for TlsPublicKeyCert {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.hash_cached.hash(state)
+    }
+}
+
+impl PartialOrd for TlsPublicKeyCert {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.hash_cached.partial_cmp(&other.hash_cached)
+    }
+}
+
+impl Ord for TlsPublicKeyCert {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.hash_cached.cmp(&other.hash_cached)
     }
 }
 
@@ -254,21 +267,53 @@ impl From<PeerNotAllowedError> for TlsClientHandshakeError {
 }
 
 /// A stream over a secure connection protected by TLS.
-pub struct TlsStream {
-    ssl_stream: SslStream<TcpStream>,
+///
+/// The main usage of this stream (or its halves obtained by
+/// [splitting](`Self::split()`) the stream) is via the methods provided by the
+/// `tokio::io::AsyncRead` and `tokio::io::AsyncWrite` traits.
+///
+/// Note that the Rustls variant of this stream behaves like a `BufWriter`. This
+/// means that data written with `poll_write` are not guaranteed to be written
+/// to the underlying (TCP) stream and one must call `poll_flush` at appropriate
+/// times, such as when a period of `poll_write` writes is complete and there is
+/// no more data to write. See also [tokio-rustls' documentation] on [Why do I
+/// need to call poll_flush?] and the documentation of `tokio::io::BufWriter`
+/// and `std::io::BufWriter`.
+///
+/// [tokio-rustls' documentation]: https://docs.rs/tokio-rustls/latest/tokio_rustls/
+/// [Why do I need to call poll_flush?]: https://docs.rs/tokio-rustls/latest/tokio_rustls/#why-do-i-need-to-call-poll_flush
+pub enum TlsStream {
+    OpenSsl(tokio_openssl::SslStream<TcpStream>),
+    // The Box exists to address the `large_enum_variant` Clippy lint
+    Rustls(Box<tokio_rustls::TlsStream<TcpStream>>),
 }
 
 impl TlsStream {
-    pub fn new(ssl_stream: SslStream<TcpStream>) -> Self {
-        Self { ssl_stream }
+    pub fn new(openssl_stream: tokio_openssl::SslStream<TcpStream>) -> Self {
+        Self::OpenSsl(openssl_stream)
+    }
+
+    pub fn new_rustls(rustls_stream: tokio_rustls::TlsStream<TcpStream>) -> Self {
+        Self::Rustls(Box::new(rustls_stream))
     }
 
     /// Use this method to split a `TlsStream`, as it returns `TlsReadHalf`
     /// and `TlsWriteHalf` that are guaranteed to be protected by TLS by the
     /// type system.
     pub fn split(self) -> (TlsReadHalf, TlsWriteHalf) {
-        let (read_half, write_half) = tokio::io::split(self.ssl_stream);
-        (TlsReadHalf::new(read_half), TlsWriteHalf::new(write_half))
+        match self {
+            TlsStream::OpenSsl(stream) => {
+                let (read_half, write_half) = tokio::io::split(stream);
+                (TlsReadHalf::new(read_half), TlsWriteHalf::new(write_half))
+            }
+            TlsStream::Rustls(stream) => {
+                let (read_half, write_half) = tokio::io::split(*stream);
+                (
+                    TlsReadHalf::new_rustls(read_half),
+                    TlsWriteHalf::new_rustls(write_half),
+                )
+            }
+        }
     }
 }
 
@@ -278,7 +323,10 @@ impl AsyncRead for TlsStream {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<tokio::io::Result<()>> {
-        Pin::new(&mut self.ssl_stream).poll_read(cx, buf)
+        match self.deref_mut() {
+            TlsStream::OpenSsl(stream) => Pin::new(stream).poll_read(cx, buf),
+            TlsStream::Rustls(stream) => Pin::new(stream).poll_read(cx, buf),
+        }
     }
 }
 
@@ -288,29 +336,43 @@ impl AsyncWrite for TlsStream {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<Result<usize, io::Error>> {
-        Pin::new(&mut self.ssl_stream).poll_write(cx, buf)
+        match self.deref_mut() {
+            TlsStream::OpenSsl(stream) => Pin::new(stream).poll_write(cx, buf),
+            TlsStream::Rustls(stream) => Pin::new(stream).poll_write(cx, buf),
+        }
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
-        Pin::new(&mut self.ssl_stream).poll_flush(cx)
+        match self.deref_mut() {
+            TlsStream::OpenSsl(stream) => Pin::new(stream).poll_flush(cx),
+            TlsStream::Rustls(stream) => Pin::new(stream).poll_flush(cx),
+        }
     }
 
     fn poll_shutdown(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Result<(), io::Error>> {
-        Pin::new(&mut self.ssl_stream).poll_shutdown(cx)
+        match self.deref_mut() {
+            TlsStream::OpenSsl(stream) => Pin::new(stream).poll_shutdown(cx),
+            TlsStream::Rustls(stream) => Pin::new(stream).poll_shutdown(cx),
+        }
     }
 }
 
 /// The read half of a stream over a secure connection protected by TLS.
-pub struct TlsReadHalf {
-    read_half: ReadHalf<SslStream<TcpStream>>,
+pub enum TlsReadHalf {
+    OpenSsl(ReadHalf<tokio_openssl::SslStream<TcpStream>>),
+    Rustls(ReadHalf<tokio_rustls::TlsStream<TcpStream>>),
 }
 
 impl TlsReadHalf {
-    pub fn new(read_half: ReadHalf<SslStream<TcpStream>>) -> Self {
-        Self { read_half }
+    pub fn new(read_half: ReadHalf<tokio_openssl::SslStream<TcpStream>>) -> Self {
+        Self::OpenSsl(read_half)
+    }
+
+    pub fn new_rustls(read_half: ReadHalf<tokio_rustls::TlsStream<TcpStream>>) -> Self {
+        Self::Rustls(read_half)
     }
 }
 
@@ -320,18 +382,29 @@ impl AsyncRead for TlsReadHalf {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<tokio::io::Result<()>> {
-        Pin::new(&mut self.read_half).poll_read(cx, buf)
+        match self.deref_mut() {
+            Self::OpenSsl(stream) => Pin::new(stream).poll_read(cx, buf),
+            Self::Rustls(stream) => Pin::new(stream).poll_read(cx, buf),
+        }
     }
 }
 
 /// The write half of a stream over a secure connection protected by TLS.
-pub struct TlsWriteHalf {
-    write_half: WriteHalf<SslStream<TcpStream>>,
+///
+/// See also the documentation of [`TlsStream`], especially the part on correct
+/// flushing for the Rustls variant.
+pub enum TlsWriteHalf {
+    OpenSsl(WriteHalf<tokio_openssl::SslStream<TcpStream>>),
+    Rustls(WriteHalf<tokio_rustls::TlsStream<TcpStream>>),
 }
 
 impl TlsWriteHalf {
-    pub fn new(write_half: WriteHalf<SslStream<TcpStream>>) -> Self {
-        Self { write_half }
+    pub fn new(write_half: WriteHalf<tokio_openssl::SslStream<TcpStream>>) -> Self {
+        Self::OpenSsl(write_half)
+    }
+
+    pub fn new_rustls(write_half: WriteHalf<tokio_rustls::TlsStream<TcpStream>>) -> Self {
+        Self::Rustls(write_half)
     }
 }
 
@@ -341,18 +414,27 @@ impl AsyncWrite for TlsWriteHalf {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<Result<usize, io::Error>> {
-        Pin::new(&mut self.write_half).poll_write(cx, buf)
+        match self.deref_mut() {
+            Self::OpenSsl(stream) => Pin::new(stream).poll_write(cx, buf),
+            Self::Rustls(stream) => Pin::new(stream).poll_write(cx, buf),
+        }
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
-        Pin::new(&mut self.write_half).poll_flush(cx)
+        match self.deref_mut() {
+            Self::OpenSsl(stream) => Pin::new(stream).poll_flush(cx),
+            Self::Rustls(stream) => Pin::new(stream).poll_flush(cx),
+        }
     }
 
     fn poll_shutdown(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Result<(), io::Error>> {
-        Pin::new(&mut self.write_half).poll_shutdown(cx)
+        match self.deref_mut() {
+            Self::OpenSsl(stream) => Pin::new(stream).poll_shutdown(cx),
+            Self::Rustls(stream) => Pin::new(stream).poll_shutdown(cx),
+        }
     }
 }
 
@@ -431,92 +513,14 @@ pub trait TlsHandshake {
         registry_version: RegistryVersion,
     ) -> Result<(TlsStream, AuthenticatedPeer), TlsServerHandshakeError>;
 
-    /// IMPORTANT NODE: This method is temporary. It will be replaced by
-    /// `perform_tls_server_handshake` and a new method
-    /// `perform_tls_server_handshake_without_client_auth` soon. This method is
-    /// currently needed to allow connections without knowing if a client
-    /// performs client authentication.
-    ///
-    /// SECURITY WARNING: The caller of this method is responsible to check if
-    /// the peer authenticated or not. Only if this method returns
-    /// `Peer::Authenticated` it is guaranteed that the client is an allowed
-    /// client wrt. `allowed__authenticating_clients`, see below.
-    ///
-    /// Transforms a TCP stream into a TLS stream by performing a TLS server
-    /// handshake.
-    ///
-    /// For the handshake, the server uses the following configuration:
-    /// * Minimum protocol version: TLS 1.3
-    /// * Supported signature algorithms: ed25519
-    /// * Allowed cipher suites: TLS_AES_128_GCM_SHA256, TLS_AES_256_GCM_SHA384
-    /// * Client authentication: optional, with ed25519 certificate
-    /// * Maximum number of intermediate CA certificates: 1
-    ///
-    /// Whenever the TLS handshake fails, this method returns an error.
-    ///
-    /// The given `tcp_stream` is consumed. If an error is returned, the TCP
-    /// connection is therefore dropped.
-    ///
-    /// # Connections without client authentcation
-    /// The client may present a client certificate to authenticate. If it
-    /// doesn't, `Peer:Unauthenticated` is returned.
-    ///
-    /// # Connections with client authentication
-    /// If the client presents a certificate, the TLS handshake only succeeds if
-    /// the certificate is valid and trusted given the
-    /// `allowed_authenticating_clients`. Additionally, after the handshake, to
-    /// determine whether the peer (that successfully performed the handshake)
-    /// is an allowed client, the following steps are taken:
-    /// 1. Determine the peer's node ID N_claimed from the _subject name_ of
-    ///    the certificate C_handshake that the peer presented during the
-    ///    handshake (and for which the peer therefore knows the private key).
-    ///    If N_claimed is contained in the nodes in
-    ///    `allowed_authenticating_clients`, determine the certificate
-    ///    C_registry by querying the registry for the TLS certificate of node
-    ///    with ID N_claimed, and if C_registry is equal to C_handshake,
-    ///    then the peer successfully authenticated as node N_claimed.
-    ///    Otherwise, step 2 is taken.
-    /// 2. Compare the root of the certificate chain that the peer presented
-    ///    during the handshake (and for which the peer therefore knows the
-    ///    private key of the chain's leaf certificate) to all the (explicitly
-    ///    allowed) certificates in `allowed_authenticating_clients`. If there
-    ///    is a match, then the peer represented by the chain's leaf certificate
-    ///    successfully authenticated.
-    ///
-    /// If client authentication is successful, the TLS stream together with the
-    /// peer (`Peer::Authenticated`) that successfully authenticated is
-    /// returned.
-    ///
-    /// # Errors
-    /// * TlsServerHandshakeError::RegistryError if the registry cannot be
-    ///   accessed.
-    /// * TlsServerHandshakeError::CertificateNotInRegistry if a certificate
-    ///   that is expected to be in the registry is not found.
-    /// * TlsServerHandshakeError::MalformedSelfCertificate if the node's own
-    ///   server certificate is malformed.
-    /// * TlsServerHandshakeError::MalformedClientCertificate if a client
-    ///   certificate corresponding to an client in
-    ///   `allowed_authenticating_clients` is malformed.
-    /// * TlsServerHandshakeError::CreateAcceptorError if there is a problem
-    ///   configuring the server for accepting connections from clients.
-    /// * TlsServerHandshakeError::HandshakeError if there is an error during
-    ///   the TLS handshake, or the handshake fails.
-    /// * TlsServerHandshakeError::ClientNotAllowed if the node_id in the
-    ///   subject CN of the client's certificate presented in the handshake is
-    ///   not in `allowed_authenticating_clients`, or if the client's
-    ///   certificate presented in the handshake does not exactly match the
-    ///   client's certificate in the registry.
-    ///
-    /// # Panics
-    /// * If the secret key corresponding to the server certificate cannot be
-    ///   found or is malformed in the server's secret key store. Note that this
-    ///   is an error in the setup of the node and registry.
-    async fn perform_tls_server_handshake_temp_with_optional_client_auth(
+    /// This method will eventually replace `perform_tls_server_handshake`.
+    /// Please refer to the docs of that method.
+    async fn perform_tls_server_handshake_with_rustls(
         &self,
         tcp_stream: TcpStream,
-        allowed_authenticating_clients: AllowedClients,
+        allowed_clients: AllowedClients,
         registry_version: RegistryVersion,
-    ) -> Result<(TlsStream, Peer), TlsServerHandshakeError>;
+    ) -> Result<(TlsStream, AuthenticatedPeer), TlsServerHandshakeError>;
 
     /// Transforms a TCP stream into a TLS stream by performing a TLS server
     /// handshake. No client authentication is performed.
@@ -549,6 +553,15 @@ pub trait TlsHandshake {
     ///   found or is malformed in the server's secret key store. Note that this
     ///   is an error in the setup of the node and registry.
     async fn perform_tls_server_handshake_without_client_auth(
+        &self,
+        tcp_stream: TcpStream,
+        registry_version: RegistryVersion,
+    ) -> Result<TlsStream, TlsServerHandshakeError>;
+
+    /// This method will eventually replace
+    /// `perform_tls_server_handshake_without_client_auth`. Please refer to
+    /// the docs of that method.
+    async fn perform_tls_server_handshake_without_client_auth_with_rustls(
         &self,
         tcp_stream: TcpStream,
         registry_version: RegistryVersion,
@@ -601,6 +614,15 @@ pub trait TlsHandshake {
     ///   found or is malformed in the client's secret key store. Note that this
     ///   is an error in the setup of the node and registry.
     async fn perform_tls_client_handshake(
+        &self,
+        tcp_stream: TcpStream,
+        server: NodeId,
+        registry_version: RegistryVersion,
+    ) -> Result<TlsStream, TlsClientHandshakeError>;
+
+    /// This method will eventually replace `perform_tls_client_handshake`.
+    /// Please refer to the docs of that method.
+    async fn perform_tls_client_handshake_with_rustls(
         &self,
         tcp_stream: TcpStream,
         server: NodeId,
@@ -670,6 +692,21 @@ pub enum AllowedClientsError {
 pub enum SomeOrAllNodes {
     Some(BTreeSet<NodeId>),
     All,
+}
+
+impl SomeOrAllNodes {
+    pub fn new_with_single_node(node_id: NodeId) -> Self {
+        let mut nodes = BTreeSet::new();
+        nodes.insert(node_id);
+        Self::Some(nodes)
+    }
+
+    pub fn contains(&self, node_id: NodeId) -> bool {
+        match self {
+            SomeOrAllNodes::Some(node_ids) => node_ids.contains(&node_id),
+            SomeOrAllNodes::All => true,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

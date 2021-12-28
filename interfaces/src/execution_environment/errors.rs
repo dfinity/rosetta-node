@@ -40,6 +40,31 @@ impl std::fmt::Display for TrapCode {
     }
 }
 
+/// Error when a canister's balance is too low compared to its freezing
+/// threshold and cannot perform the requested action.
+///
+/// Should be used as the wrapped error by various components that need to
+/// handle such cases.
+#[derive(Clone, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CanisterOutOfCyclesError {
+    pub canister_id: CanisterId,
+    pub available: Cycles,
+    pub requested: Cycles,
+    pub threshold: Cycles,
+}
+
+impl std::error::Error for CanisterOutOfCyclesError {}
+
+impl std::fmt::Display for CanisterOutOfCyclesError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Canister {} is out of cycles: requested {} cycles but the available balance is {} cycles and the freezing threshold {} cycles",
+            self.canister_id, self.requested, self.available, self.threshold
+        )
+    }
+}
+
 /// Errors when executing `canister_heartbeat`.
 #[derive(Debug, Eq, PartialEq)]
 pub enum CanisterHeartbeatError {
@@ -48,10 +73,25 @@ pub enum CanisterHeartbeatError {
         status: CanisterStatusType,
     },
 
-    OutOfCycles,
+    OutOfCycles(CanisterOutOfCyclesError),
 
     /// Execution failed while executing the `canister_heartbeat`.
     CanisterExecutionFailed(HypervisorError),
+}
+
+impl std::fmt::Display for CanisterHeartbeatError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CanisterHeartbeatError::CanisterNotRunning { status } => write!(
+                f,
+                "Canister in status {} instead of {}",
+                status,
+                CanisterStatusType::Running
+            ),
+            CanisterHeartbeatError::OutOfCycles(err) => write!(f, "{}", err),
+            CanisterHeartbeatError::CanisterExecutionFailed(err) => write!(f, "{}", err),
+        }
+    }
 }
 
 impl CanisterHeartbeatError {
@@ -63,33 +103,9 @@ impl CanisterHeartbeatError {
                 hypervisor_err.is_system_error()
             }
             CanisterHeartbeatError::CanisterNotRunning { status: _ }
-            | CanisterHeartbeatError::OutOfCycles => false,
+            | CanisterHeartbeatError::OutOfCycles(_) => false,
         }
     }
-}
-
-/// Different types of errors that can be returned from the function(s) that
-/// check if messages should be accepted or not.
-#[derive(Debug, Eq, PartialEq)]
-pub enum MessageAcceptanceError {
-    /// The canister that the message is destined for was not found. So no
-    /// checks could be performed.
-    CanisterNotFound,
-
-    /// The canister that the message is destined for does not have a wasm
-    /// module. So it will not be able to handle the message even if the message
-    /// was accepted.
-    CanisterHasNoWasmModule,
-
-    /// The canister explicitly rejected the message.
-    CanisterRejected,
-
-    /// The canister doesn't have enough cycles to execute the message.
-    CanisterOutOfCycles,
-
-    /// The canister experienced a failure while executing the `inspect_message`
-    /// method
-    CanisterExecutionFailed(HypervisorError),
 }
 
 /// Errors returned by the Hypervisor.
@@ -107,7 +123,7 @@ pub enum HypervisorError {
     /// to a user of IC.
     ContractViolation(String),
     /// Wasm execution consumed too many instructions.
-    OutOfInstructions,
+    InstructionLimitExceeded,
     /// We could not validate the wasm module
     InvalidWasm(WasmValidationError),
     /// We could not instrument the wasm module
@@ -140,11 +156,7 @@ pub enum HypervisorError {
     MessageRejected,
     /// An attempt was made to add more cycles to an outgoing call than
     /// available in the canister's balance.
-    InsufficientCyclesBalance {
-        available: Cycles,
-        threshold: Cycles,
-        requested: Cycles,
-    },
+    InsufficientCyclesBalance(CanisterOutOfCyclesError),
     Cleanup {
         callback_err: Box<HypervisorError>,
         cleanup_err: Box<HypervisorError>,
@@ -223,8 +235,8 @@ impl HypervisorError {
                     canister_id, description
                 ),
             ),
-            Self::OutOfInstructions => UserError::new(
-                E::CanisterOutOfCycles,
+            Self::InstructionLimitExceeded => UserError::new(
+                E::CanisterCyclesLimitExceeded,
                 format!("Canister {} exceeded the cycles limit for single message execution.", canister_id),
             ),
             Self::InvalidWasm(err) => UserError::new(
@@ -278,16 +290,9 @@ impl HypervisorError {
                 E::CanisterTrapped,
                 format!("Canister {} provided invalid canister id", canister_id),
             ),
-            Self::InsufficientCyclesBalance {
-                available,
-                threshold,
-                requested,
-            } => UserError::new(
+            Self::InsufficientCyclesBalance(err) => UserError::new(
                 E::CanisterOutOfCycles,
-                format!(
-                    "Canister {} has insufficient cycles: requested {} cycles when the balance is {} cycles and the freezing threshold is {} cycles",
-                    canister_id, requested, available, threshold
-                ),
+                err.to_string(),
             ),
             Self::Cleanup {
                 callback_err,
@@ -320,7 +325,7 @@ impl HypervisorError {
             HypervisorError::FunctionNotFound(..) => "FunctionNotFound",
             HypervisorError::MethodNotFound(_) => "MethodNotFound",
             HypervisorError::ContractViolation(_) => "ContractViolation",
-            HypervisorError::OutOfInstructions => "OutOfInstructions",
+            HypervisorError::InstructionLimitExceeded => "InstructionsLimitExceeded",
             HypervisorError::InvalidWasm(_) => "InvalidWasm",
             HypervisorError::InstrumentationFailed(_) => "InstrumentationFailed",
             HypervisorError::Trapped(_) => "Trapped",
@@ -350,7 +355,7 @@ impl HypervisorError {
             HypervisorError::FunctionNotFound(_, _)
             | HypervisorError::MethodNotFound(_)
             | HypervisorError::ContractViolation(_)
-            | HypervisorError::OutOfInstructions
+            | HypervisorError::InstructionLimitExceeded
             | HypervisorError::InvalidWasm(_)
             | HypervisorError::Trapped(_)
             | HypervisorError::CalledTrap(_)
@@ -364,11 +369,7 @@ impl HypervisorError {
             | HypervisorError::InvalidPrincipalId(_)
             | HypervisorError::InvalidCanisterId(_)
             | HypervisorError::MessageRejected
-            | HypervisorError::InsufficientCyclesBalance {
-                available: _,
-                threshold: _,
-                requested: _,
-            } => false,
+            | HypervisorError::InsufficientCyclesBalance(_) => false,
         }
     }
 }

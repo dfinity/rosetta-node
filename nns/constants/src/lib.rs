@@ -36,7 +36,7 @@ pub const NNS_CANISTER_WASMS: [&str; 9] = [
     // include_bytes, it is not provided on the path. We want to change that, though.
     "registry-canister",
     "governance-canister",
-    "ledger-canister",
+    "ledger-canister_notify-method",
     "root-canister",
     "cycles-minting-canister",
     // The lifeline is built differently, which explains why its wasm has a different name pattern.
@@ -106,3 +106,6 @@ pub fn memory_allocation_of(canister_id: CanisterId) -> u64 {
         NNS_DEFAULT_CANISTER_MEMORY_ALLOCATION_IN_BYTES
     }
 }
+
+/// The whitelist of allowed node types
+pub const NODE_TYPES: &[&str] = &["default", "small", "storage_upgrade"];

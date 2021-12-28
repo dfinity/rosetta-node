@@ -1,5 +1,5 @@
 use ledger_canister::{
-    AccountIdentifier, Block, BlockHeight, ICPTs, Memo, Transaction, Transfer, TRANSACTION_FEE,
+    AccountIdentifier, Block, BlockHeight, Memo, Operation, Tokens, Transaction, TRANSACTION_FEE,
 };
 
 use ic_rosetta_api::store::HashedBlock;
@@ -12,17 +12,17 @@ use std::time::SystemTime;
 use crate::acc_id;
 
 enum Trans {
-    Buy(AccountIdentifier, ICPTs),
-    Sell(AccountIdentifier, ICPTs),
-    Transfer(AccountIdentifier, AccountIdentifier, ICPTs),
+    Buy(AccountIdentifier, Tokens),
+    Sell(AccountIdentifier, Tokens),
+    Transfer(AccountIdentifier, AccountIdentifier, Tokens),
 }
 
 pub struct Scribe {
     pub accounts: VecDeque<AccountIdentifier>,
-    pub balance_book: BTreeMap<AccountIdentifier, ICPTs>,
+    pub balance_book: BTreeMap<AccountIdentifier, Tokens>,
     pub blockchain: VecDeque<HashedBlock>,
     transactions: VecDeque<Trans>,
-    pub balance_history: VecDeque<BTreeMap<AccountIdentifier, ICPTs>>,
+    pub balance_history: VecDeque<BTreeMap<AccountIdentifier, Tokens>>,
     rng: StdRng,
 }
 
@@ -83,7 +83,7 @@ impl Scribe {
             let amount = self.rand_val(balance, 0.1);
             let acc = acc_id(i);
             self.accounts.push_back(acc);
-            self.balance_book.insert(acc, ICPTs::ZERO);
+            self.balance_book.insert(acc, Tokens::ZERO);
             self.buy(acc, amount);
         }
     }
@@ -92,7 +92,7 @@ impl Scribe {
         let address =
             AccountIdentifier::from_hex(address).expect("Hex was not valid account identifier");
         self.accounts.push_back(address);
-        self.balance_book.insert(address, ICPTs::ZERO);
+        self.balance_book.insert(address, Tokens::ZERO);
         self.buy(address, balance);
     }
 
@@ -110,11 +110,11 @@ impl Scribe {
     }
 
     pub fn buy(&mut self, uid: AccountIdentifier, amount: u64) {
-        let amount = ICPTs::from_e8s(amount);
+        let amount = Tokens::from_e8s(amount);
         self.transactions.push_back(Trans::Buy(uid, amount));
         *self.balance_book.get_mut(&uid).unwrap() += amount;
         let transaction = Transaction {
-            transfer: Transfer::Mint { to: uid, amount },
+            operation: Operation::Mint { to: uid, amount },
             memo: self.next_message(),
             created_at_time: self.time().into(),
         };
@@ -123,11 +123,11 @@ impl Scribe {
     }
 
     pub fn sell(&mut self, uid: AccountIdentifier, amount: u64) {
-        let amount = ICPTs::from_e8s(amount);
+        let amount = Tokens::from_e8s(amount);
         self.transactions.push_back(Trans::Sell(uid, amount));
         *self.balance_book.get_mut(&uid).unwrap() -= amount;
         let transaction = Transaction {
-            transfer: Transfer::Burn { from: uid, amount },
+            operation: Operation::Burn { from: uid, amount },
             memo: self.next_message(),
             created_at_time: self.time().into(),
         };
@@ -136,14 +136,14 @@ impl Scribe {
     }
 
     pub fn transfer(&mut self, src: AccountIdentifier, dst: AccountIdentifier, amount: u64) {
-        let amount = ICPTs::from_e8s(amount);
+        let amount = Tokens::from_e8s(amount);
         self.transactions
             .push_back(Trans::Transfer(src, dst, amount));
         *self.balance_book.get_mut(&src).unwrap() -= (amount + TRANSACTION_FEE).unwrap();
         *self.balance_book.get_mut(&dst).unwrap() += amount;
 
         let transaction = Transaction {
-            transfer: Transfer::Send {
+            operation: Operation::Transfer {
                 from: src,
                 to: dst,
                 amount,
@@ -156,7 +156,7 @@ impl Scribe {
         self.add_block(transaction);
     }
 
-    pub fn get_rand_account(&mut self, min_amount: ICPTs) -> AccountIdentifier {
+    pub fn get_rand_account(&mut self, min_amount: Tokens) -> AccountIdentifier {
         let mut acc_idx = self.dice_num(self.num_accounts()) as usize;
         let mut acc = self.accounts[acc_idx];
         while *self.balance_book.get(&acc).unwrap() < min_amount {
@@ -169,24 +169,24 @@ impl Scribe {
     pub fn gen_transfer(&mut self) {
         let x = (1 + self.dice_num(3)) * 100;
         let amount = self.rand_val(x, 0.1);
-        let icpt_amount = ICPTs::from_e8s(amount);
+        let icpt_amount = Tokens::from_e8s(amount);
 
         let acc1 = self.get_rand_account((icpt_amount + TRANSACTION_FEE).unwrap());
-        let mut acc2 = self.get_rand_account(ICPTs::ZERO);
+        let mut acc2 = self.get_rand_account(Tokens::ZERO);
 
         let mut safety_belt = 1000;
         while acc1 == acc2 {
             if safety_belt == 0 {
                 panic!("Not enough accounts to chose from");
             }
-            acc2 = self.get_rand_account(ICPTs::ZERO);
+            acc2 = self.get_rand_account(Tokens::ZERO);
             safety_belt -= 1;
         }
         self.transfer(acc1, acc2, amount);
     }
 
     pub fn gen_buy(&mut self) {
-        let acc = self.get_rand_account(ICPTs::ZERO);
+        let acc = self.get_rand_account(Tokens::ZERO);
         let x = (1 + self.dice_num(3)) * 100;
         let amount = self.rand_val(x, 0.1);
         self.buy(acc, amount)
@@ -195,7 +195,7 @@ impl Scribe {
     pub fn gen_sell(&mut self) {
         let x = (1 + self.dice_num(3)) * 100;
         let amount = self.rand_val(x, 0.1);
-        let acc = self.get_rand_account(ICPTs::from_e8s(amount));
+        let acc = self.get_rand_account(Tokens::from_e8s(amount));
         self.sell(acc, amount);
     }
 

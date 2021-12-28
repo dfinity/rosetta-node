@@ -2,20 +2,21 @@ use ic_rosetta_api::convert::{
     amount_, from_hex, from_model_account_identifier, from_operations, from_public_key,
     principal_id_from_public_key, signed_amount, to_hex, to_model_account_identifier,
 };
-use ic_rosetta_api::errors::ApiError;
+
 use ic_rosetta_api::models::Error as RosettaError;
 use ic_rosetta_api::models::{
     ConstructionCombineResponse, ConstructionPayloadsRequestMetadata, ConstructionPayloadsResponse,
     CurveType, PublicKey, Signature, SignatureType,
 };
 use ic_rosetta_api::request_types::{
-    AddHotKey, Request, RequestResult, SetDissolveTimestamp, Stake, StartDissolve, StopDissolve,
-    TransactionResults, ADD_HOT_KEY, SET_DISSOLVE_TIMESTAMP, START_DISSOLVE, STOP_DISSOLVE,
+    AddHotKey, Disburse, Request, RequestResult, SetDissolveTimestamp, Spawn, Stake, StartDissolve,
+    StopDissolve, TransactionResults,
 };
 use ic_rosetta_api::transaction_id::TransactionIdentifier;
+use ic_rosetta_api::{errors::ApiError, DEFAULT_TOKEN_NAME};
 use ic_types::{messages::Blob, time, PrincipalId};
 
-use ledger_canister::{AccountIdentifier, BlockHeight, ICPTs, Transfer};
+use ledger_canister::{AccountIdentifier, BlockHeight, Operation, Tokens};
 
 pub use ed25519_dalek::Keypair as EdKeypair;
 use log::debug;
@@ -79,17 +80,18 @@ pub async fn prepare_multiple_txn(
     accept_suggested_fee: bool,
     ingress_end: Option<u64>,
     created_at_time: Option<u64>,
-) -> Result<(ConstructionPayloadsResponse, ICPTs), RosettaError> {
+) -> Result<(ConstructionPayloadsResponse, Tokens), RosettaError> {
     let mut all_ops = Vec::new();
     let mut dry_run_ops = Vec::new();
     let mut all_sender_account_ids = Vec::new();
     let mut all_sender_pks = Vec::new();
     let mut trans_fee_amount = None;
+    let token_name = DEFAULT_TOKEN_NAME;
 
     for request in requests {
         // first ask for the fee
         let mut fee_found = false;
-        for o in Request::requests_to_operations(&[request.request.clone()]).unwrap() {
+        for o in Request::requests_to_operations(&[request.request.clone()], token_name).unwrap() {
             if o._type == "FEE" {
                 fee_found = true;
             } else {
@@ -99,8 +101,8 @@ pub async fn prepare_multiple_txn(
         }
 
         match request.request.clone() {
-            Request::Transfer(Transfer::Send { from, fee, .. }) => {
-                trans_fee_amount = Some(amount_(fee).unwrap());
+            Request::Transfer(Operation::Transfer { from, fee, .. }) => {
+                trans_fee_amount = Some(amount_(fee, token_name).unwrap());
                 all_sender_account_ids.push(to_model_account_identifier(&from));
 
                 // just a sanity check
@@ -110,10 +112,17 @@ pub async fn prepare_multiple_txn(
             | Request::StartDissolve(StartDissolve { account, .. })
             | Request::StopDissolve(StopDissolve { account, .. })
             | Request::SetDissolveTimestamp(SetDissolveTimestamp { account, .. })
-            | Request::AddHotKey(AddHotKey { account, .. }) => {
+            | Request::AddHotKey(AddHotKey { account, .. })
+            | Request::Disburse(Disburse { account, .. })
+            | Request::Spawn(Spawn { account, .. }) => {
                 all_sender_account_ids.push(to_model_account_identifier(&account));
             }
-            _ => panic!("Only Send/Stake supported here"),
+            Request::Transfer(Operation::Burn { .. }) => {
+                panic!("Burn operations are supported here")
+            }
+            Request::Transfer(Operation::Mint { .. }) => {
+                panic!("Mint operations are supported here")
+            }
         };
 
         all_sender_pks.push(to_public_key(&request.sender_keypair));
@@ -137,32 +146,30 @@ pub async fn prepare_multiple_txn(
         .construction_metadata(pre_res.options, Some(all_sender_pks.clone()))
         .await
         .unwrap()?;
-    let mut suggested_fee = metadata_res.suggested_fee.unwrap();
-    assert_eq!(suggested_fee.len(), 1);
-    let dry_run_suggested_fee = suggested_fee.pop().unwrap();
-    let fee_icpts = ICPTs::from_e8s(dry_run_suggested_fee.value.parse().unwrap());
+    let dry_run_suggested_fee = metadata_res.suggested_fee.map(|mut suggested_fee| {
+        assert_eq!(suggested_fee.len(), 1);
+        suggested_fee.pop().unwrap()
+    });
+    let fee_icpts = Tokens::from_e8s(
+        dry_run_suggested_fee
+            .clone()
+            .unwrap_or_else(|| amount_(Tokens::default(), token_name).unwrap())
+            .value
+            .parse()
+            .unwrap(),
+    );
 
     if accept_suggested_fee {
         for o in &mut all_ops {
             if o._type == "FEE" {
-                o.amount = Some(signed_amount(-(fee_icpts.get_e8s() as i128)));
+                o.amount = Some(signed_amount(-(fee_icpts.get_e8s() as i128), token_name));
             }
         }
     } else {
         // we assume here that we've got a correct transaction; double check that the
         // fee really is what it should be.
         // Set Dissolve does not have a fee.
-        if !all_ops.iter().all(|op| {
-            [
-                START_DISSOLVE,
-                STOP_DISSOLVE,
-                SET_DISSOLVE_TIMESTAMP,
-                ADD_HOT_KEY,
-            ]
-            .contains(&&*op._type)
-        }) {
-            assert_eq!(Some(&dry_run_suggested_fee), trans_fee_amount.as_ref());
-        }
+        assert_eq!(dry_run_suggested_fee, trans_fee_amount);
     }
 
     // now try with operations containing the correct fee
@@ -180,9 +187,10 @@ pub async fn prepare_multiple_txn(
         .construction_metadata(pre_res.options, Some(all_sender_pks.clone()))
         .await
         .unwrap()?;
-    let mut suggested_fee = metadata_res.suggested_fee.clone().unwrap();
-    assert_eq!(suggested_fee.len(), 1);
-    let suggested_fee = suggested_fee.pop().unwrap();
+    let suggested_fee = metadata_res.suggested_fee.clone().map(|mut suggested_fee| {
+        assert_eq!(suggested_fee.len(), 1);
+        suggested_fee.pop().unwrap()
+    });
 
     // The fee reported here should be the same as the one we got from dry run
     assert_eq!(suggested_fee, dry_run_suggested_fee);
@@ -204,16 +212,16 @@ pub async fn prepare_multiple_txn(
 
 pub async fn prepare_txn(
     ros: &RosettaApiHandle,
-    transfer: Transfer,
+    operation: Operation,
     sender_keypair: Arc<EdKeypair>,
     accept_suggested_fee: bool,
     ingress_end: Option<u64>,
     created_at_time: Option<u64>,
-) -> Result<(ConstructionPayloadsResponse, ICPTs), RosettaError> {
+) -> Result<(ConstructionPayloadsResponse, Tokens), RosettaError> {
     prepare_multiple_txn(
         ros,
         &[RequestInfo {
-            request: Request::Transfer(transfer),
+            request: Request::Transfer(operation),
             sender_keypair,
         }],
         accept_suggested_fee,
@@ -232,7 +240,7 @@ pub async fn sign_txn(
 
     let mut keypairs_map = HashMap::new();
     for kp in keypairs {
-        let pid = principal_id_from_public_key(&to_public_key(&kp)).unwrap();
+        let pid = principal_id_from_public_key(&to_public_key(kp)).unwrap();
         let acc = AccountIdentifier::from(pid);
         keypairs_map.insert(acc, Arc::clone(kp));
     }
@@ -245,8 +253,7 @@ pub async fn sign_txn(
             // necessary for test_wrong_key().
             let keypair = keypairs_map
                 .get(
-                    &from_model_account_identifier(&p.account_identifier.as_ref().unwrap())
-                        .unwrap(),
+                    &from_model_account_identifier(p.account_identifier.as_ref().unwrap()).unwrap(),
                 )
                 .map(|x| Arc::clone(x))
                 .unwrap_or_else(|| Arc::clone(&keypairs[0]));
@@ -278,7 +285,7 @@ pub async fn sign_txn(
 pub async fn do_txn(
     ros: &RosettaApiHandle,
     sender_keypair: Arc<EdKeypair>,
-    transfer: Transfer,
+    operation: Operation,
     accept_suggested_fee: bool,
     ingress_end: Option<u64>,
     created_at_time: Option<u64>,
@@ -286,14 +293,14 @@ pub async fn do_txn(
     (
         TransactionIdentifier,
         TransactionResults,
-        ICPTs, // charged fee
+        Tokens, // charged fee
     ),
     RosettaError,
 > {
     do_multiple_txn(
         ros,
         &[RequestInfo {
-            request: Request::Transfer(transfer),
+            request: Request::Transfer(operation),
             sender_keypair,
         }],
         accept_suggested_fee,
@@ -313,7 +320,7 @@ pub async fn do_multiple_txn(
     (
         TransactionIdentifier,
         TransactionResults,
-        ICPTs, // charged fee
+        Tokens, // charged fee
     ),
     RosettaError,
 > {
@@ -333,7 +340,10 @@ pub async fn do_multiple_txn(
 
     if !accept_suggested_fee {
         let rs: Vec<_> = requests.iter().map(|r| r.request.clone()).collect();
-        assert_eq!(rs, from_operations(&parse_res.operations, false).unwrap());
+        assert_eq!(
+            rs,
+            from_operations(&parse_res.operations, false, DEFAULT_TOKEN_NAME).unwrap()
+        );
     }
 
     // check that we got enough unsigned messages
@@ -357,7 +367,10 @@ pub async fn do_multiple_txn(
 
     if !accept_suggested_fee {
         let rs: Vec<_> = requests.iter().map(|r| r.request.clone()).collect();
-        assert_eq!(rs, from_operations(&parse_res.operations, false).unwrap());
+        assert_eq!(
+            rs,
+            from_operations(&parse_res.operations, false, DEFAULT_TOKEN_NAME).unwrap()
+        );
     }
 
     let hash_res = ros
@@ -414,12 +427,12 @@ pub async fn send_icpts(
     ros: &RosettaApiHandle,
     keypair: Arc<EdKeypair>,
     dst: AccountIdentifier,
-    amount: ICPTs,
+    amount: Tokens,
 ) -> Result<
     (
         TransactionIdentifier,
         Option<BlockHeight>,
-        ICPTs, // charged fee
+        Tokens, // charged fee
     ),
     RosettaError,
 > {
@@ -430,14 +443,14 @@ pub async fn send_icpts_with_window(
     ros: &RosettaApiHandle,
     keypair: Arc<EdKeypair>,
     dst: AccountIdentifier,
-    amount: ICPTs,
+    amount: Tokens,
     ingress_end: Option<u64>,
     created_at_time: Option<u64>,
 ) -> Result<
     (
         TransactionIdentifier,
         Option<BlockHeight>,
-        ICPTs, // charged fee
+        Tokens, // charged fee
     ),
     RosettaError,
 > {
@@ -446,18 +459,18 @@ pub async fn send_icpts_with_window(
 
     let from: AccountIdentifier = PrincipalId::new_self_authenticating(&public_key_der).into();
 
-    let t = Transfer::Send {
+    let t = Operation::Transfer {
         from,
         to: dst,
         amount,
-        fee: ICPTs::ZERO,
+        fee: Tokens::ZERO,
     };
 
     do_txn(ros, keypair, t, true, ingress_end, created_at_time)
         .await
         .and_then(|(_, results, fee)| {
             if let Some(RequestResult {
-                _type: Request::Transfer(Transfer::Send { .. }),
+                _type: Request::Transfer(Operation::Transfer { .. }),
                 transaction_identifier,
                 block_index,
                 ..

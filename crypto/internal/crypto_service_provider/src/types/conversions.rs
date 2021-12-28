@@ -32,7 +32,6 @@ mod tests;
 
 /// Create a key identifier from the public coefficients
 // TODO (CRP-821): Tests - take the existing ones from classic DKG.
-// TODO (CRP-821): Remove classic DKG conversion.
 pub fn key_id_from_csp_pub_coeffs(csp_public_coefficients: &CspPublicCoefficients) -> KeyId {
     let mut hash = Sha256::new();
     hash.update(
@@ -195,7 +194,7 @@ impl AsRef<[u8]> for CspPublicKey {
             CspPublicKey::EcdsaSecp256k1(bytes) => &bytes.0,
             CspPublicKey::Ed25519(bytes) => &bytes.0,
             CspPublicKey::MultiBls12_381(public_key_bytes) => &public_key_bytes.0,
-            CspPublicKey::RsaSha256(public_key_bytes) => &public_key_bytes.as_der(),
+            CspPublicKey::RsaSha256(public_key_bytes) => public_key_bytes.as_der(),
         }
     }
 }
@@ -233,7 +232,7 @@ impl AsRef<[u8]> for CspSignature {
                 ThresBls12_381_Signature::Individual(sig_bytes) => &sig_bytes.0,
                 ThresBls12_381_Signature::Combined(sig_bytes) => &sig_bytes.0,
             },
-            CspSignature::RsaSha256(bytes) => &bytes,
+            CspSignature::RsaSha256(bytes) => bytes,
         }
     }
 }

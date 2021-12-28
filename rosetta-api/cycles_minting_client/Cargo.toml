@@ -15,5 +15,5 @@ ledger-canister = {path = "../ledger_canister"}
 lazy_static = "1.4.0"
 candid = "0.7.4"
 ed25519-dalek = "1.0.1"
-cycles-minting-canister = {path = "../cycles_minting_canister"}
+cycles-minting-canister = {path = "../../nns/cmc"}
 url = "2.2.1"

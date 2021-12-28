@@ -12,7 +12,7 @@ use ic_types::NodeId;
 use proptest::std_facade::BTreeSet;
 use std::collections::HashSet;
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 
 pub struct ServerBuilder {
@@ -24,17 +24,17 @@ pub struct ServerBuilder {
 }
 
 impl ServerBuilder {
-    pub fn with_msg_for_client(mut self, msg: &str) -> ServerBuilder {
+    pub fn with_msg_for_client(mut self, msg: &str) -> Self {
         self.msg_for_client = Some(msg.to_string());
         self
     }
 
-    pub fn expect_msg_from_client(mut self, msg: &str) -> ServerBuilder {
+    pub fn expect_msg_from_client(mut self, msg: &str) -> Self {
         self.msg_expected_from_client = Some(msg.to_string());
         self
     }
 
-    pub fn add_allowed_client(mut self, client: NodeId) -> ServerBuilder {
+    pub fn add_allowed_client(mut self, client: NodeId) -> Self {
         match self.allowed_nodes {
             None => {
                 self.allowed_nodes = {
@@ -55,7 +55,7 @@ impl ServerBuilder {
         }
     }
 
-    pub fn allow_all_nodes(mut self) -> ServerBuilder {
+    pub fn allow_all_nodes(mut self) -> Self {
         match self.allowed_nodes {
             None => {
                 self.allowed_nodes = Some(SomeOrAllNodes::All);
@@ -68,7 +68,7 @@ impl ServerBuilder {
         }
     }
 
-    pub fn add_allowed_client_cert(mut self, cert: X509PublicKeyCert) -> ServerBuilder {
+    pub fn add_allowed_client_cert(mut self, cert: X509PublicKeyCert) -> Self {
         let cert = TlsPublicKeyCert::new_from_der(cert.certificate_der)
             .expect("failed to construct TlsPublicKeyCert from DER");
         self.allowed_certs.insert(cert);
@@ -122,33 +122,19 @@ impl Server {
 
         let (tls_stream, authenticated_node) = self
             .crypto
-            .perform_tls_server_handshake(tcp_stream, self.allowed_clients.clone(), REG_V1)
-            .await?;
-        let (tls_read_half, tls_write_half) = tls_stream.split();
-
-        self.send_msg_to_client_if_configured(tls_write_half).await;
-        self.expect_msg_from_client_if_configured(tls_read_half)
-            .await;
-        Ok(authenticated_node)
-    }
-
-    pub async fn run_with_optional_client_auth(self) -> Result<Peer, TlsServerHandshakeError> {
-        let tcp_stream = self.accept_connection_on_listener().await;
-
-        let (tls_stream, peer) = self
-            .crypto
-            .perform_tls_server_handshake_temp_with_optional_client_auth(
+            .perform_tls_server_handshake_with_rustls(
                 tcp_stream,
                 self.allowed_clients.clone(),
                 REG_V1,
             )
             .await?;
-        let (tls_read_half, tls_write_half) = tls_stream.split();
+        let (mut rh, mut wh) = tls_stream.split();
 
-        self.send_msg_to_client_if_configured(tls_write_half).await;
-        self.expect_msg_from_client_if_configured(tls_read_half)
+        self.send_msg_to_client_if_configured(&mut wh, &mut rh)
             .await;
-        Ok(peer)
+        self.expect_msg_from_client_if_configured(&mut rh, &mut wh)
+            .await;
+        Ok(authenticated_node)
     }
 
     pub async fn run_without_client_auth(self) -> Result<(), TlsServerHandshakeError> {
@@ -156,12 +142,13 @@ impl Server {
 
         let tls_stream = self
             .crypto
-            .perform_tls_server_handshake_without_client_auth(tcp_stream, REG_V1)
+            .perform_tls_server_handshake_without_client_auth_with_rustls(tcp_stream, REG_V1)
             .await?;
-        let (tls_read_half, tls_write_half) = tls_stream.split();
+        let (mut rh, mut wh) = tls_stream.split();
 
-        self.send_msg_to_client_if_configured(tls_write_half).await;
-        self.expect_msg_from_client_if_configured(tls_read_half)
+        self.send_msg_to_client_if_configured(&mut wh, &mut rh)
+            .await;
+        self.expect_msg_from_client_if_configured(&mut rh, &mut wh)
             .await;
         Ok(())
     }
@@ -179,23 +166,31 @@ impl Server {
         tcp_stream
     }
 
-    async fn expect_msg_from_client_if_configured(&self, mut read_half: TlsReadHalf) {
+    async fn expect_msg_from_client_if_configured(
+        &self,
+        rh: &mut TlsReadHalf,
+        wh: &mut TlsWriteHalf,
+    ) {
         if let Some(msg_expected_from_client) = &self.msg_expected_from_client {
-            let mut bytes_from_client = Vec::new();
-            // Depending on the OS, the client terminates the connection after sending the
-            // message (the following call returns an Err), or it keeps the connection alive
-            // (the following call returns Ok). This behaviour is not relevant for this test
-            // and thus we do not evaluate the result.
-            let _ = read_half.read_to_end(&mut bytes_from_client).await;
-            let msg_from_client = String::from_utf8(bytes_from_client.to_vec()).unwrap();
-            assert_eq!(msg_from_client, msg_expected_from_client.clone());
+            let mut reader = BufReader::new(rh);
+            let msg = reader.lines().next_line().await.unwrap().unwrap();
+            assert_eq!(&msg, msg_expected_from_client);
+
+            const ACK: u8 = 0x06;
+            wh.write_u8(ACK).await.unwrap();
         }
     }
 
-    async fn send_msg_to_client_if_configured(&self, mut write_half: TlsWriteHalf) {
+    async fn send_msg_to_client_if_configured(&self, wh: &mut TlsWriteHalf, rh: &mut TlsReadHalf) {
         if let Some(msg_for_client) = &self.msg_for_client {
-            let num_bytes_written = write_half.write(&msg_for_client.as_bytes()).await.unwrap();
-            assert_eq!(num_bytes_written, msg_for_client.as_bytes().len());
+            // Append a newline (end of line, EOL, 0xA) so the peer knows where the msg ends
+            let msg_with_eol = format!("{}\n", msg_for_client);
+            let num_bytes_written = wh.write(msg_with_eol.as_bytes()).await.unwrap();
+            assert_eq!(num_bytes_written, msg_with_eol.as_bytes().len());
+
+            const ACK: u8 = 0x06;
+            let reply = rh.read_u8().await.unwrap();
+            assert_eq!(reply, ACK);
         }
     }
 

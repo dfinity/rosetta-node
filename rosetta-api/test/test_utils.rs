@@ -10,7 +10,7 @@ use ic_rosetta_api::models::{
 use ic_rosetta_api::request_types::{
     Request, RequestResult, RequestType, Status, TransactionResults,
 };
-use ledger_canister::{self, AccountIdentifier, Block, BlockHeight, ICPTs, SendArgs, Transfer};
+use ledger_canister::{self, AccountIdentifier, Block, BlockHeight, Operation, SendArgs, Tokens};
 use tokio::sync::RwLock;
 
 use async_trait::async_trait;
@@ -20,7 +20,8 @@ use ic_rosetta_api::balance_book::BalanceBook;
 use ic_rosetta_api::convert::{from_arg, to_model_account_identifier};
 use ic_rosetta_api::ledger_client::{Blocks, LedgerAccess};
 use ic_rosetta_api::rosetta_server::RosettaApiServer;
-use ic_rosetta_api::{store::HashedBlock, RosettaRequestHandler};
+use ic_rosetta_api::store::BlockStore;
+use ic_rosetta_api::{store::HashedBlock, RosettaRequestHandler, DEFAULT_TOKEN_NAME};
 use ic_types::{
     messages::{HttpCanisterUpdate, HttpSubmitContent},
     PrincipalId,
@@ -33,6 +34,8 @@ use std::str::FromStr;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+use ic_nns_governance::pb::v1::manage_neuron::NeuronIdOrSubaccount;
+use ic_nns_governance::pb::v1::NeuronInfo;
 use ic_rosetta_test_utils::{acc_id, sample_data::Scribe};
 
 fn init_test_logger() {
@@ -132,6 +135,10 @@ impl LedgerAccess for TestLedger {
 
     async fn cleanup(&self) {}
 
+    fn token_name(&self) -> &str {
+        DEFAULT_TOKEN_NAME
+    }
+
     async fn sync_blocks(&self, _stopped: Arc<AtomicBool>) -> Result<(), ApiError> {
         let mut queue = self.submit_queue.write().await;
 
@@ -183,7 +190,7 @@ impl LedgerAccess for TestLedger {
 
             let from = ledger_canister::AccountIdentifier::new(from, from_subaccount);
 
-            let transaction = Transfer::Send {
+            let transaction = Operation::Transfer {
                 from,
                 to,
                 amount,
@@ -214,21 +221,30 @@ impl LedgerAccess for TestLedger {
                 _type: Request::Transfer(transaction),
                 transaction_identifier: Some(From::from(&block.transaction().hash())),
                 block_index: None,
+                neuron_id: None,
                 status: Status::Completed,
             });
         }
 
         Ok(results.into())
     }
+
+    async fn neuron_info(
+        &self,
+        _id: NeuronIdOrSubaccount,
+        _: bool,
+    ) -> Result<NeuronInfo, ApiError> {
+        panic!("Neuron info not available through TestLedger");
+    }
 }
 
 pub(crate) fn to_balances(
-    b: BTreeMap<AccountIdentifier, ICPTs>,
+    b: BTreeMap<AccountIdentifier, Tokens>,
     index: BlockHeight,
 ) -> BalanceBook {
     let mut balance_book = BalanceBook::default();
     for (acc, amount) in b {
-        balance_book.icpt_pool -= amount;
+        balance_book.token_pool -= amount;
         balance_book.store.insert(acc, index, amount);
     }
     balance_book
@@ -238,7 +254,7 @@ pub async fn get_balance(
     req_handler: &RosettaRequestHandler,
     height: Option<usize>,
     acc: AccountIdentifier,
-) -> Result<ICPTs, ApiError> {
+) -> Result<Tokens, ApiError> {
     let block_id = height.map(|h| PartialBlockIdentifier {
         index: Some(h as i64),
         hash: None,
@@ -247,7 +263,7 @@ pub async fn get_balance(
         AccountBalanceRequest::new(req_handler.network_id(), to_model_account_identifier(&acc));
     msg.block_identifier = block_id;
     let resp = req_handler.account_balance(msg).await?;
-    Ok(ICPTs::from_e8s(resp.balances[0].value.parse().unwrap()))
+    Ok(Tokens::from_e8s(resp.balances[0].value.parse().unwrap()))
 }
 
 #[actix_rt::test]
@@ -278,11 +294,12 @@ async fn smoke_test_with_server() {
         RosettaApiServer::new(serv_ledger, serv_req_handler, addr.clone(), false).unwrap(),
     );
     let serv_run = serv.clone();
-    actix_rt::spawn(async move {
+    let arbiter = actix_rt::Arbiter::new();
+    arbiter.spawn(Box::pin(async move {
         log::info!("Spawning server");
         serv_run.run(Default::default()).await.unwrap();
         log::info!("Server thread done");
-    });
+    }));
 
     let http_client = reqwest::Client::new();
 
@@ -319,9 +336,11 @@ async fn smoke_test_with_server() {
         (num_transactions + num_accounts - 1) as i64
     );
     assert_eq!(
-        ICPTs::from_e8s(u64::from_str(&res.balances[0].value).unwrap()),
+        Tokens::from_e8s(u64::from_str(&res.balances[0].value).unwrap()),
         *scribe.balance_book.get(&acc_id(0)).unwrap()
     );
 
     serv.stop().await;
+    arbiter.stop();
+    arbiter.join().unwrap();
 }

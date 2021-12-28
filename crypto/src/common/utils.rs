@@ -1,64 +1,34 @@
 //! Static crypto utility methods.
-use crate::common::utils::dkg::InitialDkgConfig;
-use crate::CryptoComponent;
 use ic_config::crypto::CryptoConfig;
-use ic_crypto_internal_basic_sig_ed25519 as ed25519;
-use ic_crypto_internal_csp::api::{CspKeyGenerator, NiDkgCspClient};
+use ic_crypto_internal_csp::api::{CspIDkgProtocol, CspKeyGenerator, NiDkgCspClient};
 use ic_crypto_internal_csp::keygen::public_key_hash_as_key_id;
 use ic_crypto_internal_csp::secret_key_store::proto_store::ProtoSecretKeyStore;
 use ic_crypto_internal_csp::types::{CspPop, CspPublicKey};
 use ic_crypto_internal_csp::Csp;
 use ic_crypto_internal_csp::{public_key_store, CryptoServiceProvider};
 use ic_crypto_tls_interfaces::TlsPublicKeyCert;
-use ic_interfaces::crypto::DkgAlgorithm;
-use ic_logger::replica_logger::no_op_logger;
+use ic_crypto_utils_basic_sig::conversions as basicsig_conversions;
 use ic_protobuf::crypto::v1::NodePublicKeys;
 use ic_protobuf::registry::crypto::v1::AlgorithmId as AlgorithmIdProto;
 use ic_protobuf::registry::crypto::v1::PublicKey as PublicKeyProto;
-use ic_registry_client::fake::FakeRegistryClient;
-use ic_registry_common::proto_registry_data_provider::ProtoRegistryDataProvider;
-use ic_types::crypto::dkg::EncryptionPublicKeyWithPop;
 use ic_types::crypto::{AlgorithmId, CryptoError, CryptoResult};
-use ic_types::{NodeId, PrincipalId};
+use ic_types::NodeId;
 use rand_core::OsRng;
 use std::convert::TryFrom;
 use std::path::Path;
 use std::sync::Arc;
 
-pub mod dkg;
 pub mod ni_dkg;
 
 mod temp_crypto;
 
 pub use crate::sign::utils::combined_threshold_signature_and_public_key;
 use ic_crypto_internal_logmon::metrics::CryptoMetrics;
+use std::os::unix::fs::PermissionsExt;
 pub use temp_crypto::{NodeKeysToGenerate, TempCryptoComponent};
 
 #[cfg(test)]
 mod tests;
-
-/// Generates initial DKG ephemeral encryption keys for the `dkg_config` and the
-/// `node_id`.
-/// * The secret key is stored in the crypto secret key store at the
-///   `crypto_root`.
-/// * The corresponding public key is returned
-/// * If the crypto root does not exist yet, it is created and the appropriate
-///   permissions are set.
-pub fn generate_initial_dkg_encryption_keys(
-    crypto_root: &Path,
-    dkg_config: &InitialDkgConfig,
-    node_id: NodeId,
-) -> CryptoResult<EncryptionPublicKeyWithPop> {
-    let config = config_with_dir_and_permissions(crypto_root);
-    let registry_client = FakeRegistryClient::new(Arc::new(ProtoRegistryDataProvider::new()));
-    let crypto_component = CryptoComponent::new_with_fake_node_id(
-        &config,
-        Arc::new(registry_client),
-        node_id,
-        no_op_logger(),
-    );
-    crypto_component.generate_encryption_keys(dkg_config.get(), node_id)
-}
 
 /// Generates (forward-secure) NI-DKG dealing encryption key material given the
 /// `node_id` of the node.
@@ -75,6 +45,28 @@ pub fn generate_dkg_dealing_encryption_keys(crypto_root: &Path, node_id: NodeId)
         .create_forward_secure_key_pair(AlgorithmId::NiDkg_Groth20_Bls12_381, node_id)
         .expect("Failed to generate DKG dealing encryption keys");
     ic_crypto_internal_csp::keygen::utils::dkg_dealing_encryption_pk_to_proto(pubkey, pop)
+}
+
+/// Generates (MEGa) I-DKG dealing encryption key material.
+///
+/// Stores the secret key in the key store at `crypto_root` and returns the
+/// corresponding public key.
+///
+/// If the `crypto_root` directory does not exist, it is created with the
+/// required permissions. If there exists no key store in `crypto_root`, a new
+/// one is created.
+pub fn generate_idkg_dealing_encryption_keys(crypto_root: &Path) -> PublicKeyProto {
+    let mut csp = csp_at_root(crypto_root);
+    let pubkey = csp
+        .idkg_create_mega_key_pair(AlgorithmId::ThresholdEcdsaSecp256k1)
+        .expect("Failed to generate IDkg dealing encryption keys");
+
+    PublicKeyProto {
+        version: 0,
+        algorithm: AlgorithmIdProto::MegaSecp256k1 as i32,
+        key_value: pubkey.serialize(),
+        proof_data: None,
+    }
 }
 
 // TODO (CRP-994): Extend check_keys_locally to check consistency for all keys.
@@ -135,11 +127,9 @@ pub fn get_node_keys_or_generate_if_missing(crypto_root: &Path) -> (NodePublicKe
     }
 }
 
-pub(crate) fn derive_node_id(node_signing_pk: &PublicKeyProto) -> NodeId {
-    let pk_bytes = ed25519::types::PublicKeyBytes::try_from(node_signing_pk)
-        .expect("Corrupted node signing public key");
-    let der_pk = ed25519::public_key_to_der(pk_bytes);
-    NodeId::from(PrincipalId::new_self_authenticating(&der_pk))
+pub fn derive_node_id(node_signing_pk: &PublicKeyProto) -> NodeId {
+    basicsig_conversions::derive_node_id(node_signing_pk)
+        .expect("Corrupted node signing public key")
 }
 
 fn generate_node_signing_keys(crypto_root: &Path) -> PublicKeyProto {
@@ -258,7 +248,9 @@ fn generate_tls_keys(crypto_root: &Path, node: NodeId) -> TlsPublicKeyCert {
     csp.gen_tls_key_pair(node, "99991231235959Z")
 }
 
-pub(crate) fn csp_at_root(crypto_root: &Path) -> Csp<OsRng, ProtoSecretKeyStore> {
+pub(crate) fn csp_at_root(
+    crypto_root: &Path,
+) -> Csp<OsRng, ProtoSecretKeyStore, ProtoSecretKeyStore> {
     let config = config_with_dir_and_permissions(crypto_root);
     // disable metrics
     Csp::new(&config, None, Arc::new(CryptoMetrics::none()))
@@ -268,7 +260,9 @@ fn config_with_dir_and_permissions(crypto_root: &Path) -> CryptoConfig {
     std::fs::create_dir_all(&crypto_root)
         .unwrap_or_else(|err| panic!("Failed to create crypto root directory: {}", err));
     let config = CryptoConfig::new(crypto_root.to_path_buf());
-    CryptoConfig::set_dir_with_required_permission(&config.crypto_root)
+    std::fs::set_permissions(crypto_root, std::fs::Permissions::from_mode(0o750))
+        .expect("Could not set the permissions of the new test directory.");
+    CryptoConfig::check_dir_has_required_permissions(&config.crypto_root)
         .expect("Could not setup crypto_root directory");
     config
 }

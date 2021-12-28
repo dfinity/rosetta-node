@@ -62,6 +62,7 @@ impl From<ErrorCode> for RejectCode {
         use RejectCode::*;
         match err {
             SubnetOversubscribed => SysFatal,
+            MaxNumberOfCanistersReached => SysFatal,
             CanisterInvalidController => CanisterError,
             CanisterNotFound => DestinationInvalid,
             CanisterMethodNotFound => DestinationInvalid,
@@ -94,6 +95,7 @@ impl From<ErrorCode> for RejectCode {
             InvalidManagementPayload => CanisterReject,
             InsufficientCyclesInCall => CanisterError,
             CanisterWasmEngineError => CanisterError,
+            CanisterCyclesLimitExceeded => CanisterError,
         }
     }
 }
@@ -107,6 +109,7 @@ impl From<ErrorCode> for RejectCode {
 #[derive(Clone, Copy, Debug, PartialEq, EnumIter, Eq, Hash, Serialize, Deserialize)]
 pub enum ErrorCode {
     SubnetOversubscribed = 101,
+    MaxNumberOfCanistersReached = 102,
     CanisterOutputQueueFull = 201,
     IngressMessageTimeout = 202,
     CanisterNotFound = 301,
@@ -139,6 +142,7 @@ pub enum ErrorCode {
     InvalidManagementPayload = 519,
     InsufficientCyclesInCall = 520,
     CanisterWasmEngineError = 521,
+    CanisterCyclesLimitExceeded = 522,
 }
 
 impl From<candid::Error> for UserError {
@@ -155,6 +159,7 @@ impl TryFrom<u64> for ErrorCode {
     fn try_from(err: u64) -> Result<ErrorCode, Self::Error> {
         match err {
             101 => Ok(ErrorCode::SubnetOversubscribed),
+            102 => Ok(ErrorCode::MaxNumberOfCanistersReached),
             201 => Ok(ErrorCode::CanisterOutputQueueFull),
             202 => Ok(ErrorCode::IngressMessageTimeout),
             301 => Ok(ErrorCode::CanisterNotFound),
@@ -187,6 +192,7 @@ impl TryFrom<u64> for ErrorCode {
             519 => Ok(ErrorCode::InvalidManagementPayload),
             520 => Ok(ErrorCode::InsufficientCyclesInCall),
             521 => Ok(ErrorCode::CanisterWasmEngineError),
+            522 => Ok(ErrorCode::CanisterCyclesLimitExceeded),
             _ => Err(ProxyDecodeError::ValueOutOfRange {
                 typ: "ErrorCode",
                 err: err.to_string(),

@@ -32,6 +32,7 @@ use ic_config::crypto::CryptoConfig;
 use ic_crypto_internal_csp::api::NodePublicKeyData;
 use ic_crypto_internal_csp::keygen::public_key_hash_as_key_id;
 use ic_crypto_internal_csp::secret_key_store::proto_store::ProtoSecretKeyStore;
+use ic_crypto_internal_csp::secret_key_store::volatile_store::VolatileSecretKeyStore;
 use ic_crypto_internal_csp::{CryptoServiceProvider, Csp};
 use ic_crypto_internal_logmon::metrics::CryptoMetrics;
 use ic_crypto_tls_interfaces::TlsHandshake;
@@ -60,9 +61,10 @@ use std::sync::Arc;
 pub const THRESHOLD_SIG_DATA_STORE_CAPACITY: usize = ThresholdSigDataStoreImpl::CAPACITY;
 
 /// A type alias for `CryptoComponentFatClient<Csp<OsRng,
-/// ProtoSecretKeyStore>>`. See the Rust documentation of
+/// ProtoSecretKeyStore, ProtoSecretKeyStore>>`. See the Rust documentation of
 /// `CryptoComponentFatClient`.
-pub type CryptoComponent = CryptoComponentFatClient<Csp<OsRng, ProtoSecretKeyStore>>;
+pub type CryptoComponent =
+    CryptoComponentFatClient<Csp<OsRng, ProtoSecretKeyStore, ProtoSecretKeyStore>>;
 
 /// A crypto component that offers limited functionality and can be used outside
 /// of the replica process.
@@ -71,7 +73,7 @@ pub type CryptoComponent = CryptoComponentFatClient<Csp<OsRng, ProtoSecretKeySto
 ///
 /// This should be used whenever crypto is required on a node, but a
 /// full-fledged `CryptoComponent` is not available. Example use cases are in
-/// separate process such as ic-fe or the node manager.
+/// separate process such as ic-fe or the orchestrator.
 ///
 /// Do not instantiate a CryptoComponent outside of the replica process, since
 /// that may lead to problems with concurrent access to the secret key store.
@@ -167,8 +169,11 @@ impl LockableThresholdSigDataStore {
     }
 }
 
-impl<R: Rng + CryptoRng + Send + Sync + Clone>
-    CryptoComponentFatClient<Csp<R, ProtoSecretKeyStore>>
+/// Note that `R: 'static` is required so that `CspTlsHandshakeSignerProvider`
+/// can be implemented for [Csp]. See the documentation of the respective `impl`
+/// block for more details on the meaning of `R: 'static`.
+impl<R: Rng + CryptoRng + Send + Sync + Clone + 'static>
+    CryptoComponentFatClient<Csp<R, ProtoSecretKeyStore, VolatileSecretKeyStore>>
 {
     /// Creates a crypto component using the given `csprng` and fake `node_id`.
     pub fn new_with_rng_and_fake_node_id(
@@ -215,7 +220,7 @@ impl<C: CryptoServiceProvider> fmt::Debug for CryptoComponentFatClient<C> {
     }
 }
 
-impl CryptoComponentFatClient<Csp<OsRng, ProtoSecretKeyStore>> {
+impl CryptoComponentFatClient<Csp<OsRng, ProtoSecretKeyStore, ProtoSecretKeyStore>> {
     /// Creates a new crypto component.
     ///
     /// This is the constructor to use to create the replica's / node's crypto
@@ -262,7 +267,7 @@ impl CryptoComponentFatClient<Csp<OsRng, ProtoSecretKeyStore>> {
         metrics_registry: Option<&MetricsRegistry>,
     ) -> Self {
         let metrics = Arc::new(CryptoMetrics::new(metrics_registry));
-        let csp = Csp::new(&config, Some(new_logger!(&logger)), Arc::clone(&metrics));
+        let csp = Csp::new(config, Some(new_logger!(&logger)), Arc::clone(&metrics));
         let node_pks = csp.node_public_keys();
         let node_signing_pk = node_pks
             .node_signing_pk
@@ -307,7 +312,7 @@ impl CryptoComponentFatClient<Csp<OsRng, ProtoSecretKeyStore>> {
         registry_client: Arc<dyn RegistryClient>,
         logger: ReplicaLogger,
     ) -> impl CryptoComponentForNonReplicaProcess {
-        // disable metrics for crypto in node manager:
+        // disable metrics for crypto in orchestrator:
         CryptoComponentFatClient::new(config, registry_client, logger, None)
     }
 

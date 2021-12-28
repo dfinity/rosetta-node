@@ -4,15 +4,16 @@ use dfn_protobuf::protobuf;
 use ic_canister_client::Sender;
 use ic_types::{CanisterId, PrincipalId};
 use ledger_canister::{
-    AccountBalanceArgs, AccountIdentifier, ArchiveOptions, Block, BlockArg, BlockHeight, BlockRes,
-    EncodedBlock, GetBlocksArgs, GetBlocksRes, ICPTs, IterBlocksArgs, IterBlocksRes,
-    LedgerCanisterInitPayload, Memo, NotifyCanisterArgs, SendArgs, Subaccount, TimeStamp,
-    TotalSupplyArgs, Transaction, Transfer, MIN_BURN_AMOUNT, TRANSACTION_FEE,
+    AccountBalanceArgs, AccountIdentifier, ArchiveOptions, BinaryAccountBalanceArgs, Block,
+    BlockArg, BlockHeight, BlockRes, EncodedBlock, GetBlocksArgs, GetBlocksRes, IterBlocksArgs,
+    IterBlocksRes, LedgerCanisterInitPayload, Memo, NotifyCanisterArgs, Operation, SendArgs,
+    Subaccount, TimeStamp, Tokens, TotalSupplyArgs, Transaction, TransferArgs, TransferError,
+    MIN_BURN_AMOUNT, TRANSACTION_FEE,
 };
 use on_wire::IntoWire;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 fn create_sender(i: u64) -> ic_canister_client::Sender {
     use rand_chacha::ChaChaRng;
@@ -29,7 +30,7 @@ fn example_block() -> Block {
     let transaction = Transaction::new(
         AccountIdentifier::new(CanisterId::from_u64(1).get(), None),
         AccountIdentifier::new(CanisterId::from_u64(2).get(), None),
-        ICPTs::new(10000, 50).unwrap(),
+        Tokens::new(10000, 50).unwrap(),
         TRANSACTION_FEE,
         Memo(456),
         TimeStamp::new(2_000_000_000, 123_456_789),
@@ -50,18 +51,18 @@ async fn simple_send(
             protobuf,
             SendArgs {
                 memo: Memo::default(),
-                amount: ICPTs::from_e8s(amount_e8s),
-                fee: ICPTs::from_e8s(fee_e8s),
+                amount: Tokens::from_e8s(amount_e8s),
+                fee: Tokens::from_e8s(fee_e8s),
                 from_subaccount: None,
                 to: to.get_principal_id().into(),
                 created_at_time: None,
             },
-            &from,
+            from,
         )
         .await
 }
 
-async fn query_balance(ledger: &Canister<'_>, acc: &Sender) -> Result<ICPTs, String> {
+async fn query_balance(ledger: &Canister<'_>, acc: &Sender) -> Result<Tokens, String> {
     ledger
         .query_(
             "account_balance_pb",
@@ -73,7 +74,31 @@ async fn query_balance(ledger: &Canister<'_>, acc: &Sender) -> Result<ICPTs, Str
         .await
 }
 
-fn make_accounts(num_accounts: u64, num_subaccounts: u8) -> HashMap<AccountIdentifier, ICPTs> {
+async fn account_balance_candid(ledger: &Canister<'_>, acc: &AccountIdentifier) -> Tokens {
+    ledger
+        .query_(
+            "account_balance",
+            candid_one,
+            BinaryAccountBalanceArgs {
+                account: acc.to_address(),
+            },
+        )
+        .await
+        .expect("failed to query balance")
+}
+
+async fn transfer_candid(
+    ledger: &Canister<'_>,
+    from: &Sender,
+    args: TransferArgs,
+) -> Result<BlockHeight, TransferError> {
+    ledger
+        .update_from_sender("transfer", candid_one, args, from)
+        .await
+        .expect("transfer call trapped")
+}
+
+fn make_accounts(num_accounts: u64, num_subaccounts: u8) -> HashMap<AccountIdentifier, Tokens> {
     (1..=num_accounts)
         .flat_map(|i| {
             let pid = CanisterId::from_u64(i).get();
@@ -81,7 +106,7 @@ fn make_accounts(num_accounts: u64, num_subaccounts: u8) -> HashMap<AccountIdent
                 let subaccount: [u8; 32] = [j; 32];
                 (
                     AccountIdentifier::new(pid, Some(Subaccount(subaccount))),
-                    ICPTs::from_e8s(i * j as u64),
+                    Tokens::from_e8s(i * j as u64),
                 )
             })
         })
@@ -96,7 +121,7 @@ fn upgrade_test() {
         let accounts = make_accounts(5, 4);
 
         let mut ledger = proj
-            .cargo_bin("ledger-canister")
+            .cargo_bin("ledger-canister", &[])
             .install_(
                 &r,
                 CandidOne(LedgerCanisterInitPayload::new(
@@ -170,7 +195,7 @@ fn archive_blocks_small_test() {
                 archive_options,
                 send_whitelist: HashSet::new(),
             };
-            let mut install = proj.cargo_bin("ledger-canister").install(&r);
+            let mut install = proj.cargo_bin("ledger-canister", &[]).install(&r);
             install.memory_allocation = Some(128 * 1024 * 1024);
             install.bytes(CandidOne(payload).into_bytes()?).await?
         };
@@ -193,6 +218,10 @@ fn archive_blocks_small_test() {
         simple_send(&ledger, &create_sender(12345), &minting_account, 100, 0).await?;
 
         ledger_assert_num_blocks(&ledger, 1).await;
+        let GetBlocksRes(ledger_blocks) = ledger
+            .query_("get_blocks_pb", protobuf, GetBlocksArgs::new(12u64, 1usize))
+            .await?;
+        assert_eq!(ledger_blocks.unwrap().len(), 1);
 
         // First we get the CanisterId of each archive node that has been
         // created
@@ -268,7 +297,7 @@ fn archive_blocks_large_test() {
                 archive_options,
                 send_whitelist: HashSet::new(),
             };
-            let mut install = proj.cargo_bin("ledger-canister").install(&r);
+            let mut install = proj.cargo_bin("ledger-canister", &[]).install(&r);
             install.memory_allocation = Some(128 * 1024 * 1024);
             install.bytes(CandidOne(payload).into_bytes()?).await?
         };
@@ -305,8 +334,9 @@ fn archive_blocks_large_test() {
         println!("[test] calling send() to trigger archiving");
         simple_send(&ledger, &create_sender(12345), &minting_account, 100, 0).await?;
 
-        // Make sure Ledger is empty after archiving blocks
-        ledger_assert_num_blocks(&ledger, 0).await;
+        // Only the last (simple_send) transaction should be on the ledger after
+        // archiving blocks
+        ledger_assert_num_blocks(&ledger, 1).await;
 
         // First we get the CanisterId of each archive node that has been
         // created
@@ -364,21 +394,24 @@ fn notify_timeout_test() {
     local_test_e(|r| async move {
         let proj = Project::new(env!("CARGO_MANIFEST_DIR"));
         let mut accounts = HashMap::new();
-        let us = PrincipalId::new_anonymous();
-        accounts.insert(us.into(), ICPTs::from_icpts(100).unwrap());
+        let sender = create_sender(100);
+        accounts.insert(
+            sender.get_principal_id().into(),
+            Tokens::from_tokens(100).unwrap(),
+        );
 
         let test_canister = proj
-            .cargo_bin("test-notified")
+            .cargo_bin("test-notified", &[])
             .install_(&r, Vec::new())
             .await?;
 
         let minting_account = create_sender(0);
 
         let mut send_whitelist = HashSet::new();
-        send_whitelist.insert(CanisterId::new(us).unwrap());
+        send_whitelist.insert(test_canister.canister_id());
 
         let ledger_canister = proj
-            .cargo_bin("ledger-canister")
+            .cargo_bin("ledger-canister", &["notify-method"])
             .install_(
                 &r,
                 CandidOne(LedgerCanisterInitPayload {
@@ -396,17 +429,18 @@ fn notify_timeout_test() {
             .await?;
 
         let block_height: BlockHeight = ledger_canister
-            .update_(
+            .update_from_sender(
                 "send_pb",
                 protobuf,
                 SendArgs {
                     from_subaccount: None,
                     to: test_canister.canister_id().into(),
-                    amount: ICPTs::from_icpts(1).unwrap(),
+                    amount: Tokens::from_tokens(1).unwrap(),
                     fee: TRANSACTION_FEE,
                     memo: Memo(0),
                     created_at_time: None,
                 },
+                &sender,
             )
             .await?;
 
@@ -419,12 +453,13 @@ fn notify_timeout_test() {
         };
 
         let r1: Result<(), String> = ledger_canister
-            .update_("notify_pb", protobuf, notify.clone())
+            .update_from_sender("notify_pb", protobuf, notify.clone(), &sender)
             .await;
 
         assert!(
-            r1.unwrap_err().contains("that is more than"),
-            "Cannot notify after duration"
+            r1.as_ref().unwrap_err().contains("that is more than"),
+            "Notifying after duration should return an error containing \"that is more than\". Instead got {:?}",
+            r1
         );
 
         Ok(())
@@ -436,18 +471,26 @@ fn notify_test() {
     local_test_e(|r| async move {
         let proj = Project::new(env!("CARGO_MANIFEST_DIR"));
         let mut accounts = HashMap::new();
-        let us = PrincipalId::new_anonymous();
-        accounts.insert(us.into(), ICPTs::from_icpts(100).unwrap());
+        let sender = create_sender(100);
+        accounts.insert(
+            sender.get_principal_id().into(),
+            Tokens::from_tokens(100).unwrap(),
+        );
 
         let test_canister = proj
-            .cargo_bin("test-notified")
+            .cargo_bin("test-notified", &[])
+            .install_(&r, Vec::new())
+            .await?;
+
+        let test_canister_2 = proj
+            .cargo_bin("test-notified", &[])
             .install_(&r, Vec::new())
             .await?;
 
         let minting_account = create_sender(0);
 
         let mut send_whitelist = HashSet::new();
-        send_whitelist.insert(CanisterId::new(us).unwrap());
+        send_whitelist.insert(test_canister.canister_id());
 
         let (node_max_memory_size_bytes, max_message_size_bytes): (usize, usize) = {
             let blocks_per_archive_node = 8;
@@ -471,7 +514,7 @@ fn notify_test() {
         });
 
         let ledger_canister = proj
-            .cargo_bin("ledger-canister")
+            .cargo_bin("ledger-canister", &["notify-method"])
             .install_(
                 &r,
                 CandidOne(LedgerCanisterInitPayload {
@@ -488,33 +531,35 @@ fn notify_test() {
             .await?;
 
         let block_height: BlockHeight = ledger_canister
-            .update_(
+            .update_from_sender(
                 "send_pb",
                 protobuf,
                 SendArgs {
                     from_subaccount: None,
                     to: test_canister.canister_id().into(),
-                    amount: ICPTs::from_icpts(1).unwrap(),
+                    amount: Tokens::from_tokens(1).unwrap(),
                     fee: TRANSACTION_FEE,
                     memo: Memo(0),
                     created_at_time: None,
                 },
+                &sender,
             )
             .await?;
 
         for i in 1..10 {
             let _: BlockHeight = ledger_canister
-                .update_(
+                .update_from_sender(
                     "send_pb",
                     protobuf,
                     SendArgs {
                         from_subaccount: None,
                         to: test_canister.canister_id().into(),
-                        amount: ICPTs::from_e8s(1),
+                        amount: Tokens::from_e8s(1),
                         fee: TRANSACTION_FEE,
                         memo: Memo(i),
                         created_at_time: None,
                     },
+                    &sender,
                 )
                 .await?;
         }
@@ -528,15 +573,15 @@ fn notify_test() {
         };
 
         let r1: Result<(), String> = ledger_canister
-            .update_("notify_pb", protobuf, notify.clone())
+            .update_from_sender("notify_pb", protobuf, notify.clone(), &sender)
             .await;
 
         let r2: Result<(), String> = ledger_canister
-            .update_("notify_dfx", candid_one, notify.clone())
+            .update_from_sender("notify_dfx", candid_one, notify.clone(), &sender)
             .await;
 
         let r3: Result<(), String> = ledger_canister
-            .update_("notify_pb", protobuf, notify.clone())
+            .update_from_sender("notify_pb", protobuf, notify.clone(), &sender)
             .await;
 
         let count: u32 = test_canister.query_("check_counter", candid, ()).await?;
@@ -559,6 +604,161 @@ fn notify_test() {
 
         assert_eq!(2, count);
 
+        // Notification of non whitelisted target should fail
+        let block_height: BlockHeight = ledger_canister
+            .update_from_sender(
+                "send_pb",
+                protobuf,
+                SendArgs {
+                    from_subaccount: None,
+                    to: test_canister_2.canister_id().into(),
+                    amount: Tokens::from_tokens(1).unwrap(),
+                    fee: TRANSACTION_FEE,
+                    memo: Memo(0),
+                    created_at_time: None,
+                },
+                &sender,
+            )
+            .await?;
+
+        let notify_not_whitelisted = NotifyCanisterArgs {
+            block_height,
+            max_fee: TRANSACTION_FEE,
+            from_subaccount: None,
+            to_canister: test_canister_2.canister_id(),
+            to_subaccount: None,
+        };
+
+        let r4: Result<(), String> = ledger_canister
+            .update_from_sender("notify_pb", protobuf, notify_not_whitelisted, &sender)
+            .await;
+
+        assert!(r4
+            .unwrap_err()
+            .contains("Notifying non-whitelisted canister is not allowed"));
+
+        Ok(())
+    });
+}
+
+#[test]
+fn notify_disabled_test() {
+    local_test_e(|r| async move {
+        let proj = Project::new(env!("CARGO_MANIFEST_DIR"));
+        let mut accounts = HashMap::new();
+        let sender = create_sender(100);
+        accounts.insert(
+            sender.get_principal_id().into(),
+            Tokens::from_tokens(100).unwrap(),
+        );
+
+        let test_canister = proj
+            .cargo_bin("test-notified", &[])
+            .install_(&r, Vec::new())
+            .await?;
+
+        let minting_account = create_sender(0);
+
+        let mut send_whitelist = HashSet::new();
+        send_whitelist.insert(test_canister.canister_id());
+
+        let (node_max_memory_size_bytes, max_message_size_bytes): (usize, usize) = {
+            let blocks_per_archive_node = 8;
+
+            let blocks_per_archive_call = 3;
+
+            let e = example_block().encode().unwrap();
+            println!("[test] encoded block size: {}", e.size_bytes());
+            (
+                e.size_bytes() * blocks_per_archive_node,
+                e.size_bytes() * blocks_per_archive_call,
+            )
+        };
+
+        let archive_options = Some(ArchiveOptions {
+            node_max_memory_size_bytes: Some(node_max_memory_size_bytes),
+            max_message_size_bytes: Some(max_message_size_bytes),
+            controller_id: CanisterId::from_u64(876),
+            trigger_threshold: 8,
+            num_blocks_to_archive: 3,
+        });
+
+        let ledger_canister = proj
+            .cargo_bin("ledger-canister", &[])
+            .install_(
+                &r,
+                CandidOne(LedgerCanisterInitPayload {
+                    minting_account: CanisterId::try_from(minting_account.get_principal_id())
+                        .unwrap()
+                        .into(),
+                    initial_values: accounts,
+                    max_message_size_bytes: Some(max_message_size_bytes),
+                    transaction_window: None,
+                    archive_options,
+                    send_whitelist,
+                }),
+            )
+            .await?;
+
+        let block_height: BlockHeight = ledger_canister
+            .update_from_sender(
+                "send_pb",
+                protobuf,
+                SendArgs {
+                    from_subaccount: None,
+                    to: test_canister.canister_id().into(),
+                    amount: Tokens::from_tokens(1).unwrap(),
+                    fee: TRANSACTION_FEE,
+                    memo: Memo(0),
+                    created_at_time: None,
+                },
+                &sender,
+            )
+            .await?;
+
+        for i in 1..10 {
+            let _: BlockHeight = ledger_canister
+                .update_from_sender(
+                    "send_pb",
+                    protobuf,
+                    SendArgs {
+                        from_subaccount: None,
+                        to: test_canister.canister_id().into(),
+                        amount: Tokens::from_e8s(1),
+                        fee: TRANSACTION_FEE,
+                        memo: Memo(i),
+                        created_at_time: None,
+                    },
+                    &sender,
+                )
+                .await?;
+        }
+
+        let notify = NotifyCanisterArgs {
+            block_height,
+            max_fee: TRANSACTION_FEE,
+            from_subaccount: None,
+            to_canister: test_canister.canister_id(),
+            to_subaccount: None,
+        };
+
+        let r1: Result<(), String> = ledger_canister
+            .update_from_sender("notify_pb", protobuf, notify.clone(), &sender)
+            .await;
+
+        let r2: Result<(), String> = ledger_canister
+            .update_from_sender("notify_dfx", candid_one, notify.clone(), &sender)
+            .await;
+
+        for r in &[r1, r2] {
+            assert!(
+                r.as_ref().map_err(|e| e.contains("has no update method 'notify"))
+                    .err().unwrap_or(false),
+                "Calling notify_* when notify-method feature is not set should result in an error containing the string has no update method 'notify. Result was: {:?}",
+                r
+            );
+        }
+
         Ok(())
     });
 }
@@ -572,18 +772,17 @@ fn sub_account_test() {
 
         let sub_account = |x| Some(Subaccount([x; 32]));
 
-        // The principal ID of the test runner
-        let us = PrincipalId::new_anonymous();
+        let sender = create_sender(100);
 
         initial_values.insert(
-            AccountIdentifier::new(us, sub_account(1)),
-            ICPTs::from_icpts(10).unwrap(),
+            AccountIdentifier::new(sender.get_principal_id(), sub_account(1)),
+            Tokens::from_tokens(10).unwrap(),
         );
         let from_subaccount = sub_account(1);
         let mut send_whitelist = HashSet::new();
-        send_whitelist.insert(CanisterId::new(us).unwrap());
+        send_whitelist.insert(CanisterId::new(sender.get_principal_id()).unwrap());
         let ledger_canister = proj
-            .cargo_bin("ledger-canister")
+            .cargo_bin("ledger-canister", &[])
             .install_(
                 &r,
                 CandidOne(LedgerCanisterInitPayload::new(
@@ -599,58 +798,61 @@ fn sub_account_test() {
 
         // Send a payment to yourself on a different sub_account
         let _: BlockHeight = ledger_canister
-            .update_(
+            .update_from_sender(
                 "send_pb",
                 protobuf,
                 SendArgs {
                     from_subaccount,
-                    to: AccountIdentifier::new(us, sub_account(2)),
-                    amount: ICPTs::from_icpts(1).unwrap(),
+                    to: AccountIdentifier::new(sender.get_principal_id(), sub_account(2)),
+                    amount: Tokens::from_tokens(1).unwrap(),
                     fee: TRANSACTION_FEE,
                     memo: Memo(0),
                     created_at_time: None,
                 },
+                &sender,
             )
             .await?;
 
         let balance_1 = ledger_canister
-            .query_(
+            .query_from_sender(
                 "account_balance_pb",
                 protobuf,
                 AccountBalanceArgs {
-                    account: AccountIdentifier::new(us, sub_account(1)),
+                    account: AccountIdentifier::new(sender.get_principal_id(), sub_account(1)),
                 },
+                &sender,
             )
             .await?;
 
         let balance_2 = ledger_canister
-            .query_(
+            .query_from_sender(
                 "account_balance_pb",
                 protobuf,
                 AccountBalanceArgs {
-                    account: AccountIdentifier::new(us, sub_account(2)),
+                    account: AccountIdentifier::new(sender.get_principal_id(), sub_account(2)),
                 },
+                &sender,
             )
             .await?;
 
         // Transaction fees are a pain so we're easy going with equality
-        fn is_roughly(a: ICPTs, b: ICPTs) {
-            let one_tenth = ICPTs::from_e8s(10_000_000);
+        fn is_roughly(a: Tokens, b: Tokens) {
+            let one_tenth = Tokens::from_e8s(10_000_000);
             assert!((a + one_tenth).unwrap() > b);
             assert!((a - one_tenth).unwrap() < b);
         }
 
-        is_roughly(balance_1, ICPTs::from_icpts(9).unwrap());
+        is_roughly(balance_1, Tokens::from_tokens(9).unwrap());
 
-        is_roughly(balance_2, ICPTs::from_icpts(1).unwrap());
+        is_roughly(balance_2, Tokens::from_tokens(1).unwrap());
 
         Ok(())
     })
 }
 
 #[test]
-#[should_panic]
-fn non_whitelisted_send_test() {
+#[should_panic(expected = "Sending from 2vxsx-fae is not allowed")]
+fn check_anonymous_cannot_send() {
     local_test_e(|r| async move {
         let proj = Project::new(env!("CARGO_MANIFEST_DIR"));
         let sub_account = |x| Some(Subaccount([x; 32]));
@@ -659,10 +861,11 @@ fn non_whitelisted_send_test() {
         let mut initial_values = HashMap::new();
         initial_values.insert(
             AccountIdentifier::new(us, sub_account(1)),
-            ICPTs::from_icpts(10).unwrap(),
+            Tokens::from_tokens(10).unwrap(),
         );
+
         let ledger_canister = proj
-            .cargo_bin("ledger-canister")
+            .cargo_bin("ledger-canister", &[])
             .install_(
                 &r,
                 CandidOne(LedgerCanisterInitPayload::new(
@@ -676,7 +879,7 @@ fn non_whitelisted_send_test() {
             )
             .await?;
 
-        // Send a payment from non-whitelisted canister,should fail
+        // Send a payment from an anonymous user, should fail
         let _: BlockHeight = ledger_canister
             .update_(
                 "send_pb",
@@ -684,7 +887,7 @@ fn non_whitelisted_send_test() {
                 SendArgs {
                     from_subaccount: sub_account(1),
                     to: AccountIdentifier::new(us, sub_account(2)),
-                    amount: ICPTs::from_icpts(1).unwrap(),
+                    amount: Tokens::from_tokens(1).unwrap(),
                     fee: TRANSACTION_FEE,
                     memo: Memo(0),
                     created_at_time: None,
@@ -711,15 +914,15 @@ fn transaction_test() {
         let mut accounts = HashMap::new();
         accounts.insert(
             acc1.get_principal_id().into(),
-            ICPTs::from_e8s(acc1_start_amount),
+            Tokens::from_e8s(acc1_start_amount),
         );
         accounts.insert(
             acc2.get_principal_id().into(),
-            ICPTs::from_e8s(acc2_start_amount),
+            Tokens::from_e8s(acc2_start_amount),
         );
 
         let ledger = proj
-            .cargo_bin("ledger-canister")
+            .cargo_bin("ledger-canister", &[])
             .install_(
                 &r,
                 CandidOne(LedgerCanisterInitPayload::new(
@@ -741,7 +944,7 @@ fn transaction_test() {
         let acc2_balance = query_balance(&ledger, &acc2).await?;
         assert_eq!(acc2_balance.get_e8s(), acc2_start_amount);
 
-        let supply: ICPTs = ledger
+        let supply: Tokens = ledger
             .query_("total_supply_pb", protobuf, TotalSupplyArgs {})
             .await?;
         assert_eq!(supply.get_e8s(), acc1_start_amount + acc2_start_amount);
@@ -753,7 +956,7 @@ fn transaction_test() {
         let acc1_balance = query_balance(&ledger, &acc1).await?;
         assert_eq!(acc1_balance.get_e8s(), acc1_start_amount + mint_amount);
 
-        let supply: ICPTs = ledger
+        let supply: Tokens = ledger
             .query_("total_supply_pb", protobuf, TotalSupplyArgs {})
             .await?;
         assert_eq!(
@@ -825,38 +1028,38 @@ fn transaction_test() {
             .unwrap()
             .transaction()
             .into_owned()
-            .transfer;
+            .operation;
         let send_transaction = blocks
             .get(blocks.len() - 2)
             .unwrap()
             .transaction()
             .into_owned()
-            .transfer;
-        let burn_transaction = blocks.last().unwrap().transaction().into_owned().transfer;
+            .operation;
+        let burn_transaction = blocks.last().unwrap().transaction().into_owned().operation;
 
         assert_eq!(
             mint_transaction,
-            Transfer::Mint {
+            Operation::Mint {
                 to: acc1.get_principal_id().into(),
-                amount: ICPTs::from_e8s(mint_amount)
+                amount: Tokens::from_e8s(mint_amount)
             }
         );
 
         assert_eq!(
             send_transaction,
-            Transfer::Send {
+            Operation::Transfer {
                 from: acc1.get_principal_id().into(),
                 to: acc2.get_principal_id().into(),
-                amount: ICPTs::from_e8s(send_amount),
-                fee: ICPTs::from_e8s(send_fee)
+                amount: Tokens::from_e8s(send_amount),
+                fee: Tokens::from_e8s(send_fee)
             }
         );
 
         assert_eq!(
             burn_transaction,
-            Transfer::Burn {
+            Operation::Burn {
                 from: acc2.get_principal_id().into(),
-                amount: ICPTs::from_e8s(burn_amount)
+                amount: Tokens::from_e8s(burn_amount)
             }
         );
 
@@ -869,7 +1072,7 @@ fn transaction_test() {
 // fetch them all from the ledger using repeated calls to block(), then archive
 // all of them, and then fetch the blocks again, this time from the archive,
 // using the same repeated block() calls. The results before and after
-// archiving should be identical. Futhermore, multiple archive nodes should be
+// archiving should be identical. Furthermore, multiple archive nodes should be
 // created during this test.
 #[test]
 fn get_block_test() {
@@ -923,7 +1126,7 @@ fn get_block_test() {
                 None,
                 HashSet::new(),
             );
-            let mut install = proj.cargo_bin("ledger-canister").install(&r);
+            let mut install = proj.cargo_bin("ledger-canister", &[]).install(&r);
             install.memory_allocation = Some(128 * 1024 * 1024);
             install.bytes(CandidOne(payload).into_bytes()?).await?
         };
@@ -1084,7 +1287,7 @@ fn get_multiple_blocks_test() {
                 None,
                 HashSet::new(),
             );
-            let mut install = proj.cargo_bin("ledger-canister").install(&r);
+            let mut install = proj.cargo_bin("ledger-canister", &[]).install(&r);
             install.memory_allocation = Some(128 * 1024 * 1024);
             install.bytes(CandidOne(payload).into_bytes()?).await?
         };
@@ -1264,7 +1467,7 @@ fn only_ledger_can_append_blocks_to_archive_nodes() {
                 None,
                 HashSet::new(),
             );
-            let mut install = proj.cargo_bin("ledger-canister").install(&r);
+            let mut install = proj.cargo_bin("ledger-canister", &[]).install(&r);
             install.memory_allocation = Some(128 * 1024 * 1024);
             install.bytes(CandidOne(payload).into_bytes()?).await?
         };
@@ -1312,12 +1515,193 @@ fn only_ledger_can_append_blocks_to_archive_nodes() {
     })
 }
 
+#[test]
+fn test_transfer_candid() {
+    local_test_e(|r| async move {
+        let proj = Project::new(env!("CARGO_MANIFEST_DIR"));
+
+        let minting_account = create_sender(0);
+        let acc1 = create_sender(1);
+        let acc2 = create_sender(2);
+        let acc3 = create_sender(3);
+
+        let acc1_address: AccountIdentifier = acc1.get_principal_id().into();
+        let acc2_address: AccountIdentifier = acc2.get_principal_id().into();
+        let acc3_address: AccountIdentifier = acc3.get_principal_id().into();
+
+        let mut accounts = HashMap::new();
+        accounts.insert(acc1_address, Tokens::from_e8s(1_000_000_000));
+        accounts.insert(acc2_address, Tokens::from_e8s(1_000_000_000));
+
+        let ledger = proj
+            .cargo_bin("ledger-canister", &[])
+            .install_(
+                &r,
+                CandidOne(LedgerCanisterInitPayload::new(
+                    CanisterId::try_from(minting_account.get_principal_id())
+                        .unwrap()
+                        .into(),
+                    accounts,
+                    None,
+                    None,
+                    None,
+                    HashSet::new(),
+                )),
+            )
+            .await?;
+
+        assert_eq!(
+            account_balance_candid(&ledger, &acc1_address).await,
+            Tokens::from_e8s(1_000_000_000)
+        );
+        assert_eq!(
+            account_balance_candid(&ledger, &acc2_address).await,
+            Tokens::from_e8s(1_000_000_000)
+        );
+        assert_eq!(
+            account_balance_candid(&ledger, &acc3_address).await,
+            Tokens::ZERO
+        );
+
+        let timestamp_nanos = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
+
+        const NANOS_PER_YEAR: u64 = 365 * 24 * 3600 * 1_000_000_000;
+
+        let transfer_block = transfer_candid(
+            &ledger,
+            &acc1,
+            TransferArgs {
+                memo: Memo(0),
+                amount: Tokens::from_e8s(10_000_000),
+                fee: Tokens::from_e8s(10_000),
+                from_subaccount: None,
+                to: acc2_address.to_address(),
+                created_at_time: Some(TimeStamp { timestamp_nanos }),
+            },
+        )
+        .await
+        .expect("failed to transfer funds");
+
+        assert_eq!(
+            account_balance_candid(&ledger, &acc1_address).await,
+            Tokens::from_e8s(989_990_000)
+        );
+        assert_eq!(
+            account_balance_candid(&ledger, &acc2_address).await,
+            Tokens::from_e8s(1_010_000_000)
+        );
+
+        // Test error cases
+        assert_eq!(
+            transfer_candid(
+                &ledger,
+                &acc1,
+                TransferArgs {
+                    memo: Memo(0),
+                    amount: Tokens::from_e8s(10_000_000),
+                    fee: Tokens::from_e8s(10_000),
+                    from_subaccount: None,
+                    to: acc2_address.to_address(),
+                    created_at_time: Some(TimeStamp { timestamp_nanos }),
+                },
+            )
+            .await,
+            Err(TransferError::TxDuplicate {
+                duplicate_of: transfer_block
+            })
+        );
+
+        assert_eq!(
+            transfer_candid(
+                &ledger,
+                &acc3,
+                TransferArgs {
+                    memo: Memo(0),
+                    amount: Tokens::from_e8s(10_000_000),
+                    fee: Tokens::from_e8s(10_000),
+                    from_subaccount: None,
+                    to: acc2_address.to_address(),
+                    created_at_time: None,
+                },
+            )
+            .await,
+            Err(TransferError::InsufficientFunds {
+                balance: Tokens::ZERO
+            })
+        );
+
+        assert_eq!(
+            transfer_candid(
+                &ledger,
+                &acc3,
+                TransferArgs {
+                    memo: Memo(0),
+                    amount: Tokens::from_e8s(10_000_000),
+                    fee: Tokens::from_e8s(10),
+                    from_subaccount: None,
+                    to: acc1_address.to_address(),
+                    created_at_time: None,
+                },
+            )
+            .await,
+            Err(TransferError::BadFee {
+                expected_fee: Tokens::from_e8s(10_000),
+            })
+        );
+
+        assert_eq!(
+            transfer_candid(
+                &ledger,
+                &acc1,
+                TransferArgs {
+                    memo: Memo(0),
+                    amount: Tokens::from_e8s(10_000_000),
+                    fee: Tokens::from_e8s(10_000),
+                    from_subaccount: None,
+                    to: acc2_address.to_address(),
+                    created_at_time: Some(TimeStamp {
+                        timestamp_nanos: timestamp_nanos.saturating_sub(NANOS_PER_YEAR)
+                    }),
+                },
+            )
+            .await,
+            Err(TransferError::TxTooOld {
+                allowed_window_nanos: Duration::from_secs(24 * 3600).as_nanos() as u64,
+            })
+        );
+
+        assert_eq!(
+            transfer_candid(
+                &ledger,
+                &acc1,
+                TransferArgs {
+                    memo: Memo(0),
+                    amount: Tokens::from_e8s(10_000_000),
+                    fee: Tokens::from_e8s(10_000),
+                    from_subaccount: None,
+                    to: acc2_address.to_address(),
+                    created_at_time: Some(TimeStamp {
+                        timestamp_nanos: timestamp_nanos.saturating_add(NANOS_PER_YEAR)
+                    }),
+                },
+            )
+            .await,
+            Err(TransferError::TxCreatedInFuture)
+        );
+
+        Ok(())
+    });
+}
+
 async fn ledger_assert_num_blocks(ledger: &Canister<'_>, num_expected: usize) {
     let IterBlocksRes(blocks) = ledger
         .query_(
             "iter_blocks_pb",
             protobuf,
-            IterBlocksArgs::new(0usize, num_expected),
+            IterBlocksArgs::new(0usize, 99999usize),
         )
         .await
         .unwrap();
@@ -1343,7 +1727,7 @@ fn call_with_cleanup() {
         let proj = Project::new(env!("CARGO_MANIFEST_DIR"));
 
         let test_canister = proj
-            .cargo_bin("test-notified")
+            .cargo_bin("test-notified", &[])
             .install_(&r, Vec::new())
             .await?;
 

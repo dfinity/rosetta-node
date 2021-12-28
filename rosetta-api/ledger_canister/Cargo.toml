@@ -10,11 +10,12 @@ dfn_core = {path = "../../rust_canisters/dfn_core"}
 dfn_candid = {path = "../../rust_canisters/dfn_candid"}
 dfn_http = {path = "../../rust_canisters/dfn_http"}
 dfn_protobuf = {path = "../../rust_canisters/dfn_protobuf"}
-candid = "0.7.4"
+candid = "0.7.8"
 lazy_static = "1.4.0"
 serde = "1.0"
 ic-crypto-sha = {path = "../../crypto/sha/"}
 ic-types = { path = "../../types/types" }
+ic-utils = { path = "../../utils" }
 hex = {version = "0.4.2", features = ["serde"] }
 digest = "0.9.0"
 phantom_newtype = { path = "../../phantom_newtype" }
@@ -26,9 +27,10 @@ yansi = "0.5.0"
 on_wire = {path = "../../rust_canisters/on_wire"}
 intmap = "0.7.0"
 crc32fast = "1.2.0"
-prost = "0.7.0"
-prost-derive = "0.7.0"
+prost = "0.9.0"
+prost-derive = "0.9.0"
 ic-nns-constants = {path = "../../nns/constants" }
+comparable = { version = "0.5", features = ["derive"] }
 
 [[bin]]
 name = "ledger-canister"
@@ -44,6 +46,7 @@ ed25519-dalek = "1.0.1"
 ic-canister-client = {path = "../../canister_client/"}
 rand_chacha = "0.2.2"
 rand_core = "0.5.1"
+tempfile = "3.1.0"
 
 [[test]]
 name = "test"
@@ -54,4 +57,8 @@ name = "test-notified"
 path = "test/notified.rs"
 
 [build-dependencies]
-prost-build = "0.7.0"
+prost-build = "0.9.0"
+
+[features]
+notify-method = []
+test = ["ic-base-types/test"]

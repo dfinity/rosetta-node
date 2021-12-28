@@ -1,4 +1,3 @@
-use ic_nns_constants::{GOVERNANCE_CANISTER_ID, ROOT_CANISTER_ID};
 use prost::Message;
 
 use candid::Decode;
@@ -7,9 +6,15 @@ use dfn_core::{
     api::{arg_data, data_certificate, reply, set_certified_data},
     over, over_async, over_may_reject, stable,
 };
-use ic_crypto_tree_hash::{LabeledTree, WitnessGenerator, WitnessGeneratorImpl};
+use ic_certified_map::{AsHashTree, HashTree};
 use ic_nns_common::{
     access_control::check_caller_is_root, pb::v1::CanisterAuthzInfo, types::MethodAuthzChange,
+    types::UpdateIcpXdrConversionRatePayload,
+};
+use ic_nns_constants::{GOVERNANCE_CANISTER_ID, ROOT_CANISTER_ID};
+use ic_protobuf::registry::{
+    dc::v1::AddOrRemoveDataCentersProposalPayload,
+    node_rewards::v2::UpdateNodeRewardsTableProposalPayload,
 };
 use ic_registry_transport::{
     deserialize_atomic_mutate_request, deserialize_get_changes_since_request,
@@ -22,7 +27,9 @@ use ic_registry_transport::{
     serialize_atomic_mutate_response, serialize_get_changes_since_response,
     serialize_get_value_response,
 };
+use ic_types::messages::MAX_INTER_CANISTER_PAYLOAD_IN_BYTES_U64 as MAX_RESPONSE_SIZE;
 use registry_canister::{
+    certification::{current_version_tree, hash_tree_to_proto},
     common::LOG_PREFIX,
     init::RegistryCanisterInitPayload,
     mutations::{
@@ -33,26 +40,30 @@ use registry_canister::{
         do_recover_subnet::RecoverSubnetPayload,
         do_remove_node_directly::RemoveNodeDirectlyPayload, do_remove_nodes::RemoveNodesPayload,
         do_remove_nodes_from_subnet::RemoveNodesFromSubnetPayload,
-        do_update_icp_xdr_conversion_rate::UpdateIcpXdrConversionRatePayload,
         do_update_node_operator_config::UpdateNodeOperatorConfigPayload,
         do_update_subnet::UpdateSubnetPayload,
         do_update_subnet_replica::UpdateSubnetReplicaVersionPayload,
+        do_update_unassigned_nodes_config::UpdateUnassignedNodesConfigPayload,
     },
     pb::v1::RegistryCanisterStableStorage,
     proto_on_wire::protobuf,
-    registry::Registry,
+    registry::{EncodedVersion, Registry},
 };
 
 #[cfg(target_arch = "wasm32")]
 use dfn_core::println;
+
 use registry_canister::mutations::do_set_firewall_config::SetFirewallConfigPayload;
+use registry_canister::pb::v1::NodeProvidersMonthlyXdrRewards;
 
 fn main() {}
 
 static mut REGISTRY: Option<Registry> = None;
-static mut WITNESS_GENERATOR: Option<WitnessGeneratorImpl> = None;
 
 const MAX_VERSIONS_PER_QUERY: usize = 1000;
+// The maximum size of deltas that the registry will attempt to send.
+// We reserve ⅓ of the response buffer capacity for encoding overhead.
+const MAX_REGISTRY_DELTAS_SIZE: usize = (MAX_RESPONSE_SIZE - MAX_RESPONSE_SIZE / 3) as usize;
 
 fn registry() -> &'static Registry {
     registry_mut()
@@ -65,23 +76,6 @@ fn registry_mut() -> &'static mut Registry {
         } else {
             REGISTRY = Some(Registry::new());
             registry_mut()
-        }
-    }
-}
-
-fn witness_generator() -> &'static WitnessGeneratorImpl {
-    witness_generator_mut()
-}
-
-fn witness_generator_mut() -> &'static mut WitnessGeneratorImpl {
-    unsafe {
-        if let Some(g) = &mut WITNESS_GENERATOR {
-            g
-        } else {
-            WITNESS_GENERATOR = Some(registry_canister::certification::rebuild_tree(
-                registry_mut(),
-            ));
-            witness_generator_mut()
         }
     }
 }
@@ -204,10 +198,15 @@ fn get_changes_since() {
     let response_pb = match deserialize_get_changes_since_request(arg_data()) {
         Ok(version) => {
             let registry = registry();
+
+            let max_versions = registry
+                .count_fitting_deltas(version, MAX_REGISTRY_DELTAS_SIZE)
+                .min(MAX_VERSIONS_PER_QUERY);
+
             RegistryGetChangesSinceResponse {
                 error: None,
                 version: registry.latest_version(),
-                deltas: registry.get_changes_since(version, Some(MAX_VERSIONS_PER_QUERY)),
+                deltas: registry.get_changes_since(version, Some(max_versions)),
             }
         }
         Err(error) => RegistryGetChangesSinceResponse {
@@ -222,31 +221,40 @@ fn get_changes_since() {
     };
     let bytes =
         serialize_get_changes_since_response(response_pb).expect("Error serializing response");
+
     reply(&bytes);
 }
 
 #[export_name = "canister_query get_certified_changes_since"]
-fn get_changes_since_certified() {
-    over(protobuf, |req: RegistryGetChangesSinceRequest| {
-        use registry_canister::certification::{build_deltas_tree, num_leaf, singleton};
+fn get_certified_changes_since() {
+    over(
+        protobuf,
+        |req: RegistryGetChangesSinceRequest| -> CertifiedResponse {
+            use ic_certified_map::{fork, labeled, labeled_hash};
+            let latest_version = registry().latest_version();
+            let from_version = EncodedVersion::from(req.version.saturating_add(1));
 
-        let since_version = req.version;
-        let registry = registry();
-        let latest_version = registry.latest_version();
-        let deltas = registry
-            .changelog()
-            .iter()
-            .skip_while(|(v, _)| *v <= since_version)
-            .take(MAX_VERSIONS_PER_QUERY);
+            let max_versions = registry()
+                .count_fitting_deltas(req.version, MAX_REGISTRY_DELTAS_SIZE)
+                .min(MAX_VERSIONS_PER_QUERY);
 
-        let data_tree = if latest_version <= since_version {
-            singleton("current_version", num_leaf(latest_version))
-        } else {
-            build_deltas_tree(latest_version, deltas)
-        };
+            let to_version = EncodedVersion::from(req.version.saturating_add(max_versions as u64));
+            let delta_tree = registry()
+                .changelog()
+                .value_range(from_version.as_ref(), to_version.as_ref());
 
-        certified_response(&data_tree)
-    })
+            let hash_tree = fork(
+                current_version_tree(latest_version),
+                if req.version < latest_version {
+                    labeled(b"delta", delta_tree)
+                } else {
+                    HashTree::Pruned(labeled_hash(b"delta", &registry().changelog().root_hash()))
+                },
+            );
+
+            certified_response(hash_tree)
+        },
+    )
 }
 
 #[export_name = "canister_query get_value"]
@@ -301,13 +309,15 @@ fn get_latest_version() {
 }
 
 #[export_name = "canister_query get_certified_latest_version"]
-fn get_latest_version_certified() {
-    use registry_canister::certification::{num_leaf, singleton};
-
-    over(protobuf, |_: Vec<u8>| {
+fn get_certified_latest_version() {
+    over(protobuf, |_: Vec<u8>| -> CertifiedResponse {
+        use ic_certified_map::{fork, labeled_hash};
         let latest_version = registry().latest_version();
-        let data_tree = singleton("current_version", num_leaf(latest_version));
-        certified_response(&data_tree)
+        let hash_tree = fork(
+            current_version_tree(latest_version),
+            HashTree::Pruned(labeled_hash(b"delta", &registry().changelog().root_hash())),
+        );
+        certified_response(hash_tree)
     });
 }
 
@@ -386,6 +396,8 @@ fn update_icp_xdr_conversion_rate() {
 #[export_name = "canister_update add_node"]
 fn add_node() {
     // This method can be called by anyone
+    // Note that for now, once a node record has been added, it MUST not be
+    // modified, as P2P and Transport rely on this data to stay the same
     println!(
         "{}call: {} from: {}",
         LOG_PREFIX,
@@ -513,19 +525,63 @@ fn set_firewall_config() {
     });
 }
 
-fn recertify_registry() {
-    let witness_generator = witness_generator_mut();
-    *witness_generator = registry_canister::certification::rebuild_tree(&*registry());
-    set_certified_data(&witness_generator.hash_tree().digest().0[..]);
+#[export_name = "canister_update update_node_rewards_table"]
+fn update_node_rewards_table() {
+    check_caller_is_governance_and_log("update_node_rewards_table");
+    over(
+        candid_one,
+        |payload: UpdateNodeRewardsTableProposalPayload| {
+            registry_mut().do_update_node_rewards_table(payload);
+            recertify_registry();
+        },
+    );
 }
 
-fn certified_response(data_tree: &LabeledTree<Vec<u8>>) -> CertifiedResponse {
-    let hash_tree = witness_generator()
-        .mixed_hash_tree(&data_tree)
-        .expect("failed to produce a hash tree");
+#[export_name = "canister_update add_or_remove_data_centers"]
+fn add_or_remove_data_centers() {
+    check_caller_is_governance_and_log("add_or_remove_data_centers");
+    over(
+        candid_one,
+        |payload: AddOrRemoveDataCentersProposalPayload| {
+            registry_mut().do_add_or_remove_data_centers(payload);
+            recertify_registry();
+        },
+    );
+}
 
+#[export_name = "canister_update update_unassigned_nodes_config"]
+fn update_unassigned_nodes_config() {
+    check_caller_is_governance_and_log("update_unassigned_nodes_config");
+    over(candid_one, |payload: UpdateUnassignedNodesConfigPayload| {
+        registry_mut().do_update_unassigned_nodes_config(payload);
+        recertify_registry();
+    });
+}
+
+#[export_name = "canister_query get_node_providers_monthly_xdr_rewards"]
+fn get_node_providers_monthly_xdr_rewards() {
+    check_caller_is_governance_and_log("get_node_providers_monthly_xdr_rewards");
+    over(
+        candid_one,
+        |()| -> Result<NodeProvidersMonthlyXdrRewards, String> {
+            registry().get_node_providers_monthly_xdr_rewards()
+        },
+    );
+}
+
+fn recertify_registry() {
+    use ic_certified_map::{fork_hash, labeled_hash};
+
+    let root_hash = fork_hash(
+        &current_version_tree(registry().latest_version()).reconstruct(),
+        &labeled_hash(b"delta", &registry().changelog().root_hash()),
+    );
+    set_certified_data(&root_hash);
+}
+
+fn certified_response(tree: HashTree<'_>) -> CertifiedResponse {
     CertifiedResponse {
-        hash_tree: Some(hash_tree.into()),
+        hash_tree: Some(hash_tree_to_proto(tree)),
         certificate: data_certificate().unwrap(),
     }
 }

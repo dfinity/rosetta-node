@@ -6,8 +6,13 @@ use crate::{
     },
     ingress_pool::IngressPoolSelect,
     messaging::{InvalidXNetPayload, XNetPayloadValidationError, XNetTransientValidationError},
+    self_validating_payload::{
+        InvalidSelfValidatingPayload, SelfValidatingPayloadValidationError,
+        SelfValidatingTransientValidationError,
+    },
     validation::ValidationError,
 };
+use ic_base_types::NumBytes;
 use ic_types::artifact::{
     ConsensusMessageAttribute, ConsensusMessageFilter, ConsensusMessageId, PriorityFn,
 };
@@ -47,16 +52,30 @@ pub trait ConsensusGossip: Send + Sync {
     fn get_filter(&self) -> ConsensusMessageFilter;
 }
 
+/// Error that can occur during invocation of the `PayloadBuilder`.
+/// All errors are transient.
+#[derive(Clone, Debug)]
+pub enum PayloadBuilderError {
+    RegistryUnavailable,
+}
+
 #[derive(Debug)]
 pub enum PayloadPermanentError {
     XNetPayloadValidationError(InvalidXNetPayload),
     IngressPayloadValidationError(IngressPermanentError),
+    PayloadTooBig {
+        expected: NumBytes,
+        received: NumBytes,
+    },
+    SelfValidatingPayloadValidationError(InvalidSelfValidatingPayload),
 }
 
 #[derive(Debug)]
 pub enum PayloadTransientError {
     XNetPayloadValidationError(XNetTransientValidationError),
     IngressPayloadValidationError(IngressTransientError),
+    RegistryUnavailable,
+    SelfValidatingPayloadValidationError(SelfValidatingTransientValidationError),
 }
 
 /// Payload validation error
@@ -76,6 +95,15 @@ impl From<XNetPayloadValidationError> for PayloadValidationError {
         err.map(
             PayloadPermanentError::XNetPayloadValidationError,
             PayloadTransientError::XNetPayloadValidationError,
+        )
+    }
+}
+
+impl From<SelfValidatingPayloadValidationError> for PayloadValidationError {
+    fn from(err: SelfValidatingPayloadValidationError) -> Self {
+        err.map(
+            PayloadPermanentError::SelfValidatingPayloadValidationError,
+            PayloadTransientError::SelfValidatingPayloadValidationError,
         )
     }
 }

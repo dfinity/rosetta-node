@@ -2,9 +2,10 @@ use crate::{common::LOG_PREFIX, mutations::common::encode_or_panic, registry::Re
 
 use candid::{CandidType, Deserialize};
 use dfn_core::println;
+use serde::Serialize;
 
 use ic_base_types::SubnetId;
-use ic_protobuf::registry::subnet::v1::{GossipAdvertRelayConfig, SubnetRecord};
+use ic_protobuf::registry::subnet::v1::{EcdsaConfig, GossipAdvertConfig, SubnetRecord};
 use ic_registry_keys::make_subnet_record_key;
 use ic_registry_subnet_features::SubnetFeatures;
 use ic_registry_subnet_type::SubnetType;
@@ -47,7 +48,7 @@ impl Registry {
 /// are intentionally left out as they are updated via other proposals and/or
 /// handlers because they are subject to invariants, e.g. the replica version
 /// must be "blessed".
-#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(CandidType, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct UpdateSubnetPayload {
     pub subnet_id: SubnetId,
 
@@ -67,7 +68,7 @@ pub struct UpdateSubnetPayload {
     pub pfn_evaluation_period_ms: Option<u32>,
     pub registry_poll_period_ms: Option<u32>,
     pub retransmission_request_ms: Option<u32>,
-    pub relay_percentage: Option<u32>,
+    pub advert_best_effort_percentage: Option<u32>,
 
     pub set_gossip_config_to_default: bool,
 
@@ -81,9 +82,15 @@ pub struct UpdateSubnetPayload {
     pub max_instructions_per_round: Option<u64>,
     pub max_instructions_per_install_code: Option<u64>,
     pub features: Option<SubnetFeatures>,
+
+    pub ecdsa_config: Option<EcdsaConfig>,
+
+    pub max_number_of_canisters: Option<u64>,
+
+    pub ssh_readonly_access: Option<Vec<String>>,
+    pub ssh_backup_access: Option<Vec<String>>,
 }
 
-#[macro_use]
 // Sets the value of a field in record `a` if the provided value `b` is not
 // `None`, otherwise does nothing.
 macro_rules! maybe_set {
@@ -94,7 +101,6 @@ macro_rules! maybe_set {
     };
 }
 
-#[macro_use]
 // Sets the value of an optional field in record `a` if the provided value `b`
 // is not `None`, otherwise does nothing.
 macro_rules! maybe_set_option {
@@ -116,13 +122,14 @@ fn is_any_gossip_field_set(payload: &UpdateSubnetPayload) -> bool {
         || payload.pfn_evaluation_period_ms.is_some()
         || payload.registry_poll_period_ms.is_some()
         || payload.retransmission_request_ms.is_some()
-        || payload.relay_percentage.is_some()
+        || payload.advert_best_effort_percentage.is_some()
 }
 
 // Merges the changes included in the `UpdateSubnetPayload` to the given
 // `SubnetRecord`. If any value in the provided payload is None, then it is
 // skipped, otherwise it overwrites the corresponding value in the
 // `SubnetRecord`.
+#[allow(clippy::cognitive_complexity)]
 fn merge_subnet_record(
     mut subnet_record: SubnetRecord,
     payload: UpdateSubnetPayload,
@@ -155,6 +162,7 @@ fn merge_subnet_record(
         pfn_evaluation_period_ms,
         registry_poll_period_ms,
         retransmission_request_ms,
+        advert_best_effort_percentage,
         set_gossip_config_to_default,
         start_as_nns,
         subnet_type,
@@ -163,7 +171,10 @@ fn merge_subnet_record(
         max_instructions_per_round,
         max_instructions_per_install_code,
         features,
-        relay_percentage,
+        ecdsa_config,
+        max_number_of_canisters,
+        ssh_readonly_access,
+        ssh_backup_access,
     } = payload;
 
     maybe_set!(subnet_record, ingress_bytes_per_block_soft_cap);
@@ -189,10 +200,10 @@ fn merge_subnet_record(
     maybe_set!(gossip_config, pfn_evaluation_period_ms);
     maybe_set!(gossip_config, registry_poll_period_ms);
     maybe_set!(gossip_config, retransmission_request_ms);
-    let relay_config = relay_percentage.map(|ratio| GossipAdvertRelayConfig {
-        relay_percentage: ratio,
+    let advert_config = advert_best_effort_percentage.map(|val| GossipAdvertConfig {
+        best_effort_percentage: val,
     });
-    gossip_config.relay_config = relay_config;
+    gossip_config.advert_config = advert_config;
     subnet_record.gossip_config = Some(gossip_config);
 
     maybe_set!(subnet_record, start_as_nns);
@@ -209,14 +220,24 @@ fn merge_subnet_record(
     maybe_set!(subnet_record, max_instructions_per_install_code);
 
     maybe_set_option!(subnet_record, features);
+    maybe_set_option!(subnet_record, ecdsa_config);
+
+    maybe_set!(subnet_record, max_number_of_canisters);
+
+    maybe_set!(subnet_record, ssh_readonly_access);
+    maybe_set!(subnet_record, ssh_backup_access);
     subnet_record
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ic_protobuf::registry::subnet::v1::{GossipAdvertRelayConfig, GossipConfig};
+    use ic_protobuf::registry::subnet::v1::{GossipAdvertConfig, GossipConfig};
     use ic_registry_subnet_type::SubnetType;
+    use ic_types::p2p::{
+        MAX_ARTIFACT_STREAMS_PER_PEER, MAX_CHUNK_WAIT_MS, MAX_DUPLICITY, PFN_EVALUATION_PERIOD_MS,
+        RECEIVE_CHECK_PEER_SET_SIZE, REGISTRY_POLL_PERIOD_MS, RETRANSMISSION_REQUEST_MS,
+    };
     use ic_types::{PrincipalId, SubnetId};
     use std::str::FromStr;
 
@@ -242,7 +263,7 @@ mod tests {
                 pfn_evaluation_period_ms: 100,
                 registry_poll_period_ms: 100,
                 retransmission_request_ms: 100,
-                relay_config: None,
+                advert_config: None,
             }),
             start_as_nns: false,
             subnet_type: SubnetType::Application.into(),
@@ -251,6 +272,10 @@ mod tests {
             max_instructions_per_round: 7_000_000_000,
             max_instructions_per_install_code: 200_000_000_000,
             features: None,
+            max_number_of_canisters: 0,
+            ssh_readonly_access: vec![],
+            ssh_backup_access: vec![],
+            ecdsa_config: None,
         };
 
         let payload = UpdateSubnetPayload {
@@ -275,7 +300,7 @@ mod tests {
             pfn_evaluation_period_ms: Some(5000),
             registry_poll_period_ms: Some(4000),
             retransmission_request_ms: Some(7000),
-            relay_percentage: Some(50),
+            advert_best_effort_percentage: Some(50),
             set_gossip_config_to_default: false,
             start_as_nns: Some(true),
             subnet_type: None,
@@ -285,7 +310,14 @@ mod tests {
             max_instructions_per_install_code: Some(300_000_000_000),
             features: Some(SubnetFeatures {
                 ecdsa_signatures: false,
+                canister_sandboxing: false,
             }),
+            ecdsa_config: Some(EcdsaConfig {
+                quadruples_to_create_in_advance: 10,
+            }),
+            max_number_of_canisters: Some(10),
+            ssh_readonly_access: Some(vec!["pub_key_0".to_string()]),
+            ssh_backup_access: Some(vec!["pub_key_1".to_string()]),
         };
 
         assert_eq!(
@@ -310,8 +342,8 @@ mod tests {
                     pfn_evaluation_period_ms: 5000,
                     registry_poll_period_ms: 4000,
                     retransmission_request_ms: 7000,
-                    relay_config: Some(GossipAdvertRelayConfig {
-                        relay_percentage: 50
+                    advert_config: Some(GossipAdvertConfig {
+                        best_effort_percentage: 50
                     }),
                 }),
                 start_as_nns: true,
@@ -323,9 +355,16 @@ mod tests {
                 features: Some(
                     SubnetFeatures {
                         ecdsa_signatures: false,
+                        canister_sandboxing: false,
                     }
                     .into()
                 ),
+                ecdsa_config: Some(EcdsaConfig {
+                    quadruples_to_create_in_advance: 10,
+                }),
+                max_number_of_canisters: 10,
+                ssh_readonly_access: vec!["pub_key_0".to_string()],
+                ssh_backup_access: vec!["pub_key_1".to_string()],
             }
         );
     }
@@ -352,8 +391,8 @@ mod tests {
                 pfn_evaluation_period_ms: 100,
                 registry_poll_period_ms: 100,
                 retransmission_request_ms: 100,
-                relay_config: Some(GossipAdvertRelayConfig {
-                    relay_percentage: 10,
+                advert_config: Some(GossipAdvertConfig {
+                    best_effort_percentage: 10,
                 }),
             }),
             start_as_nns: false,
@@ -363,6 +402,10 @@ mod tests {
             max_instructions_per_round: 7_000_000_000,
             max_instructions_per_install_code: 200_000_000_000,
             features: None,
+            max_number_of_canisters: 0,
+            ssh_readonly_access: vec![],
+            ssh_backup_access: vec![],
+            ecdsa_config: None,
         };
 
         let payload = UpdateSubnetPayload {
@@ -387,7 +430,7 @@ mod tests {
             pfn_evaluation_period_ms: None,
             registry_poll_period_ms: None,
             retransmission_request_ms: None,
-            relay_percentage: None,
+            advert_best_effort_percentage: None,
             set_gossip_config_to_default: false,
             start_as_nns: None,
             subnet_type: None,
@@ -396,6 +439,10 @@ mod tests {
             max_instructions_per_round: Some(8_000_000_000),
             max_instructions_per_install_code: None,
             features: None,
+            ecdsa_config: None,
+            max_number_of_canisters: Some(50),
+            ssh_readonly_access: None,
+            ssh_backup_access: None,
         };
 
         assert_eq!(
@@ -420,7 +467,7 @@ mod tests {
                     pfn_evaluation_period_ms: 100,
                     registry_poll_period_ms: 100,
                     retransmission_request_ms: 100,
-                    relay_config: None,
+                    advert_config: None,
                 }),
                 start_as_nns: false,
                 subnet_type: SubnetType::Application.into(),
@@ -429,6 +476,10 @@ mod tests {
                 max_instructions_per_round: 8_000_000_000,
                 max_instructions_per_install_code: 200_000_000_000,
                 features: None,
+                max_number_of_canisters: 50,
+                ssh_readonly_access: vec![],
+                ssh_backup_access: vec![],
+                ecdsa_config: None,
             }
         );
     }
@@ -458,6 +509,10 @@ mod tests {
             max_instructions_per_round: 7_000_000_000,
             max_instructions_per_install_code: 200_000_000_000,
             features: None,
+            max_number_of_canisters: 0,
+            ssh_readonly_access: vec![],
+            ssh_backup_access: vec![],
+            ecdsa_config: None,
         };
 
         let payload = UpdateSubnetPayload {
@@ -482,7 +537,7 @@ mod tests {
             pfn_evaluation_period_ms: None,
             registry_poll_period_ms: None,
             retransmission_request_ms: None,
-            relay_percentage: None,
+            advert_best_effort_percentage: None,
             set_gossip_config_to_default: false,
             start_as_nns: None,
             subnet_type: Some(SubnetType::Application),
@@ -491,6 +546,10 @@ mod tests {
             max_instructions_per_round: None,
             max_instructions_per_install_code: None,
             features: None,
+            ecdsa_config: None,
+            max_number_of_canisters: None,
+            ssh_readonly_access: None,
+            ssh_backup_access: None,
         };
 
         merge_subnet_record(subnet_record, payload);
@@ -509,7 +568,7 @@ mod tests {
             replica_version_id: "version_42".to_string(),
             dkg_interval_length: 0,
             dkg_dealings_per_block: 1,
-            gossip_config: None,
+            gossip_config: Some(build_default_gossip_config()),
             start_as_nns: false,
             subnet_type: SubnetType::Application.into(),
             is_halted: false,
@@ -517,6 +576,10 @@ mod tests {
             max_instructions_per_round: 7_000_000_000,
             max_instructions_per_install_code: 200_000_000_000,
             features: None,
+            max_number_of_canisters: 0,
+            ssh_readonly_access: vec![],
+            ssh_backup_access: vec![],
+            ecdsa_config: None,
         };
 
         let payload = UpdateSubnetPayload {
@@ -533,15 +596,15 @@ mod tests {
             initial_notary_delay_millis: None,
             dkg_interval_length: None,
             dkg_dealings_per_block: None,
-            max_artifact_streams_per_peer: Some(0),
-            max_chunk_wait_ms: Some(100),
-            max_duplicity: None,
-            max_chunk_size: None,
-            receive_check_cache_size: Some(100),
-            pfn_evaluation_period_ms: None,
-            registry_poll_period_ms: None,
-            retransmission_request_ms: None,
-            relay_percentage: Some(30),
+            max_artifact_streams_per_peer: Some(MAX_ARTIFACT_STREAMS_PER_PEER),
+            max_chunk_wait_ms: Some(MAX_CHUNK_WAIT_MS),
+            max_duplicity: Some(MAX_DUPLICITY),
+            max_chunk_size: Some(10),
+            receive_check_cache_size: Some(RECEIVE_CHECK_PEER_SET_SIZE),
+            pfn_evaluation_period_ms: Some(PFN_EVALUATION_PERIOD_MS),
+            registry_poll_period_ms: Some(REGISTRY_POLL_PERIOD_MS),
+            retransmission_request_ms: Some(RETRANSMISSION_REQUEST_MS),
+            advert_best_effort_percentage: Some(30),
             set_gossip_config_to_default: true,
             start_as_nns: None,
             subnet_type: None,
@@ -550,6 +613,10 @@ mod tests {
             max_instructions_per_round: None,
             max_instructions_per_install_code: None,
             features: None,
+            ecdsa_config: None,
+            max_number_of_canisters: None,
+            ssh_readonly_access: None,
+            ssh_backup_access: None,
         };
 
         assert_eq!(
@@ -566,16 +633,16 @@ mod tests {
                 dkg_interval_length: 0,
                 dkg_dealings_per_block: 1,
                 gossip_config: Some(GossipConfig {
-                    max_artifact_streams_per_peer: 0,
-                    max_chunk_wait_ms: 100,
-                    max_duplicity: 1,
-                    max_chunk_size: 4096,
-                    receive_check_cache_size: 100,
-                    pfn_evaluation_period_ms: 3000,
-                    registry_poll_period_ms: 3000,
-                    retransmission_request_ms: 60_000,
-                    relay_config: Some(GossipAdvertRelayConfig {
-                        relay_percentage: 30
+                    max_artifact_streams_per_peer: MAX_ARTIFACT_STREAMS_PER_PEER,
+                    max_chunk_wait_ms: MAX_CHUNK_WAIT_MS,
+                    max_duplicity: MAX_DUPLICITY,
+                    max_chunk_size: 10,
+                    receive_check_cache_size: RECEIVE_CHECK_PEER_SET_SIZE,
+                    pfn_evaluation_period_ms: PFN_EVALUATION_PERIOD_MS,
+                    registry_poll_period_ms: REGISTRY_POLL_PERIOD_MS,
+                    retransmission_request_ms: RETRANSMISSION_REQUEST_MS,
+                    advert_config: Some(GossipAdvertConfig {
+                        best_effort_percentage: 30
                     }),
                 }),
                 start_as_nns: false,
@@ -585,12 +652,16 @@ mod tests {
                 max_instructions_per_round: 7_000_000_000,
                 max_instructions_per_install_code: 200_000_000_000,
                 features: None,
+                max_number_of_canisters: 0,
+                ssh_readonly_access: vec![],
+                ssh_backup_access: vec![],
+                ecdsa_config: None,
             }
         );
     }
 
     #[test]
-    fn update_relay_config() {
+    fn update_advert_config() {
         let subnet_record = SubnetRecord {
             membership: vec![],
             ingress_bytes_per_block_soft_cap: 2 * 1024 * 1024,
@@ -611,8 +682,8 @@ mod tests {
                 pfn_evaluation_period_ms: 100,
                 registry_poll_period_ms: 100,
                 retransmission_request_ms: 100,
-                relay_config: Some(GossipAdvertRelayConfig {
-                    relay_percentage: 10,
+                advert_config: Some(GossipAdvertConfig {
+                    best_effort_percentage: 10,
                 }),
             }),
             start_as_nns: false,
@@ -622,6 +693,10 @@ mod tests {
             max_instructions_per_round: 7_000_000_000,
             max_instructions_per_install_code: 200_000_000_000,
             features: None,
+            max_number_of_canisters: 10,
+            ssh_readonly_access: vec![],
+            ssh_backup_access: vec![],
+            ecdsa_config: None,
         };
 
         let payload = UpdateSubnetPayload {
@@ -646,7 +721,7 @@ mod tests {
             pfn_evaluation_period_ms: None,
             registry_poll_period_ms: None,
             retransmission_request_ms: None,
-            relay_percentage: Some(100),
+            advert_best_effort_percentage: Some(100),
             set_gossip_config_to_default: false,
             start_as_nns: None,
             subnet_type: None,
@@ -655,6 +730,10 @@ mod tests {
             max_instructions_per_round: Some(8_000_000_000),
             max_instructions_per_install_code: None,
             features: None,
+            ecdsa_config: None,
+            max_number_of_canisters: None,
+            ssh_readonly_access: None,
+            ssh_backup_access: None,
         };
 
         assert_eq!(
@@ -679,8 +758,8 @@ mod tests {
                     pfn_evaluation_period_ms: 100,
                     registry_poll_period_ms: 100,
                     retransmission_request_ms: 100,
-                    relay_config: Some(GossipAdvertRelayConfig {
-                        relay_percentage: 100
+                    advert_config: Some(GossipAdvertConfig {
+                        best_effort_percentage: 100
                     }),
                 }),
                 start_as_nns: false,
@@ -690,6 +769,10 @@ mod tests {
                 max_instructions_per_round: 8_000_000_000,
                 max_instructions_per_install_code: 200_000_000_000,
                 features: None,
+                max_number_of_canisters: 10,
+                ssh_readonly_access: vec![],
+                ssh_backup_access: vec![],
+                ecdsa_config: None,
             }
         );
     }

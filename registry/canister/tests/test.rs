@@ -3,16 +3,22 @@ mod test {
     use candid::Encode;
     use canister_test::{Canister, Project, Runtime};
     use ic_crypto_tree_hash::{flatmap, lookup_path, Label, LabeledTree, MixedHashTree};
+    use ic_interfaces::registry::RegistryTransportRecord;
     use ic_nns_common::registry::encode_or_panic;
+
     use ic_nns_constants::GOVERNANCE_CANISTER_ID;
     use ic_nns_test_utils::itest_helpers::{
         forward_call_via_universal_canister, set_up_universal_canister,
     };
+
     use ic_nns_test_utils::{
         itest_helpers::{local_test_on_nns_subnet, maybe_upgrade_to_self, UpgradeTestingScenario},
         registry::invariant_compliant_mutation_as_atomic_req,
     };
     use ic_nns_test_utils_macros::parameterized_upgrades;
+
+    use ic_registry_common::certification::decode_hash_tree;
+
     use ic_registry_transport::{
         insert,
         pb::v1::{
@@ -22,6 +28,7 @@ mod test {
         },
         precondition, update, upsert,
     };
+    use ic_types::RegistryVersion;
     use registry_canister::{
         init::{RegistryCanisterInitPayload, RegistryCanisterInitPayloadBuilder},
         proto_on_wire::protobuf,
@@ -43,10 +50,34 @@ mod test {
     ) -> Result<Canister<'_>, String> {
         let encoded = Encode!(&init_payload).unwrap();
         let proj = Project::new(env!("CARGO_MANIFEST_DIR"));
-        proj.cargo_bin("registry-canister")
-            .install(&runtime)
+        proj.cargo_bin("registry-canister", &[])
+            .install(runtime)
             .bytes(encoded)
             .await
+    }
+
+    async fn query_certified_changes_since(
+        canister: &Canister<'_>,
+        version: u64,
+    ) -> (Vec<RegistryTransportRecord>, RegistryVersion) {
+        let certified_response: CertifiedResponse = canister
+            .query_(
+                "get_certified_changes_since",
+                protobuf,
+                changes_since(version),
+            )
+            .await
+            .expect("failed to query certified changes");
+
+        decode_hash_tree(
+            version,
+            certified_response
+                .hash_tree
+                .expect("no hash tree in a certified response")
+                .try_into()
+                .expect("failed to decode hash tree from protobuf"),
+        )
+        .expect("failed to decode registry deltas")
     }
 
     fn get_value_request(key: impl AsRef<[u8]>, version: Option<u64>) -> RegistryGetValueRequest {
@@ -259,8 +290,6 @@ mod test {
         runtime: &Runtime,
         upgrade_scenario: UpgradeTestingScenario,
     ) {
-        type T = LabeledTree<Vec<u8>>;
-
         let mut canister = install_registry_canister(
             runtime,
             RegistryCanisterInitPayloadBuilder::new()
@@ -277,17 +306,9 @@ mod test {
             GOVERNANCE_CANISTER_ID
         );
 
-        let certified_response: CertifiedResponse = canister
-            .query_("get_certified_changes_since", protobuf, changes_since(1))
-            .await
-            .unwrap();
-
-        assert_eq!(
-            data_part(&certified_response),
-            T::SubTree(flatmap!(
-                Label::from("current_version") => T::Leaf(vec![0x01]),
-            ))
-        );
+        let (deltas, version) = query_certified_changes_since(&canister, 1).await;
+        assert_eq!(version, RegistryVersion::from(1));
+        assert!(deltas.is_empty());
 
         let mutation_request = RegistryAtomicMutateRequest {
             mutations: vec![insert("key1", "value1")],
@@ -305,17 +326,13 @@ mod test {
 
         maybe_upgrade_to_self(&mut canister, upgrade_scenario).await;
 
-        let certified_response: CertifiedResponse = canister
-            .query_("get_certified_changes_since", protobuf, changes_since(2))
-            .await
-            .unwrap();
+        let (deltas, version) = query_certified_changes_since(&canister, 1).await;
+        assert_eq!(version, RegistryVersion::from(2));
+        assert_eq!(deltas.len(), 1);
 
-        assert_eq!(
-            data_part(&certified_response),
-            T::SubTree(flatmap!(
-                Label::from("current_version") => T::Leaf(vec![0x02]),
-            ))
-        );
+        let (deltas, version) = query_certified_changes_since(&canister, 2).await;
+        assert_eq!(version, RegistryVersion::from(2));
+        assert!(deltas.is_empty());
     }
 
     #[test]
@@ -327,7 +344,7 @@ mod test {
             }
         }
         fn has_delta(tree: &LabeledTree<Vec<u8>>, version: u64) -> bool {
-            lookup_path(&tree, &[&b"delta"[..], &version.to_be_bytes()[..]]).is_some()
+            lookup_path(tree, &[&b"delta"[..], &version.to_be_bytes()[..]]).is_some()
         }
 
         local_test_on_nns_subnet(|runtime| async move {
@@ -356,6 +373,7 @@ mod test {
             assert_eq!(count_deltas(&tree), MAX_VERSIONS_PER_QUERY as usize);
             assert!(has_delta(&tree, 1));
             assert!(has_delta(&tree, MAX_VERSIONS_PER_QUERY));
+            decode_hash_tree(0, certified_response.hash_tree.unwrap().try_into().unwrap()).unwrap();
 
             let certified_response: CertifiedResponse = canister
                 .query_(
@@ -370,6 +388,11 @@ mod test {
             assert_eq!(count_deltas(&tree), MAX_VERSIONS_PER_QUERY as usize / 2);
             assert!(has_delta(&tree, MAX_VERSIONS_PER_QUERY + 1));
             assert!(has_delta(&tree, 3 * MAX_VERSIONS_PER_QUERY / 2));
+            decode_hash_tree(
+                MAX_VERSIONS_PER_QUERY,
+                certified_response.hash_tree.unwrap().try_into().unwrap(),
+            )
+            .unwrap();
 
             Ok(())
         });
@@ -380,7 +403,7 @@ mod test {
         local_test_on_nns_subnet(|runtime| async move {
             assert_matches!(
             Project::new(env!("CARGO_MANIFEST_DIR"))
-            .cargo_bin("registry-canister")
+            .cargo_bin("registry-canister", &[])
                 .install(&runtime)
                 .bytes(b"This is not legal candid".to_vec())
                 .await,

@@ -64,14 +64,23 @@ impl ValidationContext {
 pub struct BatchPayload {
     pub ingress: IngressPayload,
     pub xnet: XNetPayload,
+    pub self_validating: SelfValidatingPayload,
 }
 
 /// Return ingress messages, xnet messages, and consensus responses.
 pub type IngressAndXNetMessages = (Vec<SignedIngress>, BTreeMap<SubnetId, CertifiedStreamSlice>);
 
 impl BatchPayload {
-    pub fn new(ingress: IngressPayload, xnet: XNetPayload) -> Self {
-        BatchPayload { ingress, xnet }
+    pub fn new(
+        ingress: IngressPayload,
+        xnet: XNetPayload,
+        self_validating: SelfValidatingPayload,
+    ) -> Self {
+        BatchPayload {
+            ingress,
+            xnet,
+            self_validating,
+        }
     }
 
     /// Extract and return the set of ingress and xnet messages in a
@@ -83,6 +92,36 @@ impl BatchPayload {
 
     pub fn is_empty(&self) -> bool {
         self.ingress.is_empty() && self.xnet.stream_slices.is_empty()
+    }
+}
+
+/// Payload that contains SelfValidating messages.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SelfValidatingPayload {}
+
+impl SelfValidatingPayload {
+    pub fn new() -> SelfValidatingPayload {
+        SelfValidatingPayload {}
+    }
+}
+
+impl From<&SelfValidatingPayload> for pb::SelfValidatingPayload {
+    fn from(_self_validating_payload: &SelfValidatingPayload) -> Self {
+        Self {}
+    }
+}
+
+impl TryFrom<pb::SelfValidatingPayload> for SelfValidatingPayload {
+    type Error = String;
+
+    fn try_from(_value: pb::SelfValidatingPayload) -> Result<Self, Self::Error> {
+        Ok(Self {})
+    }
+}
+
+impl CountBytes for SelfValidatingPayload {
+    fn count_bytes(&self) -> usize {
+        0
     }
 }
 
@@ -395,31 +434,31 @@ mod tests {
             certified_height: Height::new(1),
             time: Time::from_nanos_since_unix_epoch(1),
         };
-        assert_eq!(context1.greater_or_equal(&context2), false);
-        assert_eq!(context2.greater_or_equal(&context1), true);
+        assert!(!context1.greater_or_equal(&context2));
+        assert!(context2.greater_or_equal(&context1));
 
         let context3 = ValidationContext {
             registry_version: RegistryVersion::new(1),
             certified_height: Height::new(2),
             time: Time::from_nanos_since_unix_epoch(1),
         };
-        assert_eq!(context1.greater_or_equal(&context3), false);
-        assert_eq!(context3.greater_or_equal(&context1), true);
+        assert!(!context1.greater_or_equal(&context3));
+        assert!(context3.greater_or_equal(&context1));
 
         let context4 = ValidationContext {
             registry_version: RegistryVersion::new(1),
             certified_height: Height::new(1),
             time: Time::from_nanos_since_unix_epoch(2),
         };
-        assert_eq!(context1.greater_or_equal(&context4), false);
-        assert_eq!(context4.greater_or_equal(&context1), true);
+        assert!(!context1.greater_or_equal(&context4));
+        assert!(context4.greater_or_equal(&context1));
 
         let context5 = ValidationContext {
             registry_version: RegistryVersion::new(0),
             certified_height: Height::new(2),
             time: Time::from_nanos_since_unix_epoch(1),
         };
-        assert_eq!(context1.greater_or_equal(&context5), false);
-        assert_eq!(context5.greater_or_equal(&context1), false);
+        assert!(!context1.greater_or_equal(&context5));
+        assert!(!context5.greater_or_equal(&context1));
     }
 }

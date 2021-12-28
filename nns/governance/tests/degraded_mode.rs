@@ -19,7 +19,7 @@ use ic_nns_governance::{
         Proposal,
     },
 };
-use ledger_canister::{AccountIdentifier, ICPTs};
+use ledger_canister::{AccountIdentifier, Tokens};
 use maplit::hashmap;
 use std::convert::TryFrom;
 
@@ -62,11 +62,11 @@ impl Ledger for DegradedEnv {
         unimplemented!()
     }
 
-    async fn total_supply(&self) -> Result<ICPTs, GovernanceError> {
+    async fn total_supply(&self) -> Result<Tokens, GovernanceError> {
         unimplemented!()
     }
 
-    async fn account_balance(&self, _: AccountIdentifier) -> Result<ICPTs, GovernanceError> {
+    async fn account_balance(&self, _: AccountIdentifier) -> Result<Tokens, GovernanceError> {
         unimplemented!()
     }
 }
@@ -93,9 +93,9 @@ fn fixture_two_neurons_second_is_bigger() -> GovernanceProto {
                 ..Default::default()
             },
             2 => Neuron {
-                id: Some(NeuronId {id: 1}),
+                id: Some(NeuronId {id: 2}),
                 controller: Some(principal(2)),
-                cached_neuron_stake_e8s: 51,
+                cached_neuron_stake_e8s: 5100,
                 account:  b"b__4___8__12__16__20__24__28__32".to_vec(),
                 // One year
                 dissolve_state: Some(neuron::DissolveState::DissolveDelaySeconds(31557600)),

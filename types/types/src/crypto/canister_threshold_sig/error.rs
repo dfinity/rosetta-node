@@ -1,5 +1,10 @@
 //! Defines errors that may occur in the context of canister threshold
 //! signatures.
+use crate::crypto::{AlgorithmId, CryptoError};
+use crate::registry::RegistryClientError;
+use crate::{NodeId, RegistryVersion};
+use ic_protobuf::registry::crypto::v1::AlgorithmId as AlgorithmIdProto;
+use serde::{Deserialize, Serialize};
 
 macro_rules! impl_display_using_debug {
     ($t:ty) => {
@@ -11,68 +16,189 @@ macro_rules! impl_display_using_debug {
     };
 }
 
-// The errors that might occur are still TBD
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PresignatureQuadrupleCreationError {
+    WrongTypes,
+    InconsistentAlgorithms,
+    InconsistentReceivers,
+}
+impl_display_using_debug!(PresignatureQuadrupleCreationError);
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ThresholdEcdsaSigInputsCreationError {
+    NonmatchingTranscriptIds,
+    InconsistentAlgorithms,
+    InconsistentReceivers,
+}
+impl_display_using_debug!(ThresholdEcdsaSigInputsCreationError);
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IDkgParamsValidationError {
     TooManyReceivers { receivers_count: usize },
     TooManyDealers { dealers_count: usize },
+    UnsatisfiedVerificationThreshold { threshold: u32, receiver_count: u32 },
+    UnsatisfiedCollectionThreshold { threshold: u32, dealer_count: u32 },
     ReceiversEmpty,
     DealersEmpty,
+    UnsupportedAlgorithmId { algorithm_id: AlgorithmId },
+    WrongTypeForOriginalTranscript,
+    DealersNotContainedInPreviousReceivers,
 }
 impl_display_using_debug!(IDkgParamsValidationError);
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ThresholdEcdsaGetPublicKeyError {}
+impl_display_using_debug!(ThresholdEcdsaGetPublicKeyError);
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IDkgTranscriptParsingError {}
 impl_display_using_debug!(IDkgTranscriptParsingError);
 
-#[derive(Copy, Clone, Debug)]
-pub enum IDkgTranscriptCreationError {}
-impl_display_using_debug!(IDkgTranscriptCreationError);
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IDkgCreateTranscriptError {
+    SerializationError {
+        internal_error: String,
+    },
+    InternalError {
+        internal_error: String,
+    },
+    DealerNotAllowed {
+        node_id: NodeId,
+    },
+    SignerNotAllowed {
+        node_id: NodeId,
+    },
+    UnsatisfiedCollectionThreshold {
+        threshold: u32,
+        dealing_count: usize,
+    },
+    UnsatisfiedVerificationThreshold {
+        threshold: u32,
+        signature_count: usize,
+        dealer_id: NodeId,
+    },
+    InvalidMultisignature {
+        crypto_error: CryptoError,
+    },
+}
+impl_display_using_debug!(IDkgCreateTranscriptError);
 
-#[derive(Copy, Clone, Debug)]
-pub enum IDkgTranscriptVerificationError {}
-impl_display_using_debug!(IDkgTranscriptVerificationError);
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IDkgVerifyTranscriptError {}
+impl_display_using_debug!(IDkgVerifyTranscriptError);
 
-#[derive(Copy, Clone, Debug)]
-pub enum IDkgTranscriptOpeningError {}
-impl_display_using_debug!(IDkgTranscriptOpeningError);
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IDkgOpenTranscriptError {}
+impl_display_using_debug!(IDkgOpenTranscriptError);
 
-#[derive(Copy, Clone, Debug)]
-pub enum IDkgTranscriptLoadError {}
-impl_display_using_debug!(IDkgTranscriptLoadError);
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IDkgLoadTranscriptError {
+    PublicKeyNotFound {
+        node_id: NodeId,
+        registry_version: RegistryVersion,
+    },
+    SerializationError {
+        internal_error: String,
+    },
+    PrivateKeyNotFound,
+    InternalError {
+        internal_error: String,
+    },
+    MalformedPublicKey {
+        node_id: NodeId,
+        key_bytes: Vec<u8>,
+    },
+    UnsupportedAlgorithm {
+        algorithm_id: Option<AlgorithmIdProto>,
+    },
+    RegistryError(RegistryClientError),
+}
+impl_display_using_debug!(IDkgLoadTranscriptError);
 
-#[derive(Copy, Clone, Debug)]
-pub enum IDkgDealingError {}
-impl_display_using_debug!(IDkgDealingError);
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IDkgLoadTranscriptWithOpeningsError {}
+impl_display_using_debug!(IDkgLoadTranscriptWithOpeningsError);
 
-#[derive(Copy, Clone, Debug)]
-pub enum IDkgDealingVerificationError {}
-impl_display_using_debug!(IDkgDealingVerificationError);
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IDkgCreateDealingError {
+    NotADealer {
+        node_id: NodeId,
+    },
+    MalformedPublicKey {
+        node_id: NodeId,
+        key_bytes: Vec<u8>,
+    },
+    PublicKeyNotFound {
+        node_id: NodeId,
+        registry_version: RegistryVersion,
+    },
+    UnsupportedAlgorithm {
+        algorithm_id: Option<AlgorithmIdProto>,
+    },
+    RegistryError(RegistryClientError),
+    SerializationError {
+        internal_error: String,
+    },
+    InternalError {
+        internal_error: String,
+    },
+    SecretSharesNotFound {
+        commitment_string: String,
+    },
+    AlgorithmMismatchWithSKS {
+        algorithm_id: AlgorithmId,
+    },
+}
+impl_display_using_debug!(IDkgCreateDealingError);
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IDkgVerifyDealingPublicError {}
+impl_display_using_debug!(IDkgVerifyDealingPublicError);
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IDkgVerifyDealingPrivateError {
+    NotAReceiver,
+}
+impl_display_using_debug!(IDkgVerifyDealingPrivateError);
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IDkgComplaintParsingError {}
 impl_display_using_debug!(IDkgComplaintParsingError);
 
-#[derive(Copy, Clone, Debug)]
-pub enum IDkgComplaintVerificationError {}
-impl_display_using_debug!(IDkgComplaintVerificationError);
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IDkgVerifyComplaintError {}
+impl_display_using_debug!(IDkgVerifyComplaintError);
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IDkgOpeningParsingError {}
 impl_display_using_debug!(IDkgOpeningParsingError);
 
-#[derive(Copy, Clone, Debug)]
-pub enum IDkgOpeningVerificationError {}
-impl_display_using_debug!(IDkgOpeningVerificationError);
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IDkgVerifyOpeningError {}
+impl_display_using_debug!(IDkgVerifyOpeningError);
 
-#[derive(Copy, Clone, Debug)]
-pub enum ThresholdSignatureVerificationError {}
-impl_display_using_debug!(ThresholdSignatureVerificationError);
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ThresholdEcdsaVerifySigShareError {}
+impl_display_using_debug!(ThresholdEcdsaVerifySigShareError);
 
-#[derive(Copy, Clone, Debug)]
-pub enum ThresholdSignatureGenerationError {}
-impl_display_using_debug!(ThresholdSignatureGenerationError);
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ThresholdEcdsaSignShareError {
+    InternalError { internal_error: String },
+    NotAReceiver,
+    SerializationError { internal_error: String },
+    SecretSharesNotFound { commitment_string: String },
+}
+impl_display_using_debug!(ThresholdEcdsaSignShareError);
 
-#[derive(Copy, Clone, Debug)]
-pub enum CombineSignatureError {}
-impl_display_using_debug!(CombineSignatureError);
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ThresholdEcdsaVerifyCombinedSignatureError {}
+impl_display_using_debug!(ThresholdEcdsaVerifyCombinedSignatureError);
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ThresholdEcdsaCombineSigSharesError {
+    InternalError { internal_error: String },
+    UnsatisfiedReconstructionThreshold { threshold: u32, share_count: usize },
+    SerializationError { internal_error: String },
+    SignerNotAllowed { node_id: NodeId },
+}
+impl_display_using_debug!(ThresholdEcdsaCombineSigSharesError);

@@ -282,6 +282,7 @@ mod load_transcript {
 mod create_dealing_error_conversions_v2 {
     // TODO (CRP-818): Remove the v2 and merge.
     use crate::api::ni_dkg_errors::{CspDkgCreateDealingError, CspDkgCreateReshareDealingError};
+    use ic_types::crypto::error::InternalError;
     use ic_types::crypto::threshold_sig::ni_dkg::errors::create_dealing_error::DkgCreateDealingError;
     use ic_types::crypto::threshold_sig::ni_dkg::errors::MalformedFsEncryptionPublicKeyError;
 
@@ -314,12 +315,8 @@ mod create_dealing_error_conversions_v2 {
                     )
                 }
                 CspDkgCreateReshareDealingError::ReshareKeyNotInSecretKeyStoreError(error) => {
-                    // This would be an implementation error, as the key is loaded before calling
-                    // create_dealing.
-                    panic!(
-                        "{}ReshareKeyNotInSecretKeyStoreError: {:?}",
-                        panic_prefix, error
-                    );
+                    // Forward to the caller, since they haven't loaded the transcript yet
+                    DkgCreateDealingError::ThresholdSigningKeyNotInSecretKeyStore(error)
                 }
                 CspDkgCreateReshareDealingError::UnsupportedAlgorithmId(algorithm_id) => {
                     // This would be an IDKM implementation error, so we panic:
@@ -359,55 +356,10 @@ mod create_dealing_error_conversions_v2 {
                         panic_prefix, error
                     );
                 }
-            }
-        }
-    }
-}
-
-// From: crypto/src/sign/threshold_sig/ni_dkg/dealing/error_conversions.rs
-mod create_dealing_error_conversions {
-    use crate::api::ni_dkg_errors::CspDkgLoadPrivateKeyError;
-    use ic_types::crypto::error::InvalidArgumentError;
-    //use crate::api::dkg_errors::DkgCreateDealingError; // There are two types
-    // with this same name.  The other is in ic-types.  Confusing!
-    use ic_types::crypto::threshold_sig::ni_dkg::errors::create_dealing_error::DkgCreateDealingError;
-
-    impl From<CspDkgLoadPrivateKeyError> for DkgCreateDealingError {
-        fn from(csp_load_private_key_error: CspDkgLoadPrivateKeyError) -> Self {
-            let panic_prefix = "NI-DKG create_dealing error on loading private key - ";
-            match csp_load_private_key_error {
-                CspDkgLoadPrivateKeyError::MalformedTranscriptError(error) => {
-                    DkgCreateDealingError::InvalidTranscript(InvalidArgumentError {
-                        message: format!("{}", error),
+                CspDkgCreateReshareDealingError::InternalError(error) => {
+                    DkgCreateDealingError::InternalError(InternalError {
+                        internal_error: error.internal_error,
                     })
-                }
-                CspDkgLoadPrivateKeyError::InvalidTranscriptError(error) => {
-                    DkgCreateDealingError::InvalidTranscript(error)
-                }
-                CspDkgLoadPrivateKeyError::KeyNotFoundError(error) => {
-                    DkgCreateDealingError::FsDecryptionKeyNotInSecretKeyStore(error)
-                }
-                CspDkgLoadPrivateKeyError::EpochTooOldError {
-                    ciphertext_epoch,
-                    secret_key_epoch,
-                } => {
-                    let err = InvalidArgumentError {
-                        message: format!("Epoch of this transcript {} is too old to decrypt with a key with epoch {}",
-                                         ciphertext_epoch, secret_key_epoch)
-                    };
-                    DkgCreateDealingError::InvalidTranscript(err)
-                }
-                CspDkgLoadPrivateKeyError::UnsupportedAlgorithmId(algorithm_id) => {
-                    // This would be an IDKM implementation error, so we panic:
-                    panic!(
-                        "{}UnsupportedAlgorithmId: The algorithm id {:?} is unsupported.",
-                        panic_prefix, algorithm_id
-                    );
-                }
-                CspDkgLoadPrivateKeyError::MalformedSecretKeyError(error) => {
-                    // This would be an implementation error, since we inserted a key that is
-                    // malformed:
-                    panic!("{}MalformedSecretKeyError: {:?}", panic_prefix, error);
                 }
             }
         }
@@ -498,6 +450,7 @@ mod verify_dealing_error_conversions {
 
 mod retain_active_keys_error_conversions {
     use crate::api::ni_dkg_errors::CspDkgUpdateFsEpochError;
+    use ic_types::crypto::error::InternalError;
     use ic_types::crypto::threshold_sig::ni_dkg::errors::key_removal_error::DkgKeyRemovalError;
 
     impl From<CspDkgUpdateFsEpochError> for DkgKeyRemovalError {
@@ -510,6 +463,11 @@ mod retain_active_keys_error_conversions {
                 }
                 CspDkgUpdateFsEpochError::FsKeyNotInSecretKeyStoreError(e) => {
                     DkgKeyRemovalError::FsKeyNotInSecretKeyStoreError(e)
+                }
+                CspDkgUpdateFsEpochError::InternalError(e) => {
+                    DkgKeyRemovalError::InternalError(InternalError {
+                        internal_error: e.internal_error,
+                    })
                 }
             }
         }

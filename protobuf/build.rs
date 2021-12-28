@@ -186,7 +186,65 @@ fn build_registry_proto() {
     let mut config = base_config();
     config.out_dir("gen/registry");
 
-    config.type_attribute(".", "#[derive(serde::Serialize, serde::Deserialize)]");
+    config.type_attribute(
+        ".registry.conversion_rate",
+        "#[derive(serde::Serialize, serde::Deserialize)]",
+    );
+    config.type_attribute(
+        ".registry.crypto",
+        "#[derive(serde::Serialize, serde::Deserialize)]",
+    );
+    config.type_attribute(
+        ".registry.node_operator",
+        "#[derive(serde::Serialize, serde::Deserialize)]",
+    );
+    config.type_attribute(
+        ".registry.nns",
+        "#[derive(serde::Serialize, serde::Deserialize)]",
+    );
+    config.type_attribute(
+        ".registry.node",
+        "#[derive(serde::Serialize, serde::Deserialize)]",
+    );
+    config.type_attribute(
+        ".registry.firewall",
+        "#[derive(serde::Serialize, serde::Deserialize)]",
+    );
+    config.type_attribute(
+        ".registry.routing_table",
+        "#[derive(serde::Serialize, serde::Deserialize)]",
+    );
+    config.type_attribute(
+        ".registry.provisional_whitelist",
+        "#[derive(serde::Serialize, serde::Deserialize)]",
+    );
+    config.type_attribute(
+        ".registry.subnet",
+        "#[derive(serde::Serialize, serde::Deserialize)]",
+    );
+    config.type_attribute(
+        ".registry.subnet.v1.EcdsaConfig",
+        "#[derive(candid::CandidType, Eq)]",
+    );
+    config.type_attribute(
+        ".registry.replica_version",
+        "#[derive(serde::Serialize, serde::Deserialize)]",
+    );
+
+    config.type_attribute(
+        ".registry.node_rewards.v2",
+        "#[derive(candid::CandidType, serde::Serialize, candid::Deserialize)]",
+    );
+
+    config.type_attribute(
+        ".registry.dc",
+        "#[derive(candid::CandidType, serde::Serialize, candid::Deserialize)]",
+    );
+
+    config.type_attribute(
+        ".registry.unassigned_nodes_config",
+        "#[derive(serde::Serialize, serde::Deserialize)]",
+    );
 
     let registry_files = [
         "def/registry/conversion_rate/v1/conversion_rate.proto",
@@ -199,6 +257,10 @@ fn build_registry_proto() {
         "def/registry/provisional_whitelist/v1/provisional_whitelist.proto",
         "def/registry/subnet/v1/subnet.proto",
         "def/registry/replica_version/v1/replica_version.proto",
+        "def/registry/node_rewards/v1/node_rewards.proto",
+        "def/registry/node_rewards/v2/node_rewards.proto",
+        "def/registry/dc/v1/dc.proto",
+        "def/registry/unassigned_nodes_config/v1/unassigned_nodes_config.proto",
     ];
 
     compile_protos(config, &registry_files);

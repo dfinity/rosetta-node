@@ -12,7 +12,7 @@ use ic_types::{
     },
     PrincipalId,
 };
-use ledger_canister::{AccountIdentifier, ICPTs, SendArgs, Subaccount, TimeStamp};
+use ledger_canister::{AccountIdentifier, SendArgs, Subaccount, TimeStamp, Tokens};
 use rand::{Rng, RngCore};
 use rand_distr::Distribution;
 use rand_distr::Uniform;
@@ -23,9 +23,9 @@ use std::iter::once;
 use std::ops::BitAnd;
 use std::{convert::TryFrom, fmt::Display};
 
-fn zondex_icp_format(amount: ICPTs) -> String {
+fn zondex_icp_format(amount: Tokens) -> String {
     let int_part_reversed: String = amount
-        .get_icpts()
+        .get_tokens()
         .to_string()
         // Insert "," separators every 3 chars, going right to left
         .chars()
@@ -222,12 +222,12 @@ fn chunk_pid(pid: PrincipalId, chunk: usize) -> String {
 fn test_zondax_generator() {
     use rand::{prelude::StdRng, SeedableRng};
 
-    use ledger_canister::{ICPTs, Memo};
+    use ledger_canister::{Memo, Tokens};
 
     let send_args = SendArgs {
         memo: Memo(0),
-        amount: ICPTs::from_icpts(10).unwrap(),
-        fee: ICPTs::from_e8s(137),
+        amount: Tokens::from_tokens(10).unwrap(),
+        fee: Tokens::from_e8s(137),
         from_subaccount: None,
         to: PrincipalId::new_anonymous().into(),
         created_at_time: None,
@@ -242,42 +242,45 @@ fn test_zondax_generator() {
 
 #[test]
 fn test_pretty_icp_format() {
-    assert_eq!(zondex_icp_format(ICPTs::from_e8s(0)), *"0.00");
-    assert_eq!(zondex_icp_format(ICPTs::from_e8s(1)), *"0.00000001");
-    assert_eq!(zondex_icp_format(ICPTs::from_e8s(10)), *"0.0000001");
-    assert_eq!(zondex_icp_format(ICPTs::from_e8s(100)), *"0.000001");
-    assert_eq!(zondex_icp_format(ICPTs::from_e8s(1000)), *"0.00001");
-    assert_eq!(zondex_icp_format(ICPTs::from_e8s(10000)), *"0.0001");
-    assert_eq!(zondex_icp_format(ICPTs::from_e8s(100000)), *"0.001");
-    assert_eq!(zondex_icp_format(ICPTs::from_e8s(1000000)), *"0.01");
+    assert_eq!(zondex_icp_format(Tokens::from_e8s(0)), *"0.00");
+    assert_eq!(zondex_icp_format(Tokens::from_e8s(1)), *"0.00000001");
+    assert_eq!(zondex_icp_format(Tokens::from_e8s(10)), *"0.0000001");
+    assert_eq!(zondex_icp_format(Tokens::from_e8s(100)), *"0.000001");
+    assert_eq!(zondex_icp_format(Tokens::from_e8s(1000)), *"0.00001");
+    assert_eq!(zondex_icp_format(Tokens::from_e8s(10000)), *"0.0001");
+    assert_eq!(zondex_icp_format(Tokens::from_e8s(100000)), *"0.001");
+    assert_eq!(zondex_icp_format(Tokens::from_e8s(1000000)), *"0.01");
 
     // Starting from 10^7 e8s, we need to add at least one "useless" zero
-    assert_eq!(zondex_icp_format(ICPTs::from_e8s(10_000_000)), *"0.10");
-    assert_eq!(zondex_icp_format(ICPTs::from_e8s(100_000_000)), *"1.00");
+    assert_eq!(zondex_icp_format(Tokens::from_e8s(10_000_000)), *"0.10");
+    assert_eq!(zondex_icp_format(Tokens::from_e8s(100_000_000)), *"1.00");
 
     // Full amount of ICPts are wlays formatted with ".00" at the end
-    assert_eq!(zondex_icp_format(ICPTs::from_icpts(1).unwrap()), *"1.00");
-    assert_eq!(zondex_icp_format(ICPTs::from_icpts(12).unwrap()), *"12.00");
+    assert_eq!(zondex_icp_format(Tokens::from_tokens(1).unwrap()), *"1.00");
     assert_eq!(
-        zondex_icp_format(ICPTs::from_icpts(1234567890).unwrap()),
+        zondex_icp_format(Tokens::from_tokens(12).unwrap()),
+        *"12.00"
+    );
+    assert_eq!(
+        zondex_icp_format(Tokens::from_tokens(1234567890).unwrap()),
         *"1'234'567'890.00"
     );
 
     // Some arbitrary case
     assert_eq!(
-        zondex_icp_format(ICPTs::from_e8s(8151012345000)),
+        zondex_icp_format(Tokens::from_e8s(8151012345000)),
         *"81'510.12345"
     );
 
     // extreme case
     assert_eq!(
-        zondex_icp_format(ICPTs::from_e8s(u64::MAX)),
+        zondex_icp_format(Tokens::from_e8s(u64::MAX)),
         *"184'467'440'737.09551615"
     );
 
     // largest power of ten below u64::MAX doms
     assert_eq!(
-        zondex_icp_format(ICPTs::from_icpts(100_000_000_000).unwrap()),
+        zondex_icp_format(Tokens::from_tokens(100_000_000_000).unwrap()),
         *"100'000'000'000.00"
     );
 }
@@ -313,13 +316,13 @@ fn main() {
                 let multiple_of = 10_u64.pow(num_trailing_zeros);
                 // Dividing by, then multiply by, "multiple_of" has the effect of getting the
                 // last decimal digits being zero, while keeping the magnitude unchanged.
-                let amount = ICPTs::from_e8s(
+                let amount = Tokens::from_e8s(
                     ((rng.next_u64() % 10_u64.pow(magnitude)) / multiple_of) * multiple_of,
                 );
 
                 // To avoid combinatorial explosion of test cases, we use the same parameters to
                 // generate the fee.
-                let fee = ICPTs::from_e8s(
+                let fee = Tokens::from_e8s(
                     ((rng.next_u64() % 10_u64.pow(magnitude)) / multiple_of) * multiple_of,
                 );
 

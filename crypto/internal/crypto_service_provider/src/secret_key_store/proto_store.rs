@@ -3,6 +3,7 @@
 use crate::secret_key_store::{Scope, SecretKeyStore, SecretKeyStoreError};
 use crate::threshold::ni_dkg::{NIDKG_FS_SCOPE, NIDKG_THRESHOLD_SCOPE};
 use crate::types::CspSecretKey;
+use ic_config::crypto::CryptoConfig;
 use ic_crypto_internal_threshold_sig_bls12381::ni_dkg::groth20_bls12_381::types::convert_keyset_to_keyset_with_pop;
 use ic_crypto_internal_threshold_sig_bls12381::ni_dkg::types::CspFsEncryptionKeySet;
 use ic_logger::{info, replica_logger::no_op_logger, ReplicaLogger};
@@ -14,12 +15,10 @@ use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fs;
 use std::io::ErrorKind;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 
-const SKS_DATA_FILENAME: &str = "sks_data.pb";
 const CURRENT_SKS_VERSION: u32 = 2;
 
 // TODO(CRP-523): turn this to FromStr-trait once KeyId is not public.
@@ -67,9 +66,9 @@ pub struct ProtoSecretKeyStore {
 
 impl ProtoSecretKeyStore {
     /// Creates a database instance.
-    pub fn open(dir: &Path, logger: Option<ReplicaLogger>) -> Self {
-        Self::check_path(dir);
-        let proto_file = dir.join(SKS_DATA_FILENAME);
+    pub fn open(dir: &Path, file_name: &str, logger: Option<ReplicaLogger>) -> Self {
+        CryptoConfig::check_dir_has_required_permissions(dir).expect("Wrong crypto root");
+        let proto_file = dir.join(file_name);
         let secret_keys = match Self::read_sks_data_from_disk(&proto_file) {
             Some(sks_proto) => sks_proto,
             None => SecretKeys::new(),
@@ -79,6 +78,11 @@ impl ProtoSecretKeyStore {
             keys: Arc::new(RwLock::new(secret_keys)),
             logger: logger.unwrap_or_else(no_op_logger),
         }
+    }
+
+    /// Returns the path to the protobuf file storing the keys.
+    pub fn proto_file_path(&self) -> &Path {
+        self.proto_file.as_path()
     }
 
     fn read_sks_data_from_disk(sks_data_file: &Path) -> Option<SecretKeys> {
@@ -106,8 +110,8 @@ impl ProtoSecretKeyStore {
             0 => {
                 let mut secret_keys = SecretKeys::new();
                 for (key_id_string, key_bytes) in sks_proto.key_id_to_csp_secret_key.iter() {
-                    let key_id = key_id_from_display_string(&key_id_string);
-                    let mut csp_key: CspSecretKey = serde_cbor::from_slice(&key_bytes)
+                    let key_id = key_id_from_display_string(key_id_string);
+                    let mut csp_key: CspSecretKey = serde_cbor::from_slice(key_bytes)
                         .unwrap_or_else(|e| {
                             panic!("Error deserializing key with ID {}: {}", key_id, e)
                         });
@@ -133,7 +137,7 @@ impl ProtoSecretKeyStore {
             1 => {
                 let mut secret_keys = SecretKeys::new();
                 for (key_id_hex, sk_proto) in sks_proto.key_id_to_secret_key_v1.iter() {
-                    let key_id = key_id_from_hex(&key_id_hex);
+                    let key_id = key_id_from_hex(key_id_hex);
                     let mut csp_key = serde_cbor::from_slice(&sk_proto.csp_secret_key)
                         .unwrap_or_else(|e| {
                             panic!("Error deserializing key with ID {}: {}", key_id, e)
@@ -176,7 +180,7 @@ impl ProtoSecretKeyStore {
         }
         let mut secret_keys = SecretKeys::new();
         for (key_id_hex, sk_proto) in sks_proto.key_id_to_secret_key_v1.iter() {
-            let key_id = key_id_from_hex(&key_id_hex);
+            let key_id = key_id_from_hex(key_id_hex);
             let csp_key = serde_cbor::from_slice(&sk_proto.csp_secret_key)
                 .unwrap_or_else(|e| panic!("Error deserializing key with ID {}: {}", key_id, e));
             let maybe_scope = if sk_proto.scope.is_empty() {
@@ -219,40 +223,6 @@ impl ProtoSecretKeyStore {
     fn write_secret_keys_to_disk(sks_data_file: &Path, secret_keys: &SecretKeys) {
         let sks_proto = ProtoSecretKeyStore::secret_keys_to_sks_proto(secret_keys);
         ic_utils::fs::write_protobuf_using_tmp_file(sks_data_file, &sks_proto).unwrap();
-    }
-
-    fn check_path(path: &Path) {
-        if path.is_file() {
-            panic!(
-                "Path {} should specify a directory, not a file",
-                &path.display()
-            );
-        }
-        let metadata = Self::check_path_exists(path);
-        Self::check_not_readable_by_others(path, metadata);
-    }
-
-    fn check_path_exists(path: &Path) -> fs::Metadata {
-        fs::metadata(path).unwrap_or_else(|e| {
-            panic!(
-                "Path {} does not exist or its metadata cannot be retrieved: {}",
-                &path.display(),
-                e
-            )
-        })
-    }
-
-    fn check_not_readable_by_others(path: &Path, metadata: fs::Metadata) {
-        let permissions = metadata.permissions();
-        let unix_permission_bits = permissions.mode();
-        let non_user_permissions = unix_permission_bits & 0o77;
-        if non_user_permissions != 0 {
-            panic!(
-                "crypto keystore path {} has permissions {:#o}, allowing reading by others",
-                &path.display(),
-                unix_permission_bits
-            );
-        }
     }
 }
 
@@ -352,19 +322,19 @@ pub mod tests {
     // TODO(CRP-351): add tests that SKS updates hit the disk.
     #[test]
     #[should_panic]
-    fn path_check_should_panic_for_paths_that_do_not_exist() {
+    fn open_should_panic_for_paths_that_do_not_exist() {
         let dir_path = {
             let dir = tempdir_deleted_at_end_of_scope().unwrap();
             format!("{}", dir.path().display())
         };
-        ProtoSecretKeyStore::check_path(Path::new(&dir_path));
+        ProtoSecretKeyStore::open(Path::new(&dir_path), "dummy_file", None);
     }
 
     #[test]
     #[should_panic]
-    fn path_check_should_panic_for_paths_that_are_widely_readable() {
+    fn open_should_panic_for_paths_that_are_widely_readable() {
         let dir = mk_temp_dir_with_permissions(0o744);
-        ProtoSecretKeyStore::check_path(dir.path());
+        ProtoSecretKeyStore::open(dir.as_ref(), "dummy_file", None);
     }
 
     proptest! {

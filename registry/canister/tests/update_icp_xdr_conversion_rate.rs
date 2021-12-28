@@ -1,5 +1,6 @@
 use candid::Encode;
 
+use ic_nns_common::types::UpdateIcpXdrConversionRatePayload;
 use ic_nns_test_utils::{
     itest_helpers::{
         forward_call_via_universal_canister, local_test_on_nns_subnet, set_up_registry_canister,
@@ -9,10 +10,7 @@ use ic_nns_test_utils::{
 };
 use ic_protobuf::registry::conversion_rate::v1::IcpXdrConversionRateRecord;
 use ic_registry_keys::make_icp_xdr_conversion_rate_record_key;
-use registry_canister::{
-    init::{RegistryCanisterInitPayload, RegistryCanisterInitPayloadBuilder},
-    mutations::do_update_icp_xdr_conversion_rate::UpdateIcpXdrConversionRatePayload,
-};
+use registry_canister::init::{RegistryCanisterInitPayload, RegistryCanisterInitPayloadBuilder};
 
 use assert_matches::assert_matches;
 
@@ -51,7 +49,7 @@ fn test_anonymous_and_unauthorized_users_cannot_update_icp_xdr_coversion_rate() 
         assert_eq!(
             get_value::<IcpXdrConversionRateRecord>(
                 &registry,
-                &make_icp_xdr_conversion_rate_record_key().as_bytes()
+                make_icp_xdr_conversion_rate_record_key().as_bytes()
             )
             .await,
             IcpXdrConversionRateRecord::default()
@@ -71,7 +69,7 @@ fn test_anonymous_and_unauthorized_users_cannot_update_icp_xdr_coversion_rate() 
         assert_eq!(
             get_value::<IcpXdrConversionRateRecord>(
                 &registry,
-                &make_icp_xdr_conversion_rate_record_key().as_bytes()
+                make_icp_xdr_conversion_rate_record_key().as_bytes()
             )
             .await,
             IcpXdrConversionRateRecord::default()

@@ -9,10 +9,9 @@ use ic_registry_client::helper::crypto::CryptoRegistry;
 use ic_types::crypto::threshold_sig::errors::threshold_sig_data_not_found_error::ThresholdSigDataNotFoundError;
 use ic_types::crypto::threshold_sig::ni_dkg::{DkgId, NiDkgTag, NiDkgTranscript};
 use ic_types::crypto::{CombinedThresholdSigOf, ThresholdSigShareOf};
-use ic_types::{IDkgId, NodeIndex, SubnetId};
+use ic_types::{NodeIndex, SubnetId};
 use std::cmp;
 
-mod dkg;
 mod ni_dkg;
 mod store;
 
@@ -100,7 +99,8 @@ fn map_threshold_sign_error_or_panic(
         // Panic, since these would be implementation errors:
         CspThresholdSignError::UnsupportedAlgorithm { .. }
         | CspThresholdSignError::MalformedSecretKey { .. }
-        | CspThresholdSignError::WrongSecretKeyType { .. } => panic!("Illegal state: {}", error),
+        | CspThresholdSignError::WrongSecretKeyType { .. }
+        | CspThresholdSignError::InternalError { .. } => panic!("Illegal state: {}", error),
     }
 }
 
@@ -286,11 +286,11 @@ fn shares_to_vector<H: Signable>(
     shares: BTreeMap<NodeId, ThresholdSigShareOf<H>>,
     dkg_id: DkgId,
 ) -> CryptoResult<Vec<Option<CspSignature>>> {
-    let max_node_index = maximum_node_index(&transcript_data, &shares, dkg_id)?;
+    let max_node_index = maximum_node_index(transcript_data, &shares, dkg_id)?;
     let array_size = <usize>::try_from(max_node_index).expect("usize overflow") + 1;
     let mut signatures = vec![None; array_size];
     for (node_id, share) in shares {
-        let index = index_for_node_id(&transcript_data, node_id, dkg_id)?;
+        let index = index_for_node_id(transcript_data, node_id, dkg_id)?;
         let usize_index = <usize>::try_from(index).expect("usize overflow");
         let csp_sig = CspSignature::try_from(&share)?;
         *signatures.get_mut(usize_index).unwrap() = Some(csp_sig);

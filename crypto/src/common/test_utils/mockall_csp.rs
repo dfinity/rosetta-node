@@ -9,22 +9,23 @@ use ic_crypto_internal_csp::api::tls_errors::{
     CspTlsClientHandshakeError, CspTlsServerHandshakeError,
 };
 use ic_crypto_internal_csp::api::{
-    CspKeyGenerator, CspSecretKeyInjector, CspSecretKeyStoreChecker, CspSigner,
-    CspThresholdSignError, CspTlsClientHandshake, CspTlsServerHandshake,
+    CspCreateMEGaKeyError, CspIDkgProtocol, CspKeyGenerator, CspSecretKeyStoreChecker, CspSigner,
+    CspThresholdEcdsaSigVerifier, CspThresholdEcdsaSigner, CspThresholdSignError,
+    CspTlsClientHandshake, CspTlsHandshakeSignerProvider, CspTlsServerHandshake,
     DistributedKeyGenerationCspClient, NiDkgCspClient, NodePublicKeyData,
     ThresholdSignatureCspClient,
 };
 use ic_crypto_internal_csp::tls_stub::cert_chain::CspCertificateChain;
 use ic_crypto_internal_csp::types::{
     CspDealing, CspDkgTranscript, CspPop, CspPublicCoefficients, CspPublicKey, CspResponse,
-    CspSecretKey, CspSignature,
+    CspSignature,
 };
+use ic_crypto_internal_csp::TlsHandshakeCspVault;
 use ic_crypto_internal_threshold_sig_bls12381::api::dkg_errors;
 use ic_crypto_internal_threshold_sig_bls12381::api::ni_dkg_errors::{
     CspDkgCreateDealingError, CspDkgCreateFsKeyError, CspDkgCreateReshareDealingError,
     CspDkgCreateReshareTranscriptError, CspDkgCreateTranscriptError, CspDkgLoadPrivateKeyError,
-    CspDkgUpdateFsEpochError, CspDkgVerifyDealingError, CspDkgVerifyFsKeyError,
-    CspDkgVerifyReshareDealingError,
+    CspDkgUpdateFsEpochError, CspDkgVerifyDealingError, CspDkgVerifyReshareDealingError,
 };
 use ic_crypto_internal_types::sign::threshold_sig::dkg::encryption_public_key::CspEncryptionPublicKey;
 use ic_crypto_internal_types::sign::threshold_sig::ni_dkg::{
@@ -33,14 +34,25 @@ use ic_crypto_internal_types::sign::threshold_sig::ni_dkg::{
 use ic_crypto_internal_types::sign::threshold_sig::public_key::CspThresholdSigPublicKey;
 use ic_crypto_tls_interfaces::{TlsPublicKeyCert, TlsStream};
 use ic_protobuf::crypto::v1::NodePublicKeys;
+use ic_types::crypto::canister_threshold_sig::error::{
+    IDkgCreateDealingError, IDkgCreateTranscriptError, IDkgLoadTranscriptError,
+    ThresholdEcdsaCombineSigSharesError, ThresholdEcdsaSignShareError,
+};
+use ic_types::crypto::canister_threshold_sig::ExtendedDerivationPath;
 use ic_types::crypto::threshold_sig::ni_dkg::NiDkgId;
 use ic_types::crypto::KeyId;
 use ic_types::crypto::{AlgorithmId, CryptoError, CryptoResult};
 use ic_types::IDkgId;
-use ic_types::{NodeId, NodeIndex, NumberOfNodes};
+use ic_types::{NodeId, NodeIndex, NumberOfNodes, Randomness};
 use mockall::predicate::*;
 use mockall::*;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::sync::Arc;
+use tecdsa::{
+    IDkgComplaintInternal, IDkgDealingInternal, IDkgTranscriptInternal,
+    IDkgTranscriptOperationInternal, MEGaPublicKey, ThresholdEcdsaCombinedSigInternal,
+    ThresholdEcdsaSigShareInternal,
+};
 use tokio::net::TcpStream;
 
 mock! {
@@ -145,15 +157,6 @@ mock! {
         _algorithm_id: AlgorithmId,
         _node_id: NodeId,
     ) -> Result<(CspFsEncryptionPublicKey, CspFsEncryptionPop), CspDkgCreateFsKeyError>;
-
-    /// Verifies that a forward secure public key and PoP is valid.
-    fn verify_forward_secure_key(
-        &self,
-        _algorithm_id: AlgorithmId,
-        _public_key: CspFsEncryptionPublicKey,
-        _pop: CspFsEncryptionPop,
-        _node_id: NodeId,
-    ) -> Result<(), CspDkgVerifyFsKeyError>;
 
     /// Erases forward secure secret keys at and before a given epoch
     fn update_forward_secure_epoch(
@@ -321,10 +324,6 @@ mock! {
     ) -> Result<CspDkgTranscript, dkg_errors::DkgCreateReshareTranscriptError>;
     }
 
-    pub trait CspSecretKeyInjector {
-        fn insert_secret_key(&mut self, key_id: KeyId, sk: CspSecretKey);
-    }
-
     pub trait CspSecretKeyStoreChecker {
         fn sks_contains(&self, id: &KeyId) -> bool;
         fn sks_contains_tls_key(&self, cert: &TlsPublicKeyCert) -> bool;
@@ -360,5 +359,66 @@ mock! {
         fn node_public_keys(&self) -> NodePublicKeys;
         fn node_signing_key_id(&self) -> KeyId;
         fn dkg_dealing_encryption_key_id(&self) -> KeyId;
+    }
+
+    pub trait CspTlsHandshakeSignerProvider: Send + Sync {
+        fn handshake_signer(&self) -> Arc<dyn TlsHandshakeCspVault>;
+    }
+
+    pub trait CspIDkgProtocol {
+        fn idkg_create_dealing(
+            &self,
+            algorithm_id: AlgorithmId,
+            context_data: &[u8],
+            dealer_index: NodeIndex,
+            reconstruction_threshold: NumberOfNodes,
+            receiver_keys: &[MEGaPublicKey],
+            transcript_operation: &IDkgTranscriptOperationInternal,
+        ) -> Result<IDkgDealingInternal, IDkgCreateDealingError>;
+
+        fn idkg_create_transcript(
+            &self,
+            algorithm_id: AlgorithmId,
+            reconstruction_threshold: NumberOfNodes,
+            verified_dealings: &BTreeMap<NodeIndex, IDkgDealingInternal>,
+            operation_mode: &IDkgTranscriptOperationInternal,
+        ) -> Result<IDkgTranscriptInternal, IDkgCreateTranscriptError>;
+
+        fn idkg_load_transcript(
+            &self,
+            dealings: &BTreeMap<NodeIndex, IDkgDealingInternal>,
+            context_data: &[u8],
+            receiver_index: NodeIndex,
+            public_key: &MEGaPublicKey,
+            transcript: &IDkgTranscriptInternal,
+        ) -> Result<Vec<IDkgComplaintInternal>, IDkgLoadTranscriptError>;
+
+        fn idkg_create_mega_key_pair(&mut self, algorithm_id: AlgorithmId) -> Result<MEGaPublicKey, CspCreateMEGaKeyError>;
+    }
+
+    pub trait CspThresholdEcdsaSigner {
+        fn ecdsa_sign_share(
+            &self,
+            derivation_path: &ExtendedDerivationPath,
+            hashed_message: &[u8],
+            nonce: &Randomness,
+            kappa_unmasked: &IDkgTranscriptInternal,
+            lambda_masked: &IDkgTranscriptInternal,
+            kappa_times_lambda: &IDkgTranscriptInternal,
+            key_times_lambda: &IDkgTranscriptInternal,
+            algorithm_id: AlgorithmId,
+        ) -> Result<ThresholdEcdsaSigShareInternal, ThresholdEcdsaSignShareError>;
+    }
+
+    pub trait CspThresholdEcdsaSigVerifier {
+        fn ecdsa_combine_sig_shares(
+            &self,
+            derivation_path: &ExtendedDerivationPath,
+            nonce: &Randomness,
+            kappa_unmasked: &IDkgTranscriptInternal,
+            reconstruction_threshold: NumberOfNodes,
+            sig_shares: &BTreeMap<NodeIndex, ThresholdEcdsaSigShareInternal>,
+            algorithm_id: AlgorithmId,
+        ) -> Result<ThresholdEcdsaCombinedSigInternal, ThresholdEcdsaCombineSigSharesError>;
     }
 }

@@ -83,8 +83,7 @@ fn pem_pk_decoding_should_match_test_data() {
         )
         .expect("Invalid public key in test data");
         // Test:
-        let decoded =
-            internal_types::PublicKey::from_pem(&pem).expect("Conversion from der failed");
+        let decoded = internal_types::PublicKey::from_pem(pem).expect("Conversion from der failed");
         assert_eq!(
             test_public_key, decoded,
             "Parsing yielded a different result for test vector:\n    raw:  {}\n    der:  {}",
@@ -126,6 +125,50 @@ fn should_fail_decoding_corrupted_pem_sk() {
 fn should_fail_decoding_non_sk_pem() {
     let result = internal_types::SecretKey::from_pem(test_data::ED25519_PK_1_PEM);
     assert!(result.is_err());
+}
+
+#[test]
+fn should_fail_convert_pubkey_nodeid_bad_bytes() {
+    let bad_bytes = vec![3, 1, 4];
+    let bad_proto_key = PublicKeyProto {
+        version: 1,
+        algorithm: 0,
+        key_value: bad_bytes,
+        proof_data: None,
+    };
+
+    let result = derive_node_id(&bad_proto_key);
+
+    assert!(matches!(
+        result.unwrap_err(),
+        InvalidNodePublicKey::MalformedRawBytes { internal_error: _ }
+    ));
+}
+
+#[test]
+fn should_convert_pubkey_nodeid_known_result() {
+    use std::str::FromStr;
+
+    let proto_key = PublicKeyProto {
+        version: 1,
+        algorithm: 0,
+        key_value: vec![1; 32], // length is all that matters
+        proof_data: None,
+    };
+
+    let result = derive_node_id(&proto_key);
+
+    let nodeid = match result {
+        Ok(nodeid) => nodeid,
+        Err(_) => panic!("conversion failed"),
+    };
+
+    let expected_nodeid = NodeId::from(
+        PrincipalId::from_str("mvlzf-grr7q-nhzpd-geghp-zdgtp-ib3yt-hzgi6-texkf-kk6rz-p2ejr-iae")
+            .expect("we know this converts OK"),
+    );
+
+    assert_eq!(nodeid, expected_nodeid);
 }
 
 // TODO(CRP-695): add more tests

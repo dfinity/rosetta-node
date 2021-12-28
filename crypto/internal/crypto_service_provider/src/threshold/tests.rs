@@ -17,7 +17,6 @@ use strum::IntoEnumIterator;
 pub mod util {
     use super::*;
     use crate::api::CspThresholdSignError;
-    use crate::server::api::ThresholdSignatureCspServer;
     use ic_crypto_internal_threshold_sig_bls12381::types::public_coefficients::conversions::try_number_of_nodes_from_csp_pub_coeffs;
 
     /// Test that a set of threshold signatures behaves correctly.
@@ -37,9 +36,13 @@ pub mod util {
     ///   provider, which contains the secret key, and the key identifier.
     /// * `seed` is a source of randomness.
     /// * `message` is a test message.
-    pub fn test_threshold_signatures<R: Rng + CryptoRng, S: SecretKeyStore>(
+    pub fn test_threshold_signatures<
+        R: Rng + CryptoRng + Send + Sync,
+        S: SecretKeyStore,
+        C: SecretKeyStore,
+    >(
         public_coefficients: &CspPublicCoefficients,
-        signers: &[(&Csp<R, S>, KeyId)],
+        signers: &[(&Csp<R, S, C>, KeyId)],
         seed: Randomness,
         message: &[u8],
     ) {
@@ -57,7 +60,7 @@ pub mod util {
         let signatures: Result<Vec<CspSignature>, CspThresholdSignError> = signers
             .iter()
             .map(|(csp, key_id)| {
-                csp.csp_server
+                csp.csp_vault
                     .threshold_sign(AlgorithmId::ThresBls12_381, message, *key_id)
             })
             .collect();
@@ -69,7 +72,7 @@ pub mod util {
                 if algorithm_id != AlgorithmId::ThresBls12_381 {
                     if let Some((csp, key_id)) = signers.get(0) {
                         assert!(
-                            csp.csp_server
+                            csp.csp_vault
                                 .threshold_sign(algorithm_id, message, *key_id)
                                 .is_err(),
                             "Managed to threshold sign with algorithm ID {:?}",
@@ -82,13 +85,14 @@ pub mod util {
             // * Signatures cannot be generated with an incorrect key_id:
             if let Some((csp, _key_id)) = signers.get(0) {
                 let wrong_key_id = KeyId::from(rng.gen::<[u8; 32]>());
-                let key_ids: Vec<KeyId> = signers.iter().map(|(_, key_id)| *key_id).collect();
+                let mut key_ids = signers.iter().map(|(_, key_id)| *key_id);
+
                 assert!(
-                    !key_ids.contains(&wrong_key_id),
+                    !key_ids.any(|x| x == wrong_key_id),
                     "Bad RNG: A randomly generated KeyId was in the list of keys"
                 );
                 assert!(
-                    csp.csp_server
+                    csp.csp_vault
                         .threshold_sign(AlgorithmId::ThresBls12_381, message, wrong_key_id)
                         .is_err(),
                     "A randomly generated key_id managed to sign"
@@ -207,7 +211,7 @@ pub mod util {
             assert!(verifier
                 .threshold_verify_combined_signature(
                     AlgorithmId::ThresBls12_381,
-                    &message,
+                    message,
                     incorrect_signature,
                     public_coefficients.clone()
                 )
@@ -285,51 +289,5 @@ proptest! {
     #[test]
     fn test_threshold_scheme_with_basic_keygen(seed: [u8;32], message in proptest::collection::vec(any::<u8>(), 0..100)) {
         util::test_threshold_scheme_with_basic_keygen(Randomness::from(seed), &message);
-    }
-}
-
-mod secret_key_injector {
-    use super::*;
-    use crate::api::CspSecretKeyInjector;
-    use crate::imported_test_utils::ed25519::csp_testvec;
-    use crate::secret_key_store::test_utils::MockSecretKeyStore;
-    use crate::secret_key_store::SecretKeyStore;
-    use crate::types::CspSecretKey;
-    use ic_crypto_internal_test_vectors::ed25519::Ed25519TestVector::RFC8032_ED25519_SHA_ABC;
-
-    #[test]
-    fn should_inject_secret_key_into_secret_key_store() {
-        let (secret_key, _, _, _) = csp_testvec(RFC8032_ED25519_SHA_ABC);
-        let key_id = KeyId::from([42; 32]);
-        let mut sks = MockSecretKeyStore::new();
-        let expected_secret_key = secret_key.clone();
-        sks.expect_insert()
-            .withf(move |id, key, _scope| *id == key_id && *key == expected_secret_key)
-            .times(1)
-            .return_const(Ok(()));
-        let mut csp = Csp::of(dummy_csprng(), sks);
-
-        csp.insert_secret_key(key_id, secret_key);
-    }
-
-    #[test]
-    fn should_not_panic_if_key_with_existing_id_is_inserted() {
-        let (secret_key, _, _, _) = csp_testvec(RFC8032_ED25519_SHA_ABC);
-        let key_id = KeyId::from([42; 32]);
-        let sks = secret_key_store_with(key_id, secret_key.clone());
-        let mut csp = Csp::of(dummy_csprng(), sks);
-
-        csp.insert_secret_key(key_id, secret_key);
-    }
-
-    fn dummy_csprng() -> impl CryptoRng + Rng + Clone {
-        ChaChaRng::seed_from_u64(42)
-    }
-
-    fn secret_key_store_with(key_id: KeyId, secret_key: CspSecretKey) -> impl SecretKeyStore {
-        let mut temp_store = TempSecretKeyStore::new();
-        let scope = None;
-        temp_store.insert(key_id, secret_key, scope).unwrap();
-        temp_store
     }
 }

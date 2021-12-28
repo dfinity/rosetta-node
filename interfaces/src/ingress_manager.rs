@@ -1,6 +1,6 @@
 //! The ingress manager public interface.
 use crate::{
-    execution_environment::IngressHistoryError,
+    execution_environment::{CanisterOutOfCyclesError, IngressHistoryError},
     ingress_pool::{ChangeSet, IngressPool, IngressPoolSelect},
     state_manager::StateManagerError,
     validation::{ValidationError, ValidationResult},
@@ -11,7 +11,7 @@ use ic_types::{
     crypto::CryptoError,
     messages::MessageId,
     time::{Time, UNIX_EPOCH},
-    CanisterId, Cycles,
+    CanisterId, NumBytes,
 };
 use std::collections::HashSet;
 
@@ -54,7 +54,7 @@ pub enum IngressPermanentError {
     IngressPayloadTooBig(usize, usize),
     IngressPayloadTooManyMessages(usize, usize),
     DuplicatedIngressMessage(MessageId),
-    InsufficientCycles(CanisterId, Cycles, Cycles),
+    InsufficientCycles(CanisterOutOfCyclesError),
     CanisterNotFound(CanisterId),
     InvalidManagementMessage,
 }
@@ -129,6 +129,9 @@ pub trait IngressSelector: Send + Sync {
     /// used as parameter for the valid set rule check run to select a valid
     /// set of messages.
     ///
+    /// The following invariant is placed on this function by consensus:
+    /// get_ingress_payload(..., byte_limit).count_bytes() <= byte_limit
+    ///
     /// #Returns
     /// [IngressPayload] which is a collection of valid ingress messages
     fn get_ingress_payload(
@@ -136,6 +139,7 @@ pub trait IngressSelector: Send + Sync {
         ingress_pool: &dyn IngressPoolSelect,
         past_ingress: &dyn IngressSetQuery,
         context: &ValidationContext,
+        byte_limit: NumBytes,
     ) -> IngressPayload;
 
     /// Validates an IngressPayload against the past payloads and

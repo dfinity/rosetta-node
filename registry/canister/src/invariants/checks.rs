@@ -5,6 +5,7 @@ use crate::{
         node_operator::check_node_operator_invariants,
         replica_version::check_replica_version_invariants,
         routing_table::check_routing_table_invariants, subnet::check_subnet_invariants,
+        unassigned_nodes_config::check_unassigned_nodes_config_invariants,
     },
     mutations::common::decode_registry_value,
     registry::Registry,
@@ -26,6 +27,8 @@ impl Registry {
         // Node invariants
         // TODO(NNS1-202): re-enable this check when cd hourly test issues are sorted
         // out.
+        // Note that for now, once a node record has been added, it MUST not be
+        // modified, as P2P and Transport rely on this data to stay the same
 
         // if let Err(e) = check_node_crypto_keys_invariants(&snapshot) {
         //     // TODO(NNS1-202): `expect` or `panic!` instead of `println!`
@@ -46,6 +49,9 @@ impl Registry {
 
         // Endpoint invariants
         result = result.and(check_endpoint_invariants(&snapshot, false));
+
+        // Unassigned node invariants
+        result = result.and(check_unassigned_nodes_config_invariants(&snapshot));
 
         if let Err(e) = result {
             panic!(
@@ -133,6 +139,7 @@ mod tests {
     };
     use ic_registry_keys::{make_node_operator_record_key, make_routing_table_record_key};
     use ic_registry_transport::{delete, insert, pb::v1::RegistryMutation};
+    use std::collections::BTreeMap;
 
     /// Shorthand to try a mutation
     fn try_mutate(registry: &mut Registry, mutations: &[RegistryMutation]) {
@@ -147,6 +154,8 @@ mod tests {
             node_operator_principal_id: (*TEST_USER1_PRINCIPAL).to_vec(),
             node_allowance: 0,
             node_provider_principal_id: (*TEST_USER1_PRINCIPAL).to_vec(),
+            dc_id: "".into(),
+            rewardable_nodes: BTreeMap::new(),
         });
         let registry = Registry::new();
         let mutation = vec![insert(key.as_bytes(), &value)];
@@ -170,6 +179,8 @@ mod tests {
             node_operator_principal_id: (*TEST_USER1_PRINCIPAL).to_vec(),
             node_allowance: 0,
             node_provider_principal_id: (*TEST_USER1_PRINCIPAL).to_vec(),
+            dc_id: "".into(),
+            rewardable_nodes: BTreeMap::new(),
         });
 
         let mutations = vec![
@@ -194,6 +205,8 @@ mod tests {
             node_operator_principal_id: (*TEST_USER1_PRINCIPAL).to_vec(),
             node_allowance: 0,
             node_provider_principal_id: (*TEST_USER1_PRINCIPAL).to_vec(),
+            dc_id: "".into(),
+            rewardable_nodes: BTreeMap::new(),
         });
         let mut mutations = vec![insert(key.as_bytes(), &value)];
 

@@ -18,29 +18,30 @@ use crate::convert::{
 };
 use crate::ledger_client::LedgerAccess;
 use crate::request_types::{
-    AddHotKey, PublicKeyOrPrincipal, Request, RequestType, SetDissolveTimestamp, Stake,
-    StartDissolve, StopDissolve,
+    AddHotKey, Disburse, PublicKeyOrPrincipal, Request, RequestType, SetDissolveTimestamp, Spawn,
+    Stake, StartDissolve, StopDissolve,
 };
-use crate::store::HashedBlock;
+use crate::store::{BlockStore, HashedBlock};
 use crate::time::Seconds;
 
 use convert::to_arg;
 use dfn_candid::CandidOne;
 use errors::ApiError;
 use ic_interfaces::crypto::DOMAIN_IC_REQUEST;
+use ic_nns_common::pb::v1::NeuronId;
 use ic_nns_governance::pb::v1::{
-    manage_neuron::{self, configure, Command},
+    manage_neuron::{self, configure, Command, NeuronIdOrSubaccount},
     ClaimOrRefreshNeuronFromAccount, ManageNeuron,
 };
 use ic_types::messages::{
-    Blob, HttpCanisterUpdate, HttpReadContent, HttpRequestEnvelope, HttpSubmitContent,
+    Blob, HttpCanisterUpdate, HttpReadStateContent, HttpRequestEnvelope, HttpSubmitContent,
 };
 use ic_types::{messages::MessageId, CanisterId, PrincipalId};
-use on_wire::{FromWire, IntoWire};
+use on_wire::IntoWire;
 
 use models::*;
 
-use ledger_canister::{BlockHeight, Memo, SendArgs, Transfer, TRANSACTION_FEE};
+use ledger_canister::{BlockHeight, Memo, Operation, SendArgs, TRANSACTION_FEE};
 use serde_json::map::Map;
 use std::convert::TryFrom;
 use transaction_id::TransactionIdentifier;
@@ -55,6 +56,7 @@ use log::{debug, warn};
 
 pub const API_VERSION: &str = "1.4.10";
 pub const NODE_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const DEFAULT_TOKEN_NAME: &str = "ICP";
 
 fn to_index(height: BlockHeight) -> Result<i128, ApiError> {
     i128::try_from(height).map_err(|e| ApiError::InternalError(true, e.to_string().into()))
@@ -168,6 +170,70 @@ impl RosettaRequestHandler {
     ) -> Result<AccountBalanceResponse, ApiError> {
         verify_network_id(self.ledger.ledger_canister_id(), &msg.network_identifier)?;
 
+        let neuron_info_request_params = match msg.metadata.clone().unwrap_or_default().account_type
+        {
+            BalanceAccountType::Ledger => None,
+            BalanceAccountType::Neuron {
+                neuron_id,
+                subaccount_components,
+                verified_query,
+            } => {
+                let verified = verified_query.unwrap_or(false);
+
+                if let Some(NeuronSubaccountComponents {
+                    public_key,
+                    neuron_index,
+                }) = subaccount_components
+                {
+                    let addr_from_pk = neuron_account_from_public_key(
+                        self.ledger.governance_canister_id(),
+                        &public_key,
+                        neuron_index,
+                    )?;
+
+                    if addr_from_pk != msg.account_identifier {
+                        return Err(ApiError::invalid_account_id(
+                            "Account identifier does not match the public key + neuron index"
+                                .to_string(),
+                        ));
+                    }
+                    if neuron_id.is_some() {
+                        return Err(ApiError::invalid_request(
+                                "Only one of neuron_id or the combination of public_key and neuron_index must be present",
+                        ));
+                    }
+
+                    let neuron_subaccount =
+                        crate::convert::neuron_subaccount_bytes_from_public_key(
+                            &public_key,
+                            neuron_index,
+                        )?;
+
+                    Some((
+                        NeuronIdOrSubaccount::Subaccount(neuron_subaccount.to_vec()),
+                        verified,
+                    ))
+                } else {
+                    match neuron_id {
+                        Some(id) => {
+                            Some((NeuronIdOrSubaccount::NeuronId(NeuronId { id }), verified))
+                        }
+                        None => {
+                            return Err(ApiError::invalid_request(
+                                "Invalid neuron account balance request: either neuron_id or public_key must be present",
+                            ));
+                        }
+                    }
+                }
+            }
+        };
+
+        let neuron_info = if let Some((neuron_id, verified)) = neuron_info_request_params {
+            Some(self.neuron_info(neuron_id, verified).await?)
+        } else {
+            None
+        };
+
         let account_id = ledger_canister::AccountIdentifier::from_hex(
             &msg.account_identifier.address,
         )
@@ -180,10 +246,14 @@ impl RosettaRequestHandler {
         let blocks = self.ledger.read_blocks().await;
         let block = get_block(&blocks, msg.block_identifier)?;
 
-        let icp = blocks.get_balance(&account_id, block.index)?;
-        let amount = convert::amount_(icp)?;
+        let tokens = blocks.get_balance(&account_id, block.index)?;
+        let amount = convert::amount_(tokens, self.ledger.token_name())?;
         let b = convert::block_id(&block)?;
-        Ok(AccountBalanceResponse::new(b, vec![amount]))
+        Ok(AccountBalanceResponse {
+            block_identifier: b,
+            balances: vec![amount],
+            metadata: neuron_info,
+        })
     }
 
     /// Get a Block
@@ -199,7 +269,7 @@ impl RosettaRequestHandler {
         let b_id = convert::block_id(&hb)?;
         let parent_id = create_parent_block_id(&blocks, &hb)?;
 
-        let transactions = vec![convert::transaction(&hb)?];
+        let transactions = vec![convert::transaction(&hb, self.ledger.token_name())?];
         let block = Some(models::Block::new(
             b_id,
             parent_id,
@@ -226,7 +296,7 @@ impl RosettaRequestHandler {
         });
         let hb = get_block(&blocks, b_id)?;
 
-        let transaction = convert::transaction(&hb)?;
+        let transaction = convert::transaction(&hb, self.ledger.token_name())?;
 
         Ok(BlockTransactionResponse::new(transaction))
     }
@@ -288,8 +358,8 @@ impl RosettaRequestHandler {
                     sender_delegation: None,
                 };
 
-                let read_state_envelope = HttpRequestEnvelope::<HttpReadContent> {
-                    content: HttpReadContent::ReadState { read_state },
+                let read_state_envelope = HttpRequestEnvelope::<HttpReadStateContent> {
+                    content: HttpReadStateContent::ReadState { read_state },
                     sender_pubkey: Some(Blob(ic_canister_client::ed25519_public_key_to_der(
                         from_public_key(&read_state_signature.public_key)?,
                     ))),
@@ -324,12 +394,12 @@ impl RosettaRequestHandler {
 
         let account_identifier = Some(match msg.metadata {
             Some(ConstructionDeriveRequestMetadata {
-                account_type: AccountType::Neuron { neuron_identifier },
+                account_type: AccountType::Neuron { neuron_index },
                 ..
             }) => neuron_account_from_public_key(
                 self.ledger.governance_canister_id(),
                 &msg.public_key,
-                neuron_identifier,
+                neuron_index,
             )?,
             _ => account_from_public_key(&msg.public_key)?,
         });
@@ -375,8 +445,20 @@ impl RosettaRequestHandler {
         msg: models::ConstructionMetadataRequest,
     ) -> Result<ConstructionMetadataResponse, ApiError> {
         verify_network_id(self.ledger.ledger_canister_id(), &msg.network_identifier)?;
-        let fee = TRANSACTION_FEE;
-        let suggested_fee = Some(vec![convert::amount_(fee)?]);
+        let suggested_fee = match msg.options {
+            Some(opts)
+                if opts
+                    .request_types
+                    .iter()
+                    .all(RequestType::is_neuron_management) =>
+            {
+                None
+            }
+            _ => Some(vec![convert::amount_(
+                TRANSACTION_FEE,
+                self.ledger.token_name(),
+            )?]),
+        };
         Ok(ConstructionMetadataResponse {
             metadata: ConstructionPayloadsRequestMetadata::default(),
             suggested_fee,
@@ -405,19 +487,7 @@ impl RosettaRequestHandler {
         let mut requests = vec![];
         let mut from_ai = vec![];
 
-        for (
-            request_type,
-            HttpCanisterUpdate {
-                arg, sender, nonce, ..
-            },
-        ) in updates
-        {
-            let neuron_identifier = || {
-                nonce
-                    .and_then(|b| CandidOne::<u64>::from_bytes(b.0).map(|c| c.0).ok())
-                    .unwrap_or_default()
-            };
-
+        for (request_type, HttpCanisterUpdate { arg, sender, .. }) in updates {
             let from = PrincipalId::try_from(sender.0)
                 .map_err(|e| ApiError::internal_error(e.to_string()))?
                 .into();
@@ -431,14 +501,14 @@ impl RosettaRequestHandler {
                         amount, fee, to, ..
                     } = from_arg(arg.0)?;
 
-                    requests.push(Request::Transfer(Transfer::Send {
+                    requests.push(Request::Transfer(Operation::Transfer {
                         from,
                         to,
                         amount,
                         fee,
                     }));
                 }
-                RequestType::Stake => {
+                RequestType::Stake { neuron_index } => {
                     let _: ClaimOrRefreshNeuronFromAccount = candid::decode_one(arg.0.as_ref())
                         .map_err(|e| {
                             ApiError::internal_error(format!(
@@ -448,10 +518,10 @@ impl RosettaRequestHandler {
                         })?;
                     requests.push(Request::Stake(Stake {
                         account: from,
-                        neuron_identifier: neuron_identifier(),
+                        neuron_index,
                     }));
                 }
-                RequestType::SetDissolveTimestamp => {
+                RequestType::SetDissolveTimestamp { neuron_index } => {
                     let manage: ManageNeuron = candid::decode_one(arg.0.as_ref()).map_err(|e| {
                         ApiError::internal_error(format!(
                             "Could not decode Set Dissolve Timestamp argument: {}",
@@ -474,11 +544,11 @@ impl RosettaRequestHandler {
 
                     requests.push(Request::SetDissolveTimestamp(SetDissolveTimestamp {
                         account: from,
-                        neuron_identifier: neuron_identifier(),
+                        neuron_index,
                         timestamp,
                     }));
                 }
-                RequestType::StartDissolve => {
+                RequestType::StartDissolve { neuron_index } => {
                     let manage: ManageNeuron = candid::decode_one(arg.0.as_ref()).map_err(|e| {
                         ApiError::internal_error(format!(
                             "Could not decode Start Dissolve argument: {}",
@@ -499,10 +569,10 @@ impl RosettaRequestHandler {
                     };
                     requests.push(Request::StartDissolve(StartDissolve {
                         account: from,
-                        neuron_identifier: neuron_identifier(),
+                        neuron_index,
                     }));
                 }
-                RequestType::StopDissolve => {
+                RequestType::StopDissolve { neuron_index } => {
                     let manage: ManageNeuron = candid::decode_one(arg.0.as_ref()).map_err(|e| {
                         ApiError::internal_error(format!(
                             "Could not decode Stop Dissolve argument: {}",
@@ -523,10 +593,47 @@ impl RosettaRequestHandler {
                     };
                     requests.push(Request::StopDissolve(StopDissolve {
                         account: from,
-                        neuron_identifier: neuron_identifier(),
+                        neuron_index,
                     }));
                 }
-                RequestType::AddHotKey => {
+                RequestType::Disburse { neuron_index } => {
+                    let manage: ManageNeuron = candid::decode_one(arg.0.as_ref()).map_err(|e| {
+                        ApiError::internal_error(format!(
+                            "Could not decode ManageNeuron argument: {}",
+                            e
+                        ))
+                    })?;
+                    if let ManageNeuron {
+                        command:
+                            Some(manage_neuron::Command::Disburse(manage_neuron::Disburse {
+                                to_account,
+                                amount,
+                            })),
+                        ..
+                    } = manage
+                    {
+                        requests.push(Request::Disburse(Disburse {
+                            account: from,
+                            amount: amount.map(|a| ledger_canister::Tokens::from_e8s(a.e8s)),
+                            recipient: to_account.map_or(Ok(None), |a| {
+                                ledger_canister::AccountIdentifier::try_from(&a)
+                                    .map_err(|e| {
+                                        ApiError::internal_error(format!(
+                                            "Could not parse recipient AccountIdentifier {:?}",
+                                            e
+                                        ))
+                                    })
+                                    .map(Some)
+                            })?,
+                            neuron_index,
+                        }));
+                    } else {
+                        return Err(ApiError::internal_error(
+                            "Incompatible manage_neuron command".to_string(),
+                        ));
+                    };
+                }
+                RequestType::AddHotKey { neuron_index } => {
                     let manage: ManageNeuron = candid::decode_one(arg.0.as_ref()).map_err(|e| {
                         ApiError::internal_error(format!(
                             "Could not decode Stop Dissolve argument: {}",
@@ -544,7 +651,7 @@ impl RosettaRequestHandler {
                     {
                         requests.push(Request::AddHotKey(AddHotKey {
                             account: from,
-                            neuron_identifier: neuron_identifier(),
+                            neuron_index,
                             key: PublicKeyOrPrincipal::Principal(pid),
                         }));
                     } else {
@@ -552,6 +659,37 @@ impl RosettaRequestHandler {
                             "Incompatible manage_neuron command".to_string(),
                         ));
                     };
+                }
+
+                RequestType::Spawn { neuron_index } => {
+                    let manage: ManageNeuron = candid::decode_one(arg.0.as_ref()).map_err(|e| {
+                        ApiError::internal_error(format!(
+                            "Could not decode ManageNeuron argument: {}",
+                            e
+                        ))
+                    })?;
+                    if let Some(Command::Spawn(manage_neuron::Spawn {
+                        new_controller,
+                        nonce,
+                    })) = manage.command
+                    {
+                        if let Some(spawned_neuron_index) = nonce {
+                            requests.push(Request::Spawn(Spawn {
+                                account: from,
+                                spawned_neuron_index,
+                                controller: new_controller,
+                                neuron_index,
+                            }));
+                        } else {
+                            return Err(ApiError::internal_error(
+                                "Incompatible manage_neuron command (spawned neuron index is required).",
+                            ));
+                        }
+                    } else {
+                        return Err(ApiError::internal_error(
+                            "Incompatible manage_neuron command".to_string(),
+                        ));
+                    }
                 }
             }
         }
@@ -561,7 +699,7 @@ impl RosettaRequestHandler {
         let from_ai = from_ai.iter().map(to_model_account_identifier).collect();
 
         Ok(ConstructionParseResponse {
-            operations: Request::requests_to_operations(&requests)?,
+            operations: Request::requests_to_operations(&requests, self.ledger.token_name())?,
             signers: None,
             account_identifier_signers: Some(from_ai),
             metadata: None,
@@ -583,7 +721,7 @@ impl RosettaRequestHandler {
         let pks = msg.public_keys.clone().ok_or_else(|| {
             ApiError::internal_error("Expected field 'public_keys' to be populated")
         })?;
-        let transactions = convert::from_operations(&ops, false)?;
+        let transactions = convert::from_operations(&ops, false, self.ledger.token_name())?;
 
         let interval = ic_types::ingress::MAX_INGRESS_TTL
             - ic_types::ingress::PERMITTED_DRIFT
@@ -628,7 +766,7 @@ impl RosettaRequestHandler {
         let pks_map = pks
             .iter()
             .map(|pk| {
-                let pid: PrincipalId = convert::principal_id_from_public_key(&pk)?;
+                let pid: PrincipalId = convert::principal_id_from_public_key(pk)?;
                 let account: ledger_canister::AccountIdentifier = pid.into();
                 Ok((account, pk))
             })
@@ -674,7 +812,7 @@ impl RosettaRequestHandler {
         let add_neuron_management_payload =
             |request_type: RequestType,
              account: ledger_canister::AccountIdentifier,
-             neuron_identifier: u64,
+             neuron_index: u64,
              command: Command,
              payloads: &mut Vec<SigningPayload>,
              updates: &mut Vec<(RequestType, HttpCanisterUpdate)>|
@@ -686,8 +824,7 @@ impl RosettaRequestHandler {
                     ))
                 })?;
 
-                let neuron_subaccount =
-                    neuron_subaccount_bytes_from_public_key(&pk, neuron_identifier)?;
+                let neuron_subaccount = neuron_subaccount_bytes_from_public_key(pk, neuron_index)?;
 
                 let manage_neuron = ManageNeuron {
                     id: None,
@@ -706,11 +843,11 @@ impl RosettaRequestHandler {
                             .expect("Serialization failed"),
                     ),
                     nonce: Some(Blob(
-                        CandidOne(neuron_identifier)
+                        CandidOne(neuron_index)
                             .into_bytes()
-                            .expect("Serialization of neuron_identifier failed"),
+                            .expect("Serialization of neuron_index failed"),
                     )),
-                    sender: Blob(convert::principal_id_from_public_key(&pk)?.into_vec()),
+                    sender: Blob(convert::principal_id_from_public_key(pk)?.into_vec()),
                     ingress_expiry: 0,
                 };
 
@@ -727,7 +864,7 @@ impl RosettaRequestHandler {
 
         for t in transactions {
             match t {
-                Request::Transfer(Transfer::Send {
+                Request::Transfer(Operation::Transfer {
                     from,
                     to,
                     amount,
@@ -758,7 +895,7 @@ impl RosettaRequestHandler {
                         // We don't use a it here because we never want two transactions with
                         // identical tx IDs to both land on chain.
                         nonce: None,
-                        sender: Blob(convert::principal_id_from_public_key(&pk)?.into_vec()),
+                        sender: Blob(convert::principal_id_from_public_key(pk)?.into_vec()),
                         ingress_expiry: 0,
                     };
 
@@ -772,7 +909,7 @@ impl RosettaRequestHandler {
                 }
                 Request::Stake(Stake {
                     account,
-                    neuron_identifier,
+                    neuron_index,
                 }) => {
                     let pk = pks_map.get(&account).ok_or_else(|| {
                         ApiError::internal_error(format!(
@@ -784,7 +921,7 @@ impl RosettaRequestHandler {
                     // What we send to the governance canister
                     let args = ClaimOrRefreshNeuronFromAccount {
                         controller: None,
-                        memo: neuron_identifier,
+                        memo: neuron_index,
                     };
 
                     let update = HttpCanisterUpdate {
@@ -796,16 +933,16 @@ impl RosettaRequestHandler {
                         // doesn't show it's face until you try to do two
                         // identical transactions at the same time
 
-                        // We reuse the nonce field for neuron_identifier,
+                        // We reuse the nonce field for neuron_index,
                         // since neuron management commands lack an equivalent to the ledgers memo.
                         // If we also need a real nonce, we'll concatenate it to the
-                        // neuron_identifier.
+                        // neuron_index.
                         nonce: Some(Blob(
-                            CandidOne(neuron_identifier)
+                            CandidOne(neuron_index)
                                 .into_bytes()
-                                .expect("Serialization of neuron_identifier failed"),
+                                .expect("Serialization of neuron_index failed"),
                         )),
-                        sender: Blob(convert::principal_id_from_public_key(&pk)?.into_vec()),
+                        sender: Blob(convert::principal_id_from_public_key(pk)?.into_vec()),
                         ingress_expiry: 0,
                     };
 
@@ -815,15 +952,15 @@ impl RosettaRequestHandler {
                         &to_model_account_identifier(&account),
                         &update,
                     );
-                    updates.push((RequestType::Stake, update));
+                    updates.push((RequestType::Stake { neuron_index }, update));
                 }
                 Request::StartDissolve(StartDissolve {
                     account,
-                    neuron_identifier,
+                    neuron_index,
                 })
                 | Request::StopDissolve(StopDissolve {
                     account,
-                    neuron_identifier,
+                    neuron_index,
                 }) => {
                     let command = Command::Configure(manage_neuron::Configure {
                         operation: Some(if let Request::StartDissolve(_) = t {
@@ -839,12 +976,12 @@ impl RosettaRequestHandler {
 
                     add_neuron_management_payload(
                         if let Request::StartDissolve(_) = t {
-                            RequestType::StartDissolve
+                            RequestType::StartDissolve { neuron_index }
                         } else {
-                            RequestType::StopDissolve
+                            RequestType::StopDissolve { neuron_index }
                         },
                         account,
-                        neuron_identifier,
+                        neuron_index,
                         command,
                         &mut payloads,
                         &mut updates,
@@ -852,7 +989,7 @@ impl RosettaRequestHandler {
                 }
                 Request::SetDissolveTimestamp(SetDissolveTimestamp {
                     account,
-                    neuron_identifier,
+                    neuron_index,
                     timestamp,
                 }) => {
                     let command = Command::Configure(manage_neuron::Configure {
@@ -864,9 +1001,9 @@ impl RosettaRequestHandler {
                     });
 
                     add_neuron_management_payload(
-                        RequestType::SetDissolveTimestamp,
+                        RequestType::SetDissolveTimestamp { neuron_index },
                         account,
-                        neuron_identifier,
+                        neuron_index,
                         command,
                         &mut payloads,
                         &mut updates,
@@ -875,7 +1012,7 @@ impl RosettaRequestHandler {
                 Request::AddHotKey(AddHotKey {
                     account,
                     key,
-                    neuron_identifier,
+                    neuron_index,
                 }) => {
                     let pid = match key {
                         PublicKeyOrPrincipal::Principal(p) => p,
@@ -890,24 +1027,64 @@ impl RosettaRequestHandler {
                     });
 
                     add_neuron_management_payload(
-                        RequestType::AddHotKey,
+                        RequestType::AddHotKey { neuron_index },
                         account,
-                        neuron_identifier,
+                        neuron_index,
                         command,
                         &mut payloads,
                         &mut updates,
                     )?;
                 }
+                Request::Disburse(Disburse {
+                    account,
+                    amount,
+                    recipient,
+                    neuron_index,
+                }) => {
+                    let command = Command::Disburse(manage_neuron::Disburse {
+                        amount: amount.map(|amount| manage_neuron::disburse::Amount {
+                            e8s: amount.get_e8s(),
+                        }),
+                        to_account: recipient.map(From::from),
+                    });
 
-                Request::Transfer(Transfer::Burn { .. }) => {
+                    add_neuron_management_payload(
+                        RequestType::Disburse { neuron_index },
+                        account,
+                        neuron_index,
+                        command,
+                        &mut payloads,
+                        &mut updates,
+                    )?;
+                }
+                Request::Transfer(Operation::Burn { .. }) => {
                     return Err(ApiError::invalid_request(
                         "Burn operations are not supported through rosetta",
                     ))
                 }
-                Request::Transfer(Transfer::Mint { .. }) => {
+                Request::Transfer(Operation::Mint { .. }) => {
                     return Err(ApiError::invalid_request(
                         "Mint operations are not supported through rosetta",
                     ))
+                }
+                Request::Spawn(Spawn {
+                    account,
+                    spawned_neuron_index,
+                    controller,
+                    neuron_index,
+                }) => {
+                    let command = Command::Spawn(manage_neuron::Spawn {
+                        new_controller: controller,
+                        nonce: Some(spawned_neuron_index),
+                    });
+                    add_neuron_management_payload(
+                        RequestType::Spawn { neuron_index },
+                        account,
+                        neuron_index,
+                        command,
+                        &mut payloads,
+                        &mut updates,
+                    )?;
                 }
             }
         }
@@ -927,21 +1104,30 @@ impl RosettaRequestHandler {
         msg: models::ConstructionPreprocessRequest,
     ) -> Result<ConstructionPreprocessResponse, ApiError> {
         verify_network_id(self.ledger.ledger_canister_id(), &msg.network_identifier)?;
-        let transfers = convert::from_operations(&msg.operations, true)?;
+        let transfers = convert::from_operations(&msg.operations, true, self.ledger.token_name())?;
+        let options = Some(ConstructionMetadataRequestOptions {
+            request_types: transfers
+                .iter()
+                .map(|r| r.request_type())
+                .collect::<Result<_, _>>()?,
+        });
+
         let required_public_keys: Result<HashSet<ledger_canister::AccountIdentifier>, ApiError> =
             transfers
                 .into_iter()
                 .map(|transfer| match transfer {
-                    Request::Transfer(Transfer::Send { from, .. }) => Ok(from),
+                    Request::Transfer(Operation::Transfer { from, .. }) => Ok(from),
                     Request::Stake(Stake { account, .. })
                     | Request::SetDissolveTimestamp(SetDissolveTimestamp { account, .. })
                     | Request::StartDissolve(StartDissolve { account, .. })
                     | Request::StopDissolve(StopDissolve { account, .. })
-                    | Request::AddHotKey(AddHotKey { account, .. }) => Ok(account),
-                    Request::Transfer(Transfer::Burn { .. }) => Err(ApiError::invalid_request(
+                    | Request::Disburse(Disburse { account, .. })
+                    | Request::AddHotKey(AddHotKey { account, .. })
+                    | Request::Spawn(Spawn { account, .. }) => Ok(account),
+                    Request::Transfer(Operation::Burn { .. }) => Err(ApiError::invalid_request(
                         "Burn operations are not supported through rosetta",
                     )),
-                    Request::Transfer(Transfer::Mint { .. }) => Err(ApiError::invalid_request(
+                    Request::Transfer(Operation::Mint { .. }) => Err(ApiError::invalid_request(
                         "Mint operations are not supported through rosetta",
                     )),
                 })
@@ -954,7 +1140,7 @@ impl RosettaRequestHandler {
 
         Ok(ConstructionPreprocessResponse {
             required_public_keys: Some(keys),
-            options: None,
+            options,
         })
     }
 
@@ -1230,7 +1416,7 @@ impl RosettaRequestHandler {
         for hb in block_range.into_iter().rev() {
             txs.push(BlockTransaction::new(
                 convert::block_id(&hb)?,
-                convert::transaction(&hb)?,
+                convert::transaction(&hb, self.ledger.token_name())?,
             ));
         }
 
@@ -1372,7 +1558,7 @@ impl RosettaRequestHandler {
             let hb = blocks.get_verified_at(i)?;
             txs.push(BlockTransaction::new(
                 convert::block_id(&hb)?,
-                convert::transaction(&hb)?,
+                convert::transaction(&hb, self.ledger.token_name())?,
             ));
         }
 
@@ -1381,6 +1567,37 @@ impl RosettaRequestHandler {
             total_count,
             next_offset,
         ))
+    }
+
+    pub async fn neuron_info(
+        &self,
+        neuron_id: NeuronIdOrSubaccount,
+        verified: bool,
+    ) -> Result<NeuronInfoResponse, ApiError> {
+        let res = self.ledger.neuron_info(neuron_id, verified).await?;
+
+        use ic_nns_governance::pb::v1::NeuronState as PbNeuronState;
+        let state = match PbNeuronState::from_i32(res.state) {
+            Some(PbNeuronState::NotDissolving) => NeuronState::NotDissolving,
+            Some(PbNeuronState::Dissolving) => NeuronState::Dissolving,
+            Some(PbNeuronState::Dissolved) => NeuronState::Dissolved,
+            Some(PbNeuronState::Unspecified) | None => {
+                return Err(ApiError::internal_error(format!(
+                    "unsupported neuron state code: {}",
+                    res.state
+                )))
+            }
+        };
+
+        Ok(NeuronInfoResponse {
+            verified_query: verified,
+            retrieved_at_timestamp_seconds: res.retrieved_at_timestamp_seconds,
+            state,
+            age_seconds: res.age_seconds,
+            dissolve_delay_seconds: res.dissolve_delay_seconds,
+            voting_power: res.voting_power,
+            created_timestamp_seconds: res.created_timestamp_seconds,
+        })
     }
 }
 

@@ -14,7 +14,6 @@ mod errors;
 
 mod dkg;
 
-pub use dkg::DkgAlgorithm;
 pub use sign::threshold_sig::ni_dkg::{LoadTranscriptResult, NiDkgAlgorithm};
 
 mod sign;
@@ -36,8 +35,8 @@ pub use sign::canister_threshold_sig::*;
 use ic_types::consensus::certification::CertificationContent;
 use ic_types::consensus::dkg as consensus_dkg;
 use ic_types::consensus::{
-    Block, CatchUpContent, CatchUpContentProtobufBytes, FinalizationContent, NotarizationContent,
-    RandomBeaconContent, RandomTapeContent,
+    ecdsa::EcdsaDealing, Block, CatchUpContent, CatchUpContentProtobufBytes, FinalizationContent,
+    NotarizationContent, RandomBeaconContent, RandomTapeContent,
 };
 use ic_types::messages::{MessageId, WebAuthnEnvelope};
 
@@ -51,11 +50,8 @@ pub trait Crypto:
     + BasicSigner<consensus_dkg::DealingContent>
     + BasicSigVerifier<consensus_dkg::DealingContent>
     // DKG
-    + DkgAlgorithm
     + NiDkgAlgorithm
     // CertificationContent
-    + MultiSigner<CertificationContent>
-    + MultiSigVerifier<CertificationContent>
     + ThresholdSigner<CertificationContent>
     + ThresholdSigVerifier<CertificationContent>
     + ThresholdSigVerifierByPublicKey<CertificationContent>
@@ -65,6 +61,12 @@ pub trait Crypto:
     // NotarizationContent
     + MultiSigner<NotarizationContent>
     + MultiSigVerifier<NotarizationContent>
+    // EcdsaDealing
+    + MultiSigner<EcdsaDealing>
+    + MultiSigVerifier<EcdsaDealing>
+    + IDkgProtocol
+    + ThresholdEcdsaSigner
+    + ThresholdEcdsaSigVerifier
     // RequestId/WebAuthn
     + BasicSigVerifierByPublicKey<MessageId>
     + BasicSigVerifierByPublicKey<WebAuthnEnvelope>
@@ -102,10 +104,7 @@ impl<T> Crypto for T where
         + BasicSigVerifier<Block>
         + BasicSigner<consensus_dkg::DealingContent>
         + BasicSigVerifier<consensus_dkg::DealingContent>
-        + DkgAlgorithm
         + NiDkgAlgorithm
-        + MultiSigner<CertificationContent>
-        + MultiSigVerifier<CertificationContent>
         + ThresholdSigner<CertificationContent>
         + ThresholdSigVerifier<CertificationContent>
         + ThresholdSigVerifierByPublicKey<CertificationContent>
@@ -113,6 +112,11 @@ impl<T> Crypto for T where
         + MultiSigVerifier<FinalizationContent>
         + MultiSigner<NotarizationContent>
         + MultiSigVerifier<NotarizationContent>
+        + MultiSigner<EcdsaDealing>
+        + MultiSigVerifier<EcdsaDealing>
+        + IDkgProtocol
+        + ThresholdEcdsaSigner
+        + ThresholdEcdsaSigVerifier
         + BasicSigVerifierByPublicKey<MessageId>
         + BasicSigVerifierByPublicKey<WebAuthnEnvelope>
         + ThresholdSigner<CatchUpContent>

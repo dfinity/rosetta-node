@@ -5,7 +5,7 @@ use dfn_protobuf::ProtoBuf;
 use ic_canister_client::{Agent, HttpClient, Sender};
 use ic_types::{CanisterId, PrincipalId};
 use lazy_static::lazy_static;
-use ledger_canister::{self, BlockHeight, CyclesResponse, ICPTs, NotifyCanisterArgs, Subaccount};
+use ledger_canister::{self, BlockHeight, CyclesResponse, NotifyCanisterArgs, Subaccount, Tokens};
 use on_wire::{FromWire, IntoWire, NewType};
 use std::sync::atomic::{AtomicU64, Ordering};
 use url::Url;
@@ -17,7 +17,7 @@ pub struct CreateCanister<'a> {
     pub cycles_canister_id: &'a CanisterId,
     pub sender_keypair: &'a ed25519_dalek::Keypair,
     pub sender_subaccount: Option<Subaccount>,
-    pub amount: ICPTs,
+    pub amount: Tokens,
     pub controller_id: &'a PrincipalId,
 }
 
@@ -26,7 +26,7 @@ impl<'a> CreateCanister<'a> {
         let ledger_agent = Agent::new_with_client(
             self.client.clone(),
             self.ic_url.clone(),
-            Sender::from_keypair(&self.sender_keypair),
+            Sender::from_keypair(self.sender_keypair),
         );
 
         let (send_args, subaccount) = create_canister_txn(
@@ -94,7 +94,7 @@ pub struct TopUpCanister<'a> {
     pub cycles_canister_id: &'a CanisterId,
     pub sender_keypair: &'a ed25519_dalek::Keypair,
     pub sender_subaccount: Option<Subaccount>,
-    pub amount: ICPTs,
+    pub amount: Tokens,
     pub target_canister_id: &'a CanisterId,
 }
 
@@ -103,7 +103,7 @@ impl<'a> TopUpCanister<'a> {
         let agent = Agent::new_with_client(
             self.client,
             self.ic_url,
-            Sender::from_keypair(&self.sender_keypair),
+            Sender::from_keypair(self.sender_keypair),
         );
 
         let (send_args, subaccount) = top_up_canister_txn(

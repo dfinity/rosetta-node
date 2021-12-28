@@ -19,12 +19,12 @@ use crate::{
         SecretKeyBytes as ThresholdSecretKeyBytes,
     },
 };
-use ff::Field;
 use ic_crypto_internal_types::sign::threshold_sig::ni_dkg::ni_dkg_groth20_bls12_381::PublicCoefficientsBytes;
 use ic_types::{crypto::AlgorithmId, IDkgId, NodeIndex, NumberOfNodes};
 use std::collections::BTreeMap;
 use std::convert::TryFrom;
 use std::iter::Sum;
+use std::ops::{AddAssign, MulAssign, SubAssign};
 
 #[cfg(test)]
 mod test_resharing;
@@ -124,7 +124,7 @@ pub fn create_resharing_transcript(
             verified_dealings,
             verified_responses,
             dealer_keys,
-            &resharing_public_coefficients,
+            resharing_public_coefficients,
         )?;
 
     // Get the public keys of the receivers:
@@ -307,7 +307,7 @@ mod transcript_util {
                     if let Some(verified_response) = response_maybe {
                         Ok(Some((
                             verified_response.receiver_public_key,
-                            combined_receiver_share(&dealings, receiver_index)?,
+                            combined_receiver_share(dealings, receiver_index)?,
                         )))
                     } else {
                         Ok(None)

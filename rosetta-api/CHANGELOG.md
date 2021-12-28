@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2021-12-28
+### Added
+- /account/balance endpoint can now return information about neurons.
+- Support for custom token names.
+  Use -t command line argument to specify token name other than ICP.
+- Support for `SPAWN` neuron management operation.
+
 ## [1.2.0] - 2021-09-28
 ### Changed
 - Neuron address derivation is now supported by /construction/derive endpoint.
@@ -38,7 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - BREAKING CHANGE: the internal encoding of transactions changed to support multi-step transactions (e.g., fund staking).
   Any transactions constructed with earlier versions of rosetta node cannot be applied by this version.
-   
+
 
 ## [1.0.2] - 2020-12-10
 ### Added

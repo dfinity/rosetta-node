@@ -101,6 +101,7 @@ pub enum KeyPurpose {
     QueryResponseSigning = 2,
     DkgDealingEncryption = 3,
     CommitteeSigning = 4,
+    IDkgMEGaEncryption = 5,
 }
 
 /// An algorithm ID. This is used to specify the signature algorithm associated
@@ -126,6 +127,7 @@ pub enum AlgorithmId {
     EcdsaSecp256k1 = 12,
     IcCanisterSignature = 13,
     RsaSha256 = 14,
+    ThresholdEcdsaSecp256k1 = 15,
 }
 
 impl From<CspThresholdSigPublicKey> for AlgorithmId {
@@ -173,6 +175,7 @@ impl From<i32> for AlgorithmId {
             12 => AlgorithmId::EcdsaSecp256k1,
             13 => AlgorithmId::IcCanisterSignature,
             14 => AlgorithmId::RsaSha256,
+            15 => AlgorithmId::ThresholdEcdsaSecp256k1,
             _ => AlgorithmId::Placeholder,
         }
     }

@@ -9,6 +9,10 @@
 // annotated with `#[candid_method(query/update)]` to be able to generate the
 // did definition of the method.
 
+use ic_nns_governance::{
+    governance::ONE_DAY_SECONDS,
+    pb::v1::{manage_neuron::NeuronIdOrSubaccount, RewardNodeProviders},
+};
 use rand::rngs::StdRng;
 use rand_core::{RngCore, SeedableRng};
 use std::boxed::Box;
@@ -32,7 +36,7 @@ use ic_nns_common::{
     types::{MethodAuthzChange, NeuronId, ProposalId},
 };
 use ic_nns_constants::LEDGER_CANISTER_ID;
-use ic_nns_governance::pb::v1::RewardEvent;
+use ic_nns_governance::pb::v1::{RewardEvent, UpdateNodeProvider};
 use ic_nns_governance::stable_mem_utils::{BufferedStableMemReader, BufferedStableMemWriter};
 use ic_nns_governance::{
     governance::{Environment, Governance, Ledger},
@@ -55,7 +59,7 @@ use dfn_core::api::reject_message;
 use ic_nns_common::access_control::check_caller_is_gtc;
 use ic_nns_governance::governance::HeapGrowthPotential;
 use ledger_canister::{
-    metrics_encoder, AccountBalanceArgs, AccountIdentifier, ICPTs, Memo, SendArgs, Subaccount,
+    metrics_encoder, AccountBalanceArgs, AccountIdentifier, Memo, SendArgs, Subaccount, Tokens,
     TotalSupplyArgs,
 };
 
@@ -226,8 +230,8 @@ impl Ledger for LedgerCanister {
             protobuf,
             SendArgs {
                 memo: Memo(memo),
-                amount: ICPTs::from_e8s(amount_e8s),
-                fee: ICPTs::from_e8s(fee_e8s),
+                amount: Tokens::from_e8s(amount_e8s),
+                fee: Tokens::from_e8s(fee_e8s),
                 from_subaccount,
                 to,
                 created_at_time: None,
@@ -246,8 +250,8 @@ impl Ledger for LedgerCanister {
         })
     }
 
-    async fn total_supply(&self) -> Result<ICPTs, GovernanceError> {
-        let result: Result<ICPTs, (Option<i32>, String)> = call(
+    async fn total_supply(&self) -> Result<Tokens, GovernanceError> {
+        let result: Result<Tokens, (Option<i32>, String)> = call(
             LEDGER_CANISTER_ID,
             "total_supply_pb",
             protobuf,
@@ -266,8 +270,8 @@ impl Ledger for LedgerCanister {
         })
     }
 
-    async fn account_balance(&self, account: AccountIdentifier) -> Result<ICPTs, GovernanceError> {
-        let result: Result<ICPTs, (Option<i32>, String)> = call(
+    async fn account_balance(&self, account: AccountIdentifier) -> Result<Tokens, GovernanceError> {
+        let result: Result<Tokens, (Option<i32>, String)> = call(
             LEDGER_CANISTER_ID,
             "account_balance_pb",
             protobuf,
@@ -371,6 +375,8 @@ fn canister_post_upgrade() {
         }
     }
     .expect("Couldn't upgrade canister.");
+
+    governance_mut().proto.wait_for_quiet_threshold_seconds = 4 * ONE_DAY_SECONDS;
 }
 
 #[export_name = "canister_update update_authz"]
@@ -530,6 +536,20 @@ async fn manage_neuron_(manage_neuron: ManageNeuron) -> ManageNeuronResponse {
         .await
 }
 
+/// Returns the full neuron corresponding to the neuron id or subaccount.
+#[export_name = "canister_query get_full_neuron_by_id_or_subaccount"]
+fn get_full_neuron_by_id_or_subaccount() {
+    println!("{}get_full_neuron_by_id_or_subaccount", LOG_PREFIX);
+    over(candid_one, get_full_neuron_by_id_or_subaccount_)
+}
+
+#[candid_method(query, rename = "get_full_neuron_by_id_or_subaccount")]
+fn get_full_neuron_by_id_or_subaccount_(
+    by: NeuronIdOrSubaccount,
+) -> Result<Neuron, GovernanceError> {
+    governance().get_full_neuron_by_id_or_subaccount(&by, &caller())
+}
+
 /// Returns the full neuron corresponding to the neuron id.
 #[export_name = "canister_query get_full_neuron"]
 fn get_full_neuron() {
@@ -552,6 +572,20 @@ fn get_neuron_info() {
 #[candid_method(query, rename = "get_neuron_info")]
 fn get_neuron_info_(neuron_id: NeuronId) -> Result<NeuronInfo, GovernanceError> {
     governance().get_neuron_info(&NeuronIdProto::from(neuron_id))
+}
+
+/// Returns the public neuron info corresponding to the neuron id or subaccount.
+#[export_name = "canister_query get_neuron_info_by_id_or_subaccount"]
+fn get_neuron_info_by_id_or_subaccount() {
+    println!("{}get_neuron_info_by_subaccount", LOG_PREFIX);
+    over(candid_one, get_neuron_info_by_id_or_subaccount_)
+}
+
+#[candid_method(query, rename = "get_neuron_info_by_id_or_subaccount")]
+fn get_neuron_info_by_id_or_subaccount_(
+    by: NeuronIdOrSubaccount,
+) -> Result<NeuronInfo, GovernanceError> {
+    governance().get_neuron_info_by_id_or_subaccount(&by)
 }
 
 #[export_name = "canister_query get_proposal_info"]
@@ -598,6 +632,19 @@ fn list_neurons() {
 #[candid_method(query, rename = "list_neurons")]
 fn list_neurons_(req: ListNeurons) -> ListNeuronsResponse {
     governance().list_neurons_by_principal(&req, &caller())
+}
+
+#[export_name = "canister_update get_monthly_node_provider_rewards"]
+fn get_monthly_node_provider_rewards() {
+    println!("{}get_monthly_node_provider_rewards", LOG_PREFIX);
+    over_async(candid, |()| async move {
+        get_monthly_node_provider_rewards_().await
+    })
+}
+
+#[candid_method(update, rename = "get_monthly_node_provider_rewards")]
+async fn get_monthly_node_provider_rewards_() -> Result<RewardNodeProviders, GovernanceError> {
+    governance().get_monthly_node_provider_rewards().await
 }
 
 /// DEPRECATED: Always panics. Use manage_neuron instead.
@@ -691,6 +738,17 @@ fn list_proposals_pb() {
 fn list_neurons_pb() {
     println!("{}list_neurons_pb", LOG_PREFIX);
     over(protobuf, list_neurons_)
+}
+
+#[export_name = "canister_update update_node_provider"]
+fn update_node_provider() {
+    println!("{}update_node_provider", LOG_PREFIX);
+    over(candid_one, update_node_provider_)
+}
+
+#[candid_method(query, rename = "update_node_provider")]
+fn update_node_provider_(req: UpdateNodeProvider) -> Result<(), GovernanceError> {
+    governance_mut().update_node_provider(&caller(), req)
 }
 
 /// Encodes
@@ -805,6 +863,16 @@ fn encode_metrics(w: &mut metrics_encoder::MetricsEncoder<Vec<u8>>) -> std::io::
         )?;
 
         w.encode_histogram(
+            "governance_dissolving_neurons_count",
+            metrics
+                .dissolving_neurons_count_buckets
+                .iter()
+                .map(|(k, v)| (*k as f64, *v as f64)),
+            metrics.dissolving_neurons_count as f64,
+            "Total number of dissolving neurons, grouped by dissolve delay (in years)",
+        )?;
+
+        w.encode_histogram(
             "governance_not_dissolving_neurons_e8s",
             metrics
                 .not_dissolving_neurons_e8s_buckets
@@ -812,6 +880,34 @@ fn encode_metrics(w: &mut metrics_encoder::MetricsEncoder<Vec<u8>>) -> std::io::
                 .map(|(k, v)| (*k as f64, *v)),
             metrics.not_dissolving_neurons_count as f64,
             "Total e8s held in not dissolving neurons, grouped by dissolve delay (in years)",
+        )?;
+
+        w.encode_histogram(
+            "governance_not_dissolving_neurons_count",
+            metrics
+                .not_dissolving_neurons_count_buckets
+                .iter()
+                .map(|(k, v)| (*k as f64, *v as f64)),
+            metrics.not_dissolving_neurons_count as f64,
+            "Total number of not dissolving neurons, grouped by dissolve delay (in years)",
+        )?;
+
+        w.encode_gauge(
+            "governance_neurons_with_less_than_6_months_dissolve_delay_count",
+            metrics.neurons_with_less_than_6_months_dissolve_delay_count as f64,
+            "Total number of neurons having a dissolve delay less than 6 months.",
+        )?;
+
+        w.encode_gauge(
+            "governance_neurons_with_less_than_6_months_dissolve_delay_e8s",
+            metrics.neurons_with_less_than_6_months_dissolve_delay_e8s as f64,
+            "Total e8s held in neurons that have a dissolve delay less than 6 months.",
+        )?;
+
+        w.encode_gauge(
+            "governance_community_fund_total_staked_e8s",
+            metrics.community_fund_total_staked_e8s as f64,
+            "The amount of Neurons' stake committed to the Internet Computer's community fund",
         )?;
     }
 

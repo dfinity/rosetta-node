@@ -21,7 +21,7 @@ import_mod!(
 
 pub mod log_entry {
     pub mod v1 {
-        include!(std::concat!("../gen/log/log.log_entry.v1.rs"));
+        include!("../gen/log/log.log_entry.v1.rs");
 
         impl slog::Value for LogEntry {
             fn serialize(
@@ -30,7 +30,7 @@ pub mod log_entry {
                 key: slog::Key,
                 serializer: &mut dyn slog::Serializer,
             ) -> slog::Result {
-                serializer.emit_serde(&key, self)
+                serializer.emit_serde(key, self)
             }
         }
 

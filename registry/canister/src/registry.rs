@@ -12,9 +12,11 @@ use crate::{
         registry_stable_storage::Version as ReprVersion, ChangelogEntry, RegistryStableStorage,
     },
 };
+use ic_certified_map::RbTree;
 use prost::Message;
 use std::cmp::max;
 use std::collections::{BTreeMap, VecDeque};
+use std::fmt;
 
 #[cfg(target_arch = "wasm32")]
 use dfn_core::println;
@@ -25,6 +27,38 @@ use dfn_core::println;
 /// so that we're able to call pop_front().
 pub type RegistryMap = BTreeMap<Vec<u8>, VecDeque<RegistryValue>>;
 pub type Version = u64;
+#[derive(PartialEq, Eq, PartialOrd, Ord, Copy, Clone, Default)]
+pub struct EncodedVersion([u8; 8]);
+
+impl EncodedVersion {
+    pub const fn as_version(&self) -> Version {
+        Version::from_be_bytes(self.0)
+    }
+}
+
+impl fmt::Debug for EncodedVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_version())
+    }
+}
+
+impl From<Version> for EncodedVersion {
+    fn from(v: Version) -> Self {
+        Self(v.to_be_bytes())
+    }
+}
+
+impl From<EncodedVersion> for Version {
+    fn from(v: EncodedVersion) -> Self {
+        v.as_version()
+    }
+}
+
+impl AsRef<[u8]> for EncodedVersion {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
 
 /// The main struct for the Registry.
 ///
@@ -50,7 +84,7 @@ pub struct Registry {
     /// Each entry contains a blob which is a serialized
     /// RegistryAtomicMutateRequest.  We keep the serialized version around to
     /// make sure that hash trees stay the same even if protobuf schema evolves.
-    changelog: Vec<(Version, Vec<u8>)>,
+    changelog: RbTree<EncodedVersion, Vec<u8>>,
 }
 
 impl Registry {
@@ -104,6 +138,23 @@ impl Registry {
             return None;
         }
         Some(value)
+    }
+
+    /// Computes the number of deltas with version greater than `since_version`
+    /// that fit into the specified byte limit.
+    ///
+    /// This function is used to determine the number of deltas to include into
+    /// a response to avoid the going beyond the max response size limit.
+    pub fn count_fitting_deltas(&self, since_version: Version, max_bytes: usize) -> usize {
+        self.changelog()
+            .iter()
+            .skip(since_version as usize)
+            .scan(0, |size, (key, value)| {
+                *size += value.len() + key.as_ref().len();
+                Some(*size)
+            })
+            .take_while(|size| *size < max_bytes)
+            .count()
     }
 
     /// Returns the last RegistryValue, if any, for the given key.
@@ -161,7 +212,7 @@ impl Registry {
         };
         let bytes = pb_encode(&req);
 
-        self.changelog.push((version, bytes));
+        self.changelog.insert(version.into(), bytes);
 
         for mutation in req.mutations {
             (*self.store.entry(mutation.key).or_default()).push_back(RegistryValue {
@@ -196,7 +247,7 @@ impl Registry {
             .map(|m| {
                 let key = &m.key;
                 let latest = self
-                    .get_last(&key)
+                    .get_last(key)
                     .filter(|registry_value| !registry_value.deletion_marker);
                 match (Type::from_i32(m.mutation_type), latest) {
                     (None, _) => Err(Error::MalformedMessage(format!(
@@ -252,8 +303,8 @@ impl Registry {
                 changelog: self
                     .changelog
                     .iter()
-                    .map(|(version, bytes)| ChangelogEntry {
-                        version: *version,
+                    .map(|(encoded_version, bytes)| ChangelogEntry {
+                        version: encoded_version.as_version(),
                         encoded_mutation: bytes.clone(),
                     })
                     .collect(),
@@ -277,8 +328,8 @@ impl Registry {
         self.serializable_form_at(ReprVersion::Version1)
     }
 
-    pub fn changelog(&self) -> &[(Version, Vec<u8>)] {
-        &self.changelog[..]
+    pub fn changelog(&self) -> &RbTree<EncodedVersion, Vec<u8>> {
+        &self.changelog
     }
 
     /// Sets the content of the registry from its serialized representation.
@@ -306,13 +357,33 @@ impl Registry {
 
         match repr_version {
             ReprVersion::Version1 => {
+                let mut current_version = 0;
                 for entry in stable_repr.changelog {
+                    // Code to fix ICSUP-2589.
+                    // This fills in missing versions with empty entries so that clients see an
+                    // unbroken sequence.
+                    // If the current version is different from the previous version + 1, we
+                    // need to add empty records to fill out the missing versions, to keep
+                    // the invariants that are present in the
+                    // client side.
+                    for i in current_version + 1..entry.version {
+                        let mutations = vec![RegistryMutation {
+                            mutation_type: Type::Upsert as i32,
+                            key: "_".into(),
+                            value: "".into(),
+                        }];
+                        self.apply_mutations_as_version(mutations, i);
+                        self.version = i;
+                    }
+                    // End code to fix ICSUP-2589
+
                     let req = RegistryAtomicMutateRequest::decode(&entry.encoded_mutation[..])
                         .unwrap_or_else(|err| {
                             panic!("Failed to decode mutation@{}: {}", entry.version, err)
                         });
                     self.apply_mutations_as_version(req.mutations, entry.version);
                     self.version = entry.version;
+                    current_version = self.version;
                 }
             }
             ReprVersion::Unspecified => {
@@ -350,7 +421,7 @@ impl Registry {
                     .into_iter()
                     .map(|(v, mutations)| {
                         (
-                            v,
+                            EncodedVersion::from(v),
                             pb_encode(&RegistryAtomicMutateRequest {
                                 mutations,
                                 preconditions: vec![],
@@ -526,7 +597,7 @@ mod tests {
         assert_eq!(key2_values.len(), 2);
         assert_eq!(key1_values[0].value, value1);
         assert_eq!(key1_values[0].version, 4);
-        assert_eq!(key1_values[1].deletion_marker, true);
+        assert!(key1_values[1].deletion_marker);
         assert_eq!(key1_values[1].version, 3);
 
         assert_eq!(deltas, registry.get_changes_since(0, Some(4)));
@@ -540,7 +611,7 @@ mod tests {
         let key2_values = &deltas.get(1).unwrap().values;
         assert_eq!(key1_values.len(), 2);
         assert_eq!(key2_values.len(), 2);
-        assert_eq!(key1_values[0].deletion_marker, true);
+        assert!(key1_values[0].deletion_marker);
         assert_eq!(key1_values[0].version, 3);
         assert_eq!(key1_values[1].value, value2);
         assert_eq!(key1_values[1].version, 2);
@@ -627,6 +698,37 @@ mod tests {
         );
 
         serialize_then_deserialize(registry);
+    }
+
+    #[test]
+    fn test_count_fitting_deltas() {
+        let mut registry = Registry::new();
+
+        let mutation1 = upsert(&[90; 50], &[1; 50]);
+        let mutation2 = upsert(&[90; 100], &[1; 100]);
+        let mutation3 = upsert(&[89; 200], &[1; 200]);
+
+        for mutation in [&mutation1, &mutation2, &mutation3] {
+            assert_empty!(apply_mutations_skip_invariant_checks(
+                &mut registry,
+                vec![mutation.clone()]
+            ));
+        }
+
+        assert_eq!(registry.count_fitting_deltas(0, 100), 0);
+        assert_eq!(registry.count_fitting_deltas(0, 150), 1);
+        assert_eq!(registry.count_fitting_deltas(0, 400), 2);
+        assert_eq!(registry.count_fitting_deltas(0, 2000000), 3);
+
+        assert_eq!(registry.count_fitting_deltas(1, 150), 0);
+        assert_eq!(registry.count_fitting_deltas(1, 400), 1);
+        assert_eq!(registry.count_fitting_deltas(1, 2000000), 2);
+
+        assert_eq!(registry.count_fitting_deltas(2, 300), 0);
+        assert_eq!(registry.count_fitting_deltas(2, 1000), 1);
+
+        assert_eq!(registry.count_fitting_deltas(3, 2000000), 0);
+        assert_eq!(registry.count_fitting_deltas(4, 2000000), 0);
     }
 
     #[test]
@@ -793,6 +895,38 @@ mod tests {
     fn test_serialize_deserialize_with_random_content_1000_keys() {
         let registry = initialize_random_registry(3, 1000, 13.0, 1500);
         serialize_then_deserialize(registry)
+    }
+
+    #[test]
+    fn test_icsup_2589() {
+        use rand_core::RngCore;
+
+        let mut rng = rand::rngs::SmallRng::from_entropy();
+        let registry = initialize_random_registry(3, 1000, 13.0, 150);
+
+        let mut serializable_form = registry.serializable_form_at(ReprVersion::Version1);
+        // Remove half of the entries, but retain the first and the last entry.
+        let initial_len = registry.changelog().iter().count();
+        serializable_form.changelog.retain(|entry| {
+            entry.version == 1 || rng.next_u32() % 2 == 0 || entry.version == initial_len as u64
+        });
+        let len_after_random_trim = serializable_form.changelog.len();
+        assert!(len_after_random_trim < initial_len);
+
+        let mut serialized_v1 = Vec::new();
+        serializable_form
+            .encode(&mut serialized_v1)
+            .expect("Error encoding registry");
+
+        let restore_from_v1 = RegistryStableStorage::decode(serialized_v1.as_slice())
+            .expect("Error decoding registry");
+
+        assert_eq!(restore_from_v1.changelog.len(), len_after_random_trim);
+        let mut restored = Registry::new();
+
+        // The restore should add the missing versions.
+        restored.from_serializable_form(restore_from_v1);
+        assert_eq!(restored.changelog().iter().count(), initial_len);
     }
 
     #[allow(unused_must_use)] // Required because insertion errors are ignored.

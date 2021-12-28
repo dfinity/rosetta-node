@@ -1,7 +1,7 @@
 //! An agent to talk to the Internet Computer through the public endpoints.
 use crate::{
     cbor::{parse_canister_query_response, parse_read_state_response, RequestStatus},
-    http_client::HttpClient,
+    http_client::{HttpClient, HttpClientConfig},
 };
 use backoff::backoff::Backoff;
 use ed25519_dalek::{Keypair, Signer, KEYPAIR_LENGTH};
@@ -12,8 +12,8 @@ use ic_protobuf::types::v1 as pb;
 use ic_types::{
     consensus::catchup::CatchUpPackageParam,
     messages::{
-        Blob, HttpReadContent, HttpRequestEnvelope, HttpStatusResponse, HttpSubmitContent,
-        MessageId, ReplicaHealthStatus,
+        Blob, HttpQueryContent, HttpReadStateContent, HttpRequestEnvelope, HttpStatusResponse,
+        HttpSubmitContent, MessageId, ReplicaHealthStatus,
     },
     CanisterId, PrincipalId,
 };
@@ -52,8 +52,8 @@ pub fn update_path(cid: CanisterId) -> String {
     format!("api/v2/canister/{}/call", cid)
 }
 
-const NODE_STATUS_PATH: &str = &"api/v2/status";
-const CATCH_UP_PACKAGE_PATH: &str = &"/_/catch_up_package";
+const NODE_STATUS_PATH: &str = "api/v2/status";
+const CATCH_UP_PACKAGE_PATH: &str = "/_/catch_up_package";
 
 /// A version of Keypair with a clone instance.
 /// Originally this was done with a reference, but I'm avoiding them in async
@@ -214,7 +214,7 @@ pub fn get_backoff_policy() -> backoff::ExponentialBackoff {
 #[derive(Clone)]
 pub struct Agent {
     /// Url of the replica to target. This should NOT contain a URL path like
-    /// "/api/v1/submit".
+    /// "/api/v2/canister/_/call".
     pub url: Url,
 
     // How long to wait and poll for ingress requests? This is independent from the expiry time
@@ -251,13 +251,22 @@ impl Agent {
     /// Creates an agent.
     ///
     /// `url`: Url of the replica to target. This should NOT contain a URL path
-    /// like "/api/v1/submit". It should contain a port, if needed.
+    /// like "/api/v2/canister/_/call". It should contain a port, if needed.
     ///
     /// The `sender` identifies the sender on whose behalf the requests are
     /// sent. If the requests are authenticated, the corresponding `pub_key` and
     /// `sender_sig` field are set in the request envelope.
     pub fn new(url: Url, sender: Sender) -> Self {
         let http_client = Arc::new(HttpClient::new());
+        Self::build_agent(url, http_client, sender)
+    }
+
+    pub fn new_with_http_client_config(
+        url: Url,
+        sender: Sender,
+        http_client_config: HttpClientConfig,
+    ) -> Self {
+        let http_client = Arc::new(HttpClient::new_with_config(http_client_config));
         Self::build_agent(url, http_client, sender)
     }
 
@@ -480,7 +489,7 @@ impl Agent {
             .map_err(|source| format!("decoding to HttpStatusResponse failed: {}", source))
     }
 
-    /// Requests the root key of this node by querying /api/v1/status
+    /// Requests the root key of this node by querying /api/v2/status
     pub async fn root_key(&self) -> Result<Option<Blob>, String> {
         let response = self.get_status().await?;
         Ok(response.root_key)
@@ -552,15 +561,36 @@ pub fn sign_submit(
 /// Prerequisite: if `content` contains a `sender` field (this is the case for
 /// queries, but not for request_status), then this 'sender' must be compatible
 /// with the `keypair` argument.
-pub fn sign_read(
-    content: HttpReadContent,
+pub fn sign_read_state(
+    content: HttpReadStateContent,
     sender: &Sender,
-) -> Result<HttpRequestEnvelope<HttpReadContent>, Box<dyn Error>> {
+) -> Result<HttpRequestEnvelope<HttpReadStateContent>, Box<dyn Error>> {
     let message_id = content.id();
     let pub_key_der = sender.sender_pubkey_der().map(Blob);
     let sender_sig = sender.sign_message_id(&message_id)?.map(Blob);
 
-    Ok(HttpRequestEnvelope::<HttpReadContent> {
+    Ok(HttpRequestEnvelope::<HttpReadStateContent> {
+        content,
+        sender_pubkey: pub_key_der,
+        sender_sig,
+        sender_delegation: None,
+    })
+}
+
+/// Wraps the content into an envelope that contains the message signature.
+///
+/// Prerequisite: if `content` contains a `sender` field (this is the case for
+/// queries, but not for request_status), then this 'sender' must be compatible
+/// with the `keypair` argument.
+pub fn sign_query(
+    content: HttpQueryContent,
+    sender: &Sender,
+) -> Result<HttpRequestEnvelope<HttpQueryContent>, Box<dyn Error>> {
+    let message_id = content.id();
+    let pub_key_der = sender.sender_pubkey_der().map(Blob);
+    let sender_sig = sender.sign_message_id(&message_id)?.map(Blob);
+
+    Ok(HttpRequestEnvelope::<HttpQueryContent> {
         content,
         sender_pubkey: pub_key_der,
         sender_sig,
@@ -593,7 +623,7 @@ mod tests {
     use ic_test_utilities::crypto::temp_crypto_component_with_fake_registry;
     use ic_test_utilities::types::ids::node_test_id;
     use ic_types::malicious_flags::MaliciousFlags;
-    use ic_types::messages::{HttpCanisterUpdate, HttpRequest, HttpUserQuery, ReadContent};
+    use ic_types::messages::{HttpCanisterUpdate, HttpRequest, HttpUserQuery, UserQuery};
     use ic_types::time::current_time;
     use ic_types::{PrincipalId, RegistryVersion, UserId};
     use ic_validator::get_authorized_canisters;
@@ -766,7 +796,7 @@ mod tests {
         let sender = UserId::from(PrincipalId::new_self_authenticating(
             &ed25519_public_key_to_der(keypair.public.to_bytes().to_vec()),
         ));
-        let content = HttpReadContent::Query {
+        let content = HttpQueryContent::Query {
             query: HttpUserQuery {
                 canister_id: Blob(vec![67, 3]),
                 method_name: "foo".to_string(),
@@ -776,19 +806,19 @@ mod tests {
                 ingress_expiry: expiry_time.as_nanos_since_unix_epoch(),
             },
         };
-        // Workaround because HttpReadContent is not cloneable
-        let content_copy = serde_cbor::value::from_value::<HttpReadContent>(
+        // Workaround because HttpQueryContent is not cloneable
+        let content_copy = serde_cbor::value::from_value::<HttpQueryContent>(
             serde_cbor::value::to_value(&content).unwrap(),
         )
         .unwrap();
 
-        let read = sign_read(content, &Sender::from_keypair(&keypair)).unwrap();
+        let read = sign_query(content, &Sender::from_keypair(&keypair)).unwrap();
 
         // The wrapped content is content, without modification
         assert_eq!(read.content, content_copy);
 
         // The signature matches
-        let read_request = HttpRequest::<ReadContent>::try_from(read).unwrap();
+        let read_request = HttpRequest::<UserQuery>::try_from(read).unwrap();
         let validator = temp_crypto_component_with_fake_registry(node_test_id(VALIDATOR_NODE_ID));
         assert_ok!(get_authorized_canisters(
             &read_request,
@@ -818,7 +848,7 @@ mod tests {
             )
             .expect("DER encoding failed"),
         ));
-        let content = HttpReadContent::Query {
+        let content = HttpQueryContent::Query {
             query: HttpUserQuery {
                 canister_id: Blob(vec![67, 3]),
                 method_name: "foo".to_string(),
@@ -828,20 +858,20 @@ mod tests {
                 ingress_expiry: expiry_time.as_nanos_since_unix_epoch(),
             },
         };
-        // Workaround because HttpReadContent is not cloneable
-        let content_copy = serde_cbor::value::from_value::<HttpReadContent>(
+        // Workaround because HttpQueryContent is not cloneable
+        let content_copy = serde_cbor::value::from_value::<HttpQueryContent>(
             serde_cbor::value::to_value(&content).unwrap(),
         )
         .unwrap();
 
         let sender = Sender::from_secp256k1_keys(&sk, &pk);
-        let read = sign_read(content, &sender).unwrap();
+        let read = sign_query(content, &sender).unwrap();
 
         // The wrapped content is content, without modification
         assert_eq!(read.content, content_copy);
 
         // The signature matches
-        let read_request = HttpRequest::<ReadContent>::try_from(read).unwrap();
+        let read_request = HttpRequest::<UserQuery>::try_from(read).unwrap();
         let validator = temp_crypto_component_with_fake_registry(node_test_id(VALIDATOR_NODE_ID));
         assert_ok!(get_authorized_canisters(
             &read_request,

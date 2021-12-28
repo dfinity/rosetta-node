@@ -7,7 +7,7 @@ use ic_rosetta_api::ledger_client::LedgerAccess;
 use ic_rosetta_api::transaction_id::TransactionIdentifier;
 use ic_rosetta_api::{RosettaRequestHandler, API_VERSION, NODE_VERSION};
 
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::Arc;
 
 #[actix_rt::test]
@@ -54,7 +54,7 @@ async fn smoke_test() {
     assert_eq!(
         res,
         Ok(NetworkStatusResponse::new(
-            block_id(&scribe.blockchain.back().unwrap()).unwrap(),
+            block_id(scribe.blockchain.back().unwrap()).unwrap(),
             timestamp(
                 scribe
                     .blockchain
@@ -67,7 +67,7 @@ async fn smoke_test() {
                     .into()
             )
             .unwrap(),
-            block_id(&scribe.blockchain.front().unwrap()).unwrap(),
+            block_id(scribe.blockchain.front().unwrap()).unwrap(),
             None,
             SyncStatus {
                 current_index: scribe.blockchain.back().unwrap().index as i64,
@@ -112,7 +112,7 @@ async fn smoke_test() {
     let res = req_handler.network_status(msg).await;
     assert_eq!(
         res.unwrap().oldest_block_identifier,
-        Some(block_id(&scribe.blockchain.get(expected_first_block).unwrap()).unwrap())
+        Some(block_id(scribe.blockchain.get(expected_first_block).unwrap()).unwrap())
     );
 
     let msg = MetadataRequest::new();
@@ -169,8 +169,12 @@ async fn smoke_test() {
     assert_eq!(
         res,
         Ok(AccountBalanceResponse::new(
-            block_id(&scribe.blockchain.back().unwrap()).unwrap(),
-            vec![amount_(*scribe.balance_book.get(&acc_id(0)).unwrap()).unwrap()]
+            block_id(scribe.blockchain.back().unwrap()).unwrap(),
+            vec![amount_(
+                *scribe.balance_book.get(&acc_id(0)).unwrap(),
+                DEFAULT_TOKEN_NAME
+            )
+            .unwrap()]
         ))
     );
 
@@ -411,13 +415,13 @@ fn verify_balances(scribe: &Scribe, blocks: &Blocks, start_idx: usize) {
             assert_eq!(blocks.get_balance(account, hb.index).unwrap(), *amount);
         }
     }
-    let mut sum_icpt = ICPTs::ZERO;
+    let mut sum_icpt = Tokens::ZERO;
     for amount in scribe.balance_history.back().unwrap().values() {
         sum_icpt += *amount;
     }
     assert_eq!(
-        (ICPTs::MAX - sum_icpt).unwrap(),
-        blocks.balance_book.icpt_pool
+        (Tokens::MAX - sum_icpt).unwrap(),
+        blocks.balance_book.token_pool
     );
 }
 
@@ -447,14 +451,14 @@ async fn verify_account_search(
 ) {
     let mut history = BTreeMap::new();
     for hb in &scribe.blockchain {
-        match hb.block.decode().unwrap().transaction.transfer {
-            ledger_canister::Transfer::Burn { from, .. } => {
+        match hb.block.decode().unwrap().transaction.operation {
+            ledger_canister::Operation::Burn { from, .. } => {
                 history.entry(from).or_insert_with(Vec::new).push(hb.index);
             }
-            ledger_canister::Transfer::Mint { to, .. } => {
+            ledger_canister::Operation::Mint { to, .. } => {
                 history.entry(to).or_insert_with(Vec::new).push(hb.index);
             }
-            ledger_canister::Transfer::Send { from, to, .. } => {
+            ledger_canister::Operation::Transfer { from, to, .. } => {
                 history.entry(from).or_insert_with(Vec::new).push(hb.index);
                 if from != to {
                     history.entry(to).or_insert_with(Vec::new).push(hb.index);
@@ -554,47 +558,27 @@ async fn verify_account_search(
 }
 
 #[actix_rt::test]
-async fn load_from_store_test_on_disk_store() {
-    init_test_logger();
-    let tmpdir = create_tmp_dir();
-    load_from_store_test(false, tmpdir.path().into()).await;
-}
-
-#[actix_rt::test]
 async fn load_from_store_test_sqlite_store() {
     init_test_logger();
     let tmpdir = create_tmp_dir();
-    load_from_store_test(true, tmpdir.path().into()).await;
-}
-
-#[actix_rt::test]
-async fn load_unverified_test_on_disk_store() {
-    init_test_logger();
-    let tmpdir = create_tmp_dir();
-    load_unverified_test(false, tmpdir.path().into()).await;
+    load_from_store_test(tmpdir.path()).await;
 }
 
 #[actix_rt::test]
 async fn load_unverified_test_sqlite_store() {
     init_test_logger();
     let tmpdir = create_tmp_dir();
-    load_unverified_test(true, tmpdir.path().into()).await;
+    load_unverified_test(tmpdir.path()).await;
 }
 
-fn create_blocks(sqlite: bool, location: PathBuf) -> Blocks {
-    if sqlite {
-        Blocks::new(Box::new(super::store_tests::sqlite_on_disk_store(
-            location.as_path(),
-        )))
-    } else {
-        Blocks::new_on_disk(location, true).unwrap()
-    }
+fn create_blocks(location: &Path) -> Blocks {
+    Blocks::new(super::store_tests::sqlite_on_disk_store(location))
 }
 
-async fn load_from_store_test(sqlite: bool, location: PathBuf) {
+async fn load_from_store_test(location: &Path) {
     let scribe = Scribe::new_with_sample_data(10, 150);
 
-    let mut blocks = create_blocks(sqlite, location.clone());
+    let mut blocks = create_blocks(location);
     let mut last_verified = 0;
     for hb in &scribe.blockchain {
         blocks.add_block(hb.clone()).unwrap();
@@ -617,7 +601,7 @@ async fn load_from_store_test(sqlite: bool, location: PathBuf) {
 
     drop(req_handler);
 
-    let mut blocks = create_blocks(sqlite, location.clone());
+    let mut blocks = create_blocks(location);
     blocks.load_from_store().unwrap();
 
     assert!(blocks.get_verified_at(10).is_ok());
@@ -634,7 +618,7 @@ async fn load_from_store_test(sqlite: bool, location: PathBuf) {
 
     drop(blocks);
 
-    let mut blocks = create_blocks(sqlite, location.clone());
+    let mut blocks = create_blocks(location);
     blocks.load_from_store().unwrap();
 
     verify_balances(&scribe, &blocks, 0);
@@ -655,7 +639,7 @@ async fn load_from_store_test(sqlite: bool, location: PathBuf) {
 
     drop(req_handler);
 
-    let mut blocks = create_blocks(sqlite, location.clone());
+    let mut blocks = create_blocks(location);
     blocks.load_from_store().unwrap();
 
     verify_balances(&scribe, &blocks, 10);
@@ -684,10 +668,10 @@ async fn load_from_store_test(sqlite: bool, location: PathBuf) {
 }
 
 // remove this test if it's in the way of a new spec
-async fn load_unverified_test(sqlite: bool, location: PathBuf) {
+async fn load_unverified_test(location: &Path) {
     let scribe = Scribe::new_with_sample_data(10, 150);
 
-    let mut blocks = create_blocks(sqlite, location.clone());
+    let mut blocks = create_blocks(location);
     for hb in &scribe.blockchain {
         blocks.add_block(hb.clone()).unwrap();
         if hb.index < 20 {
@@ -704,7 +688,7 @@ async fn load_unverified_test(sqlite: bool, location: PathBuf) {
 
     drop(blocks);
 
-    let mut blocks = create_blocks(sqlite, location.clone());
+    let mut blocks = create_blocks(location);
     blocks.load_from_store().unwrap();
     let last_verified = (scribe.blockchain.len() - 1) as u64;
     blocks
@@ -723,23 +707,16 @@ async fn load_unverified_test(sqlite: bool, location: PathBuf) {
 }
 
 #[actix_rt::test]
-async fn store_batch_test_on_disk_store() {
-    init_test_logger();
-    let tmpdir = create_tmp_dir();
-    store_batch_test(false, tmpdir.path().into()).await;
-}
-
-#[actix_rt::test]
 async fn store_batch_test_sqlite_store() {
     init_test_logger();
     let tmpdir = create_tmp_dir();
-    store_batch_test(true, tmpdir.path().into()).await;
+    store_batch_test(tmpdir.path()).await;
 }
 
-async fn store_batch_test(sqlite: bool, location: PathBuf) {
+async fn store_batch_test(location: &Path) {
     let scribe = Scribe::new_with_sample_data(10, 150);
 
-    let mut blocks = create_blocks(sqlite, location);
+    let mut blocks = create_blocks(location);
     for hb in &scribe.blockchain {
         if hb.index < 21 {
             blocks.add_block(hb.clone()).unwrap();

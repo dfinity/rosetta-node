@@ -9,13 +9,16 @@ use ic_crypto_tls_interfaces::TlsStream;
 use openssl::ssl::ConnectConfiguration;
 use rand::{CryptoRng, Rng};
 use std::pin::Pin;
+use std::sync::Arc;
 use tokio::net::TcpStream;
 
 #[cfg(test)]
 mod tests;
 
 #[async_trait]
-impl<R: Rng + CryptoRng + Send + Sync, S: SecretKeyStore> CspTlsClientHandshake for Csp<R, S> {
+impl<R: Rng + CryptoRng + Send + Sync, S: SecretKeyStore, C: SecretKeyStore> CspTlsClientHandshake
+    for Csp<R, S, C>
+{
     async fn perform_tls_client_handshake(
         &self,
         tcp_stream: TcpStream,
@@ -26,7 +29,12 @@ impl<R: Rng + CryptoRng + Send + Sync, S: SecretKeyStore> CspTlsClientHandshake 
 
         let mut tls_stream = unconnected_tls_stream(
             tls_connector,
-            "domain is irrelevant, because hostname verification is disabled",
+            // Even though the domain is irrelevant here because hostname verification is disabled,
+            // it is important that the domain is well-formed because some TLS
+            // implementations (e.g., Rustls) abort the handshake if parsing of the
+            // domain fails (e.g., for SNI when sent to the server)
+            // "www.domain-is-irrelevant-because-hostname-verification-is-disabled.com",
+            "www.domain-is-irrelevant-because-hostname-verification-is-disabled.com",
             tcp_stream,
         )?;
         Pin::new(&mut tls_stream).connect().await.map_err(|e| {
@@ -45,7 +53,7 @@ impl<R: Rng + CryptoRng + Send + Sync, S: SecretKeyStore> CspTlsClientHandshake 
     }
 }
 
-impl<R: Rng + CryptoRng + Send + Sync, S: SecretKeyStore> Csp<R, S> {
+impl<R: Rng + CryptoRng + Send + Sync, S: SecretKeyStore, C: SecretKeyStore> Csp<R, S, C> {
     /// Creates a Connector for TLS. This allows to set up a TLS connection as a
     /// client. The `self_cert` is used as client certificate for mutual SSL and
     /// the corresponding private key must be in the secret key store. The
@@ -57,9 +65,9 @@ impl<R: Rng + CryptoRng + Send + Sync, S: SecretKeyStore> Csp<R, S> {
         trusted_server_cert: TlsPublicKeyCert,
     ) -> Result<ConnectConfiguration, CspTlsClientHandshakeError> {
         Ok(ic_crypto_internal_tls::tls_connector(
-            &key_from_secret_key_store(&*self.sks_read_lock(), &self_cert)?,
-            &self_cert.as_x509(),
-            &trusted_server_cert.as_x509(),
+            &key_from_secret_key_store(Arc::clone(&self.csp_vault), &self_cert)?,
+            self_cert.as_x509(),
+            trusted_server_cert.as_x509(),
         )?)
     }
 }

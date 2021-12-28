@@ -62,11 +62,13 @@ impl TransactionIdentifier {
 
                 Ok(TransactionIdentifier::from(&hash))
             }
-            RequestType::Stake
-            | RequestType::StartDissolve
-            | RequestType::StopDissolve
-            | RequestType::SetDissolveTimestamp
-            | RequestType::AddHotKey => {
+            RequestType::Stake { .. }
+            | RequestType::StartDissolve { .. }
+            | RequestType::StopDissolve { .. }
+            | RequestType::SetDissolveTimestamp { .. }
+            | RequestType::Disburse { .. }
+            | RequestType::AddHotKey { .. }
+            | RequestType::Spawn { .. } => {
                 // Unfortunately, staking operations don't really have a transaction ID
                 Ok(TransactionIdentifier {
                     hash: NEURON_MANAGEMEN_PSEUDO_HASH.to_string(),

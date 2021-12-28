@@ -135,7 +135,7 @@ mod tls_public_key_cert {
                                                 132,246,29,138,88,176,85,61,44,203,176,75,254,16,190,108,172,193,8,74,214,117,167,201,77,168,140,\
                                                 119,30,252,78,182,191,48,97,230,28,5]}";
 
-        let result: Result<TlsPublicKeyCert, json5::Error> = json5::from_str(&serialized);
+        let result: Result<TlsPublicKeyCert, json5::Error> = json5::from_str(serialized);
 
         assert!(result.is_ok());
 
@@ -149,7 +149,7 @@ mod tls_public_key_cert {
     fn should_fail_to_deserialize_malformed_der() {
         let bad_serialized = "{\"certificate_der\":[31,41,59,26]}";
 
-        let error: Result<TlsPublicKeyCert, json5::Error> = json5::from_str(&bad_serialized);
+        let error: Result<TlsPublicKeyCert, json5::Error> = json5::from_str(bad_serialized);
 
         assert!(matches!(error, Err(json5::Error::Message(error_string))
             if error_string.contains("TlsPublicKeyCertCreationError")
@@ -245,6 +245,23 @@ mod allowed_clients {
     }
 
     #[test]
+    fn should_contain_any_node_in_all_nodes() {
+        let all_nodes = SomeOrAllNodes::All;
+
+        assert!(all_nodes.contains(node_id(1)));
+        assert!(all_nodes.contains(node_id(7)));
+    }
+
+    #[test]
+    fn should_contain_correct_nodes_in_some_nodes() {
+        let some_nodes = SomeOrAllNodes::Some(btreeset! {node_id(1), node_id(2)});
+
+        assert!(some_nodes.contains(node_id(1)));
+        assert!(some_nodes.contains(node_id(2)));
+        assert!(!some_nodes.contains(node_id(3)));
+    }
+
+    #[test]
     fn should_fail_on_new_if_nodes_and_certs_empty() {
         let allowed_clients =
             AllowedClients::new(SomeOrAllNodes::Some(BTreeSet::new()), HashSet::new());
@@ -261,6 +278,14 @@ mod allowed_clients {
             allowed_clients.unwrap_err(),
             AllowedClientsError::ClientsEmpty {}
         );
+    }
+
+    #[test]
+    fn should_contain_correct_node_in_some_nodes_new_with_single_node() {
+        let nodes = SomeOrAllNodes::new_with_single_node(node_id(1));
+        assert!(matches!(nodes, SomeOrAllNodes::Some (node_set)
+            if node_set.len() == 1 && node_set.contains(&node_id(1))
+        ));
     }
 
     fn node_id(id: u64) -> NodeId {

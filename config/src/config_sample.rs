@@ -224,12 +224,12 @@ pub const SAMPLE_CONFIG: &str = r#"
         //
         // The default for this value is `false` and thus matches the previously expected behavior in
         // production use cases.
-        block_on_overflow: false,
+        block_on_overflow: true,
     },
     // ===================================
-    // Configuration of the logging setup for the nodemanager.
+    // Configuration of the logging setup for the orchestrator.
     // ===================================
-    nodemanager_logger: {
+    orchestrator_logger: {
         // The node id to append to log lines. [deprecated]
         node_id: 100,
 
@@ -264,7 +264,7 @@ pub const SAMPLE_CONFIG: &str = r#"
         //
         // The default for this value is `false` and thus matches the previously expected behavior in
         // production use cases.
-        block_on_overflow: false,
+        block_on_overflow: true,
     },
     // =================================
     // Configuration of Message Routing.
@@ -345,14 +345,14 @@ mod tests {
 
             if trimmed.starts_with("//") {
                 if let Some(pos) = line.find(EXAMPLE_MARKER) {
-                    last_group.push(&line[pos + EXAMPLE_MARKER.len()..].trim())
+                    last_group.push(line[pos + EXAMPLE_MARKER.len()..].trim())
                 }
             } else if !trimmed.is_empty() || !last_group.is_empty() {
                 if trimmed.starts_with('}') && !last_group.is_empty() {
-                    line_variants.push(std::mem::replace(&mut last_group, Vec::new()));
+                    line_variants.push(std::mem::take(&mut last_group));
                 }
                 last_group.push(line);
-                line_variants.push(std::mem::replace(&mut last_group, Vec::new()));
+                line_variants.push(std::mem::take(&mut last_group));
             }
         }
         if !last_group.is_empty() {

@@ -1,29 +1,56 @@
 //! Defines interactive distributed key generation (IDkg) types.
+use crate::consensus::ecdsa::EcdsaDealing;
+use crate::consensus::get_faults_tolerated;
 use crate::crypto::canister_threshold_sig::error::{
     IDkgComplaintParsingError, IDkgOpeningParsingError, IDkgParamsValidationError,
     IDkgTranscriptParsingError,
 };
 use crate::crypto::{AlgorithmId, CombinedMultiSigOf};
 use crate::{NodeId, NumberOfNodes, RegistryVersion};
-use ic_crypto_internal_types::sign::canister_threshold_sig::{
-    CspIDkgComplaint, CspIDkgDealing, CspIDkgOpening,
-};
+use ic_base_types::SubnetId;
 use ic_crypto_internal_types::NodeIndex;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::TryFrom;
+use std::hash::{Hash, Hasher};
 
-//Note:
-//* We may need an API for consensus to know which transcripts have been loaded.
+pub mod conversions;
+pub use conversions::*;
 
-// It should uniquely identify a transcript.
-// Can be a string decided by Consensus, e.g. by hashing the fields below, or a
-// u64. (CRP-1104)
+#[cfg(test)]
+mod tests;
+
+/// Unique identifier for an IDkg transcript.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash)]
-pub struct IDkgTranscriptId(pub usize);
+pub struct IDkgTranscriptId {
+    id: usize,
+    subnet: SubnetId,
+}
 
-/// A set of receivers for interactive DKG.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+impl IDkgTranscriptId {
+    pub fn new(subnet: SubnetId, id: usize) -> Self {
+        Self { id, subnet }
+    }
+
+    pub fn id(&self) -> usize {
+        self.id
+    }
+
+    pub fn subnet(&self) -> &SubnetId {
+        &self.subnet
+    }
+
+    /// Return the next value of this id.
+    pub fn increment(self) -> Self {
+        Self {
+            id: self.id + 1,
+            subnet: self.subnet,
+        }
+    }
+}
+
+/// A set of receivers for IDkg.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IDkgReceivers {
     receivers: BTreeSet<NodeId>,
 
@@ -40,13 +67,21 @@ impl IDkgReceivers {
     /// * Receivers are not empty (error: `ReceiversEmpty`)
     /// * The number of receivers fits into `NodeIndex` (error`:
     ///   TooManyReceivers`)
+    /// * The number of receivers is large enough to gather sufficient honest
+    ///   multisignature shares (i.e. |self| >= verification_threshold(|self|) +
+    ///   faults_tolerated(|self|)) (error: `UnsatisfiedVerificationThreshold`)
     ///
     /// If an invariant is not satisifed, the `Err` as indicated above is
     /// returned.
     pub fn new(receivers: BTreeSet<NodeId>) -> Result<Self, IDkgParamsValidationError> {
         Self::ensure_receivers_not_empty(&receivers)?;
         let count = Self::number_of_receivers(receivers.len())?;
-        Ok(IDkgReceivers { receivers, count })
+
+        let ret = IDkgReceivers { receivers, count };
+
+        ret.ensure_verification_threshold_satisfied()?;
+
+        Ok(ret)
     }
 
     fn number_of_receivers(
@@ -63,6 +98,22 @@ impl IDkgReceivers {
             return Err(IDkgParamsValidationError::ReceiversEmpty);
         }
         Ok(())
+    }
+
+    fn ensure_verification_threshold_satisfied(&self) -> Result<(), IDkgParamsValidationError> {
+        let faulty = number_of_nodes_from_usize(get_faults_tolerated(self.count().get() as usize))
+            .expect("by construction, this fits in a u32");
+        let threshold = self.verification_threshold() + faulty;
+        if self.count() < threshold {
+            Err(
+                IDkgParamsValidationError::UnsatisfiedVerificationThreshold {
+                    threshold: threshold.get(),
+                    receiver_count: self.count().get(),
+                },
+            )
+        } else {
+            Ok(())
+        }
     }
 
     /// Returns the position of the given `node_id` in the receivers. Returns
@@ -92,9 +143,40 @@ impl IDkgReceivers {
     pub fn count(&self) -> NumberOfNodes {
         self.count
     }
+
+    /// Number of contributions needed to reconstruct a sharing.
+    pub fn reconstruction_threshold(&self) -> NumberOfNodes {
+        let faulty = get_faults_tolerated(self.count().get() as usize);
+        let threshold = faulty + 1;
+        number_of_nodes_from_usize(threshold).expect("by construction, this fits in a u32")
+    }
+
+    /// Number of multi-signature shares needed to include a dealing in a
+    /// transcript.
+    pub fn verification_threshold(&self) -> NumberOfNodes {
+        let faulty = number_of_nodes_from_usize(get_faults_tolerated(self.count().get() as usize))
+            .expect("by construction, this fits in a u32");
+        self.reconstruction_threshold() + faulty
+    }
 }
 
-/// A set of dealers for interactive DKG.
+impl PartialEq for IDkgReceivers {
+    /// Equality is determined by comparison of the set of nodes
+    /// *and* their indices.
+    fn eq(&self, rhs: &Self) -> bool {
+        self.iter().collect::<BTreeMap<_, _>>() == rhs.iter().collect()
+    }
+}
+
+impl Eq for IDkgReceivers {}
+
+impl Hash for IDkgReceivers {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.iter().collect::<BTreeMap<_, _>>().hash(state)
+    }
+}
+
+/// A set of dealers for IDkg.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct IDkgDealers {
     dealers: BTreeSet<NodeId>,
@@ -166,68 +248,245 @@ impl IDkgDealers {
     }
 }
 
+/// Parameters used in the creation of IDkg dealings and transcripts.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct IDkgTranscriptParams {
-    pub transcript_id: IDkgTranscriptId,
-    pub max_corrupt_dealers: NumberOfNodes,
-    pub dealers: IDkgDealers,
-    pub max_corrupt_receivers: NumberOfNodes,
-    pub receivers: IDkgReceivers,
-    pub verification_threshold: NumberOfNodes,
-    pub registry_version: RegistryVersion,
-    pub transcript_type: IDkgTranscriptType,
-    pub algorithm_id: AlgorithmId,
+    transcript_id: IDkgTranscriptId,
+    dealers: IDkgDealers,
+    receivers: IDkgReceivers,
+    registry_version: RegistryVersion,
+    algorithm_id: AlgorithmId,
+    operation_type: IDkgTranscriptOperation,
 }
 
 impl IDkgTranscriptParams {
-    #[allow(clippy::too_many_arguments)]
+    /// Checks the following invariants:
+    /// * |dealers| >= self.collection_threshold + faults_tolerated(|dealers|)
+    ///   (error: `UnsatisfiedCollectionThreshold`)
+    /// * algorithm_id is of type `ThresholdEcdsaSecp256k1` (error:
+    ///   `UnsupportedAlgorithmId`)
+    /// * If `operation_type` is:
+    ///   - ReshareOfMasked(t):
+    ///     - t is of type Masked(_)
+    ///     - self.dealers is contained in t.receivers
+    ///   - ReshareOfUnmasked(t):
+    ///     - t is of type Unmasked(_)
+    ///     - self.dealers is contained in t.receivers
+    ///   - UnmaskedTimesMasked(s,t):
+    ///     - s is of type Unmasked(_)
+    ///     - t is of type Masked(_)
+    ///     - s.receivers == t.receivers
+    ///     - self.dealers is contained in t.receivers (errors:
+    ///       `DealersNotContainedInPreviousReceivers` or
+    /// `WrongTypeForOriginalTranscript`)
     pub fn new(
         transcript_id: IDkgTranscriptId,
-        max_corrupt_dealers: NumberOfNodes,
         dealers: IDkgDealers,
-        max_corrupt_receivers: NumberOfNodes,
         receivers: IDkgReceivers,
-        verification_threshold: NumberOfNodes,
         registry_version: RegistryVersion,
-        transcript_type: IDkgTranscriptType,
         algorithm_id: AlgorithmId,
-    ) -> Self {
-        // TODO. Check that
-        // * |dealers| > max_corrupt_dealers
-        // * |receivers| > max_corrupt_receivers
-        // * threshold>max_corrupt_receivers
-        // * AlgorithmId is supported.
-        Self {
+        operation_type: IDkgTranscriptOperation,
+    ) -> Result<Self, IDkgParamsValidationError> {
+        let ret = Self {
             transcript_id,
-            max_corrupt_dealers,
             dealers,
-            max_corrupt_receivers,
             receivers,
-            verification_threshold,
             registry_version,
-            transcript_type,
             algorithm_id,
+            operation_type,
+        };
+
+        ret.ensure_collection_threshold_satisfied()?;
+        ret.ensure_algorithm_id_supported()?;
+        ret.check_consistency_of_input_transcripts()?;
+
+        Ok(ret)
+    }
+
+    pub fn transcript_id(&self) -> IDkgTranscriptId {
+        self.transcript_id
+    }
+
+    pub fn dealers(&self) -> &IDkgDealers {
+        &self.dealers
+    }
+
+    pub fn receivers(&self) -> &IDkgReceivers {
+        &self.receivers
+    }
+
+    pub fn registry_version(&self) -> RegistryVersion {
+        self.registry_version
+    }
+
+    pub fn algorithm_id(&self) -> AlgorithmId {
+        self.algorithm_id
+    }
+
+    pub fn operation_type(&self) -> &IDkgTranscriptOperation {
+        &self.operation_type
+    }
+
+    /// Number of contributions needed to reconstruct a sharing.
+    pub fn reconstruction_threshold(&self) -> NumberOfNodes {
+        self.receivers.reconstruction_threshold()
+    }
+
+    /// Number of multi-signature shares needed to include a dealing in a
+    /// transcript.
+    pub fn verification_threshold(&self) -> NumberOfNodes {
+        self.receivers.verification_threshold()
+    }
+
+    /// Number of verified dealings needed for a transcript.
+    pub fn collection_threshold(&self) -> NumberOfNodes {
+        match &self.operation_type {
+            IDkgTranscriptOperation::Random => {
+                let faulty = get_faults_tolerated(self.dealers.count().get() as usize);
+                number_of_nodes_from_usize(faulty + 1).expect("by construction, this fits in a u32")
+            }
+            IDkgTranscriptOperation::ReshareOfMasked(t) => t.reconstruction_threshold(),
+            IDkgTranscriptOperation::ReshareOfUnmasked(t) => t.reconstruction_threshold(),
+            IDkgTranscriptOperation::UnmaskedTimesMasked(s, t) => {
+                t.reconstruction_threshold() + s.reconstruction_threshold() - NumberOfNodes::from(1)
+            }
+        }
+    }
+
+    /// Contextual data needed for the creation of a dealing.
+    pub fn context_data(&self) -> Vec<u8> {
+        context_data(
+            &self.transcript_id,
+            self.registry_version,
+            self.algorithm_id,
+        )
+    }
+
+    fn ensure_collection_threshold_satisfied(&self) -> Result<(), IDkgParamsValidationError> {
+        let faulty =
+            number_of_nodes_from_usize(get_faults_tolerated(self.dealers.count().get() as usize))
+                .expect("by construction, this fits in a u32");
+
+        let threshold = faulty + self.collection_threshold();
+
+        if self.dealers.count() < threshold {
+            Err(IDkgParamsValidationError::UnsatisfiedCollectionThreshold {
+                threshold: threshold.get(),
+                dealer_count: self.dealers.count().get(),
+            })
+        } else {
+            Ok(())
+        }
+    }
+
+    fn ensure_algorithm_id_supported(&self) -> Result<(), IDkgParamsValidationError> {
+        match self.algorithm_id {
+            AlgorithmId::ThresholdEcdsaSecp256k1 => Ok(()),
+            _ => Err(IDkgParamsValidationError::UnsupportedAlgorithmId {
+                algorithm_id: self.algorithm_id,
+            }),
+        }
+    }
+
+    fn check_consistency_of_input_transcripts(&self) -> Result<(), IDkgParamsValidationError> {
+        match &self.operation_type {
+            IDkgTranscriptOperation::Random => Ok(()),
+            IDkgTranscriptOperation::ReshareOfMasked(IDkgTranscript {
+                receivers: original_receivers,
+                transcript_type: IDkgTranscriptType::Masked(_),
+                ..
+            }) => {
+                if self.dealers.get().is_subset(original_receivers.get()) {
+                    Ok(())
+                } else {
+                    Err(IDkgParamsValidationError::DealersNotContainedInPreviousReceivers)
+                }
+            }
+            IDkgTranscriptOperation::ReshareOfUnmasked(IDkgTranscript {
+                receivers: original_receivers,
+                transcript_type: IDkgTranscriptType::Unmasked(_),
+                ..
+            }) => {
+                if self.dealers.get().is_subset(original_receivers.get()) {
+                    Ok(())
+                } else {
+                    Err(IDkgParamsValidationError::DealersNotContainedInPreviousReceivers)
+                }
+            }
+            IDkgTranscriptOperation::UnmaskedTimesMasked(
+                IDkgTranscript {
+                    receivers: left_receivers,
+                    transcript_type: IDkgTranscriptType::Unmasked(_),
+                    ..
+                },
+                IDkgTranscript {
+                    receivers: right_receivers,
+                    transcript_type: IDkgTranscriptType::Masked(_),
+                    ..
+                },
+            ) => {
+                if left_receivers == right_receivers
+                    && self.dealers.get().is_subset(right_receivers.get())
+                {
+                    Ok(())
+                } else {
+                    Err(IDkgParamsValidationError::DealersNotContainedInPreviousReceivers)
+                }
+            }
+            _ => Err(IDkgParamsValidationError::WrongTypeForOriginalTranscript),
         }
     }
 }
 
-// Design consideration:
-// We could use either full transcripts or IDkgTranscriptId in the Resharing and
-// Multiplication variants.
+/// Origin identifier of a Masked IDkg transcript.
+///
+/// When the transcript derives from earlier transcripts, these are included
+/// in this enum.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
-pub enum IDkgTranscriptType {
-    RandomSkinny,
-    RandomFat,
-    Resharing(IDkgTranscript),
-    Multiplication(IDkgTranscript, IDkgTranscript),
+pub enum IDkgMaskedTranscriptOrigin {
+    Random,
+    UnmaskedTimesMasked(IDkgTranscriptId, IDkgTranscriptId),
 }
 
+/// Origin identifier of an Unmasked IDkg transcript.
+///
+/// The earlier transcripts used to derive this transcript are included in this
+/// enum.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
+pub enum IDkgUnmaskedTranscriptOrigin {
+    ReshareMasked(IDkgTranscriptId),
+    ReshareUnmasked(IDkgTranscriptId),
+}
+
+/// Type and origin of an IDkg transcript.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
+pub enum IDkgTranscriptType {
+    Masked(IDkgMaskedTranscriptOrigin),
+    Unmasked(IDkgUnmaskedTranscriptOrigin),
+}
+
+/// Collection of verified IDkg dealings, together with metadata.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct IDkgTranscript {
     pub transcript_id: IDkgTranscriptId,
     pub receivers: IDkgReceivers,
     pub registry_version: RegistryVersion,
-    pub verified_dealings: BTreeMap<NodeId, VerifiedIDkgDealing>,
+    pub verified_dealings: BTreeMap<NodeIndex, IDkgMultiSignedDealing>,
+    pub transcript_type: IDkgTranscriptType,
+    pub algorithm_id: AlgorithmId,
+    pub internal_transcript_raw: Vec<u8>,
+}
+
+/// Identifier for the way an IDkg transcript is created.
+///
+/// If earlier transcripts are used in the creation, these are included here.
+#[allow(clippy::large_enum_variant)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
+pub enum IDkgTranscriptOperation {
+    Random,
+    ReshareOfMasked(IDkgTranscript),
+    ReshareOfUnmasked(IDkgTranscript),
+    UnmaskedTimesMasked(IDkgTranscript, IDkgTranscript),
 }
 
 impl IDkgTranscript {
@@ -238,28 +497,54 @@ impl IDkgTranscript {
     pub fn serialize(&self) -> Vec<u8> {
         unimplemented!("IDkgTranscript::serialize");
     }
+
+    pub fn get_type(&self) -> &IDkgTranscriptType {
+        &self.transcript_type
+    }
+
+    /// Number of contributions needed to reconstruct a sharing.
+    pub fn reconstruction_threshold(&self) -> NumberOfNodes {
+        self.receivers.reconstruction_threshold()
+    }
+
+    /// Number of multi-signature shares needed to include a dealing in a
+    /// transcript.
+    pub fn verification_threshold(&self) -> NumberOfNodes {
+        self.receivers.verification_threshold()
+    }
+
+    /// Contextual data needed for the creation of a dealing.
+    pub fn context_data(&self) -> Vec<u8> {
+        context_data(
+            &self.transcript_id,
+            self.registry_version,
+            self.algorithm_id,
+        )
+    }
 }
 
+/// Dealing of an IDkg sharing.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct IDkgDealing {
-    // The identity of the dealer is usually part of the consensus types, and verified there.
-    //pub dealer_id:  NodeId,
-    pub internal_dealing: CspIDkgDealing,
+    pub transcript_id: IDkgTranscriptId,
+    pub dealer_id: NodeId,
+    pub internal_dealing_raw: Vec<u8>,
 }
 
+/// Dealing of an IDkg sharing, along with a combined multisignature.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
-pub struct VerifiedIDkgDealing {
-    pub signature: CombinedMultiSigOf<IDkgDealing>,
+pub struct IDkgMultiSignedDealing {
+    pub signature: CombinedMultiSigOf<EcdsaDealing>,
     pub signers: BTreeSet<NodeId>,
-    pub dealing: IDkgDealing,
+    pub dealing: EcdsaDealing,
 }
 
-// IDkgComplaint against an indivdual dealing in a transcript.
-#[derive(PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash)]
+/// Complaint against an individual IDkg dealing in a transcript.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash)]
 pub struct IDkgComplaint {
     pub transcript_id: IDkgTranscriptId,
     pub dealer_id: NodeId,
-    pub internal_complaint: CspIDkgComplaint,
+    pub internal_complaint_raw: Vec<u8>,
 }
 
 impl IDkgComplaint {
@@ -272,10 +557,11 @@ impl IDkgComplaint {
     }
 }
 
+/// Opening created in response to an IDkgComplaint.
 pub struct IDkgOpening {
     pub transcript_id: IDkgTranscriptId,
     pub dealer_id: NodeId,
-    pub internal_opening: CspIDkgOpening,
+    pub internal_opening_raw: Vec<u8>,
 }
 
 impl IDkgOpening {
@@ -291,4 +577,28 @@ impl IDkgOpening {
 fn number_of_nodes_from_usize(number: usize) -> Result<NumberOfNodes, ()> {
     let count = NodeIndex::try_from(number).map_err(|_| ())?;
     Ok(NumberOfNodes::from(count))
+}
+
+/// Contextual data needed for the creation of a dealing.
+///
+/// Returns a byte vector consisting of:
+/// - IDkgTranscriptId::SubnetId, as a byte-string (prefixed with its
+///   64-bit-big-endian-integer length)
+/// - IDkgTranscriptId::id, as a big-endian 64-bit integer
+/// - RegistryVersion, as a big-endian 64-bit integer
+/// - AlgorithmId, as an 8-bit integer value
+fn context_data(
+    transcript_id: &IDkgTranscriptId,
+    registry_version: RegistryVersion,
+    algorithm_id: AlgorithmId,
+) -> Vec<u8> {
+    let mut ret = Vec::with_capacity(8 + transcript_id.subnet().get().as_slice().len() + 8 + 8 + 1);
+
+    ret.extend_from_slice(&(transcript_id.subnet().get().as_slice().len() as u64).to_be_bytes());
+    ret.extend_from_slice(transcript_id.subnet().get().as_slice());
+    ret.extend_from_slice(&(transcript_id.id() as u64).to_be_bytes());
+    ret.extend_from_slice(&(registry_version.get() as u64).to_be_bytes());
+    ret.push(algorithm_id as u8);
+
+    ret
 }

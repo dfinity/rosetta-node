@@ -97,7 +97,7 @@ impl RosettaApiHandle {
         if let Some(root_key) = root_key_blob {
             let root_key_file_path =
                 std::path::PathBuf::from(format!("{}/root_key.pub", workspace.path().display()));
-            store_threshold_sig_pk(&root_key, &root_key_file_path);
+            store_threshold_sig_pk(root_key, &root_key_file_path);
 
             args.push("--root-key".to_string());
             args.push(String::from(root_key_file_path.to_str().unwrap()));
@@ -217,9 +217,7 @@ impl RosettaApiHandle {
             network_identifier: self.network_id(),
             public_key: pk,
             metadata: Some(ConstructionDeriveRequestMetadata {
-                account_type: AccountType::Neuron {
-                    neuron_identifier: 0,
-                },
+                account_type: AccountType::Neuron { neuron_index: 0 },
             }),
         };
         to_rosetta_response(
@@ -283,7 +281,7 @@ impl RosettaApiHandle {
 
     pub async fn construction_metadata(
         &self,
-        options: Option<Object>,
+        options: Option<ConstructionMetadataRequestOptions>,
         public_keys: Option<Vec<PublicKey>>,
     ) -> Result<Result<ConstructionMetadataResponse, RosettaError>, String> {
         let req = ConstructionMetadataRequest {
@@ -380,6 +378,41 @@ impl RosettaApiHandle {
         to_rosetta_response(
             self.post_json_request(
                 &format!("http://{}/network/status", self.api_url),
+                serde_json::to_vec(&req).unwrap(),
+            )
+            .await,
+        )
+    }
+
+    pub async fn account_balance_neuron(
+        &self,
+        acc: AccountIdentifier,
+        nid: Option<u64>,
+        pk_and_idx: Option<(PublicKey, u64)>,
+        verified: bool,
+    ) -> Result<Result<AccountBalanceResponse, RosettaError>, String> {
+        let account_balance_metadata = AccountBalanceMetadata {
+            account_type: BalanceAccountType::Neuron {
+                neuron_id: nid,
+                subaccount_components: pk_and_idx.map(|(public_key, neuron_index)| {
+                    NeuronSubaccountComponents {
+                        public_key,
+                        neuron_index,
+                    }
+                }),
+                verified_query: Some(verified),
+            },
+        };
+        let req = AccountBalanceRequest {
+            network_identifier: self.network_id(),
+            account_identifier: ic_rosetta_api::convert::to_model_account_identifier(&acc),
+            block_identifier: None,
+            metadata: Some(account_balance_metadata),
+        };
+
+        to_rosetta_response(
+            self.post_json_request(
+                &format!("http://{}/account/balance", self.api_url),
                 serde_json::to_vec(&req).unwrap(),
             )
             .await,
@@ -491,6 +524,18 @@ impl RosettaApiHandle {
                 );
             }
         }
+    }
+
+    pub async fn raw_construction_endpoint(
+        &self,
+        endpoint: &str,
+        body: &[u8],
+    ) -> Result<(Vec<u8>, HttpStatusCode), std::string::String> {
+        self.post_json_request(
+            &format!("http://{}/construction/{}", self.api_url, endpoint),
+            body.to_owned(),
+        )
+        .await
     }
 }
 

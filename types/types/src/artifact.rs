@@ -30,7 +30,9 @@ use strum_macros::EnumIter;
 
 pub use crate::{
     consensus::{
-        certification::CertificationMessage, dkg::Message as DkgMessage, ecdsa::EcdsaMessage,
+        certification::CertificationMessage,
+        dkg::Message as DkgMessage,
+        ecdsa::{EcdsaMessage, EcdsaMessageAttribute, EcdsaMessageHash},
         ConsensusMessage, ConsensusMessageAttribute,
     },
     messages::SignedIngress,
@@ -197,6 +199,17 @@ pub trait ArtifactKind: Sized {
     /// Returns the advert of the given message.
     fn message_to_advert(msg: &<Self as ArtifactKind>::Message) -> Advert<Self>;
 
+    /// Returns the advert send request to be sent to P2P.
+    fn message_to_advert_send_request(
+        msg: &<Self as ArtifactKind>::Message,
+        advert_class: AdvertClass,
+    ) -> AdvertSendRequest<Self> {
+        AdvertSendRequest {
+            advert: Self::message_to_advert(msg),
+            advert_class,
+        }
+    }
+
     /// Checks if the given advert matches what is computed from the message.
     /// Returns the advert derived from artifact on mismatch.
     fn check_advert(
@@ -284,10 +297,52 @@ where
     }
 }
 
+/// The type of advert gossip for a particular artifact,
+/// as determined by the client
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AdvertClass {
+    /// The client considers the artifact to be critical and
+    /// requests all peers be notified. This is the default
+    /// class of service provided by the networking layer,
+    /// if the optimizations are not enabled.
+    Critical,
+
+    /// The client does not need all the peers to be notified
+    /// for the artifact. Instead, it lets the networking
+    /// layer decide the advert distribution volume and recipient
+    /// set, based on performance vs reliability trade offs.
+    /// Please note this is only advisory. Network layer may
+    /// decide to fall back to Critical class, depending on
+    /// its configuration.
+    BestEffort,
+
+    /// The client does not need peers to be notified for this
+    /// artifact type. Please note this is only advisory.
+    /// Network layer may decide to fall back to  Critical class,
+    /// depending on its configuration.
+    None,
+}
+
+impl AdvertClass {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Critical => "critical",
+            Self::BestEffort => "best_effort",
+            Self::None => "none",
+        }
+    }
+}
+
+/// Wrapper to generate the advert send requests
+pub struct AdvertSendRequest<Artifact: ArtifactKind> {
+    pub advert: Advert<Artifact>,
+    pub advert_class: AdvertClass,
+}
+
 // -----------------------------------------------------------------------------
 // Consensus artifacts
 
-/// Consensus message identifier carries both an message hash and a height,
+/// Consensus message identifier carries both a message hash and a height,
 /// which is used by the consensus pool to help lookup.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ConsensusMessageId {
@@ -405,13 +460,7 @@ pub struct DkgMessageAttribute {
 // -----------------------------------------------------------------------------
 // ECDSA artifacts
 
-pub type EcdsaMessageId = CryptoHashOf<EcdsaMessage>;
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct EcdsaMessageAttribute;
-
-#[derive(Default, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct EcdsaMessageFilter;
+pub type EcdsaMessageId = EcdsaMessageHash;
 
 // ------------------------------------------------------------------------------
 // StateSync artifacts.

@@ -45,17 +45,6 @@ message SetupInitialDkgContext {
     uint64 registry_version = 5;
 }
 
-// [CON-564] Remove the deprecated SubnetCallContext from the protobuf
-message SubnetCallContext {
-    SetupInitialDkgContext setup_initial_dkg_context = 1;
-}
-
-// [CON-564] Remove the deprecated SubnetCallContext from the protobuf
-message SubnetCallContextTree {
-    uint64 callback_id = 1;
-    SubnetCallContext context = 2;
-}
-
 message SetupInitialDkgContextTree {
     uint64 callback_id = 1;
     SetupInitialDkgContext context = 2;
@@ -66,6 +55,7 @@ message SignWithEcdsaContext {
     bytes pseudo_random_id = 2;
     bytes message_hash = 3;
     bytes derivation_path = 4;
+    uint64 batch_time = 5;
 }
 
 message SignWithEcdsaContextTree {
@@ -75,10 +65,15 @@ message SignWithEcdsaContextTree {
 
 message SubnetCallContextManager {
     uint64 next_callback_id = 1;
-    // [CON-564] Remove the deprecated SubnetCallContext from the protobuf
-    repeated SubnetCallContextTree contexts = 2;
+    reserved 2;
+    reserved "contexts";
     repeated SetupInitialDkgContextTree setup_initial_dkg_contexts = 3;
     repeated SignWithEcdsaContextTree sign_with_ecdsa_contexts = 4;
+    repeated SignWithEcdsaContextTree sign_with_mock_ecdsa_contexts = 5;
+}
+
+message TimeOfLastAllocationCharge {
+    uint64 time_of_last_allocation_charge_nanos = 1;
 }
 
 message SystemMetadata {
@@ -105,6 +100,8 @@ message SystemMetadata {
     reserved "stable_memory_delta_estimate";
 
     registry.subnet.v1.SubnetFeatures own_subnet_features = 13;
+
+    TimeOfLastAllocationCharge time_of_last_allocation_charge_nanos = 14;
 }
 
 message StableMemory {

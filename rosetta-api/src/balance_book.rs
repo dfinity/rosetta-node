@@ -1,22 +1,22 @@
 use crate::errors::ApiError;
-use ledger_canister::{AccountIdentifier, BalancesStore, BlockHeight, ICPTs};
+use ledger_canister::{AccountIdentifier, BalancesStore, BlockHeight, Tokens};
 use std::collections::HashMap;
 
 pub type BalanceBook = ledger_canister::Balances<ClientBalancesStore>;
 
-const EMPTY_HISTORY: [(BlockHeight, ICPTs); 0] = [];
+const EMPTY_HISTORY: [(BlockHeight, Tokens); 0] = [];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BalanceHistory {
     // TODO consider switching to VecDeque, to have more efficient pruning
-    // Unfortunately binary_seach on VecDeque is only available on nightly,
+    // Unfortunately binary_search on VecDeque is only available on nightly,
     // so we would need to add our implementation
 
     // Note: If num_pruned > 0, the first entry in inner has a slightly
     // different meaning -- it corresponds to the oldest information
     // about this account, but the block at that height does not
     // necessary involve a transaction on this account
-    inner: Vec<(BlockHeight, ICPTs)>,
+    inner: Vec<(BlockHeight, Tokens)>,
     pub num_pruned_transactions: usize,
 }
 
@@ -32,7 +32,7 @@ impl Default for BalanceHistory {
 impl BalanceHistory {
     // Add new entry or overwrite a present one.
     // Panics if new height < last_entry().height
-    pub fn insert(&mut self, height: BlockHeight, amount: ICPTs) {
+    pub fn insert(&mut self, height: BlockHeight, amount: Tokens) {
         #[allow(clippy::comparison_chain)]
         if let Some((h, a)) = self.inner.last_mut() {
             if *h > height {
@@ -48,7 +48,7 @@ impl BalanceHistory {
         self.inner.push((height, amount));
     }
 
-    pub fn get_at(&self, height: BlockHeight) -> Result<ICPTs, ApiError> {
+    pub fn get_at(&self, height: BlockHeight) -> Result<Tokens, ApiError> {
         // after prunning we always have at least one entry
         if self.num_pruned_transactions > 0 && self.inner.first().unwrap().0 > height {
             // TODO Add a new error type (ApiError::BlockPruned or something like that)
@@ -66,7 +66,7 @@ impl BalanceHistory {
             Ok(i) => i,
             Err(i) => {
                 if i == 0 {
-                    return Ok(ICPTs::ZERO);
+                    return Ok(Tokens::ZERO);
                 }
                 i - 1
             }
@@ -90,15 +90,15 @@ impl BalanceHistory {
         Ok(*a)
     }
 
-    pub fn get_last(&self) -> ICPTs {
+    pub fn get_last(&self) -> Tokens {
         self.inner
             .last()
             .cloned()
             .map(|(_h, a)| a)
-            .unwrap_or_else(|| ICPTs::ZERO)
+            .unwrap_or_else(|| Tokens::ZERO)
     }
 
-    pub fn get_last_ref(&self) -> Option<&ICPTs> {
+    pub fn get_last_ref(&self) -> Option<&Tokens> {
         self.inner.last().map(|(_h, a)| a)
     }
 
@@ -127,7 +127,7 @@ impl BalanceHistory {
         self.inner = trimmed;
     }
 
-    pub fn get_history(&self, max_block: Option<BlockHeight>) -> &[(BlockHeight, ICPTs)] {
+    pub fn get_history(&self, max_block: Option<BlockHeight>) -> &[(BlockHeight, Tokens)] {
         let end = if let Some(height) = max_block {
             match self.inner.binary_search_by_key(&height, |&(h, _)| h) {
                 Ok(i) => i + 1,
@@ -155,18 +155,18 @@ pub struct ClientBalancesStore {
 }
 
 impl ClientBalancesStore {
-    pub fn insert(&mut self, acc: AccountIdentifier, height: BlockHeight, amount: ICPTs) {
+    pub fn insert(&mut self, acc: AccountIdentifier, height: BlockHeight, amount: Tokens) {
         self.acc_to_hist
             .entry(acc)
             .or_default()
             .insert(height, amount);
     }
 
-    pub fn get_at(&self, acc: AccountIdentifier, height: BlockHeight) -> Result<ICPTs, ApiError> {
+    pub fn get_at(&self, acc: AccountIdentifier, height: BlockHeight) -> Result<Tokens, ApiError> {
         self.acc_to_hist
             .get(&acc)
             .map(|hist| hist.get_at(height))
-            .unwrap_or_else(|| Ok(ICPTs::ZERO))
+            .unwrap_or_else(|| Ok(Tokens::ZERO))
     }
 
     pub fn prune_at(&mut self, height: BlockHeight) {
@@ -179,7 +179,7 @@ impl ClientBalancesStore {
         &self,
         acc: &AccountIdentifier,
         max_block: Option<BlockHeight>,
-    ) -> &[(BlockHeight, ICPTs)] {
+    ) -> &[(BlockHeight, Tokens)] {
         self.acc_to_hist
             .get(acc)
             .map(|hist| hist.get_history(max_block))
@@ -188,26 +188,25 @@ impl ClientBalancesStore {
 }
 
 impl BalancesStore for ClientBalancesStore {
-    fn get_balance(&self, k: &AccountIdentifier) -> Option<&ICPTs> {
-        self.acc_to_hist
-            .get(&k)
-            .and_then(|hist| hist.get_last_ref())
+    fn get_balance(&self, k: &AccountIdentifier) -> Option<&Tokens> {
+        self.acc_to_hist.get(k).and_then(|hist| hist.get_last_ref())
     }
 
     // In here, ledger removes zero amount accounts from it's map,
     // but we can't do that or we may risk giving incorrect
     // historical balance information
-    fn update<F>(&mut self, k: AccountIdentifier, mut f: F)
+    fn update<F, E>(&mut self, k: AccountIdentifier, mut f: F) -> Result<Tokens, E>
     where
-        F: FnMut(Option<&ICPTs>) -> ICPTs,
+        F: FnMut(Option<&Tokens>) -> Result<Tokens, E>,
     {
         let index = self
             .transaction_context
             .expect("Transaction context missing");
         let acc_hist = self.acc_to_hist.entry(k).or_default();
         let last_balance = acc_hist.get_last_ref();
-        let new_balance = f(last_balance);
+        let new_balance = f(last_balance)?;
         acc_hist.insert(index, new_balance);
+        Ok(new_balance)
     }
 }
 
@@ -218,25 +217,25 @@ mod tests {
     #[test]
     fn balance_history() {
         let mut hist = BalanceHistory::default();
-        assert_eq!(hist.get_last(), ICPTs::ZERO);
-        assert_eq!(hist.get_at(4), Ok(ICPTs::ZERO));
+        assert_eq!(hist.get_last(), Tokens::ZERO);
+        assert_eq!(hist.get_at(4), Ok(Tokens::ZERO));
 
-        hist.insert(1, ICPTs::from_e8s(1));
-        hist.insert(2, ICPTs::from_e8s(2));
-        hist.insert(4, ICPTs::from_e8s(4));
-        hist.insert(10, ICPTs::from_e8s(10));
+        hist.insert(1, Tokens::from_e8s(1));
+        hist.insert(2, Tokens::from_e8s(2));
+        hist.insert(4, Tokens::from_e8s(4));
+        hist.insert(10, Tokens::from_e8s(10));
 
-        assert_eq!(hist.get_last(), ICPTs::from_e8s(10));
-        assert_eq!(hist.get_at(0), Ok(ICPTs::from_e8s(0)));
-        assert_eq!(hist.get_at(1), Ok(ICPTs::from_e8s(1)));
-        assert_eq!(hist.get_at(2), Ok(ICPTs::from_e8s(2)));
-        assert_eq!(hist.get_at(3), Ok(ICPTs::from_e8s(2)));
-        assert_eq!(hist.get_at(4), Ok(ICPTs::from_e8s(4)));
-        assert_eq!(hist.get_at(5), Ok(ICPTs::from_e8s(4)));
-        assert_eq!(hist.get_at(7), Ok(ICPTs::from_e8s(4)));
-        assert_eq!(hist.get_at(9), Ok(ICPTs::from_e8s(4)));
-        assert_eq!(hist.get_at(10), Ok(ICPTs::from_e8s(10)));
-        assert_eq!(hist.get_at(100), Ok(ICPTs::from_e8s(10)));
+        assert_eq!(hist.get_last(), Tokens::from_e8s(10));
+        assert_eq!(hist.get_at(0), Ok(Tokens::from_e8s(0)));
+        assert_eq!(hist.get_at(1), Ok(Tokens::from_e8s(1)));
+        assert_eq!(hist.get_at(2), Ok(Tokens::from_e8s(2)));
+        assert_eq!(hist.get_at(3), Ok(Tokens::from_e8s(2)));
+        assert_eq!(hist.get_at(4), Ok(Tokens::from_e8s(4)));
+        assert_eq!(hist.get_at(5), Ok(Tokens::from_e8s(4)));
+        assert_eq!(hist.get_at(7), Ok(Tokens::from_e8s(4)));
+        assert_eq!(hist.get_at(9), Ok(Tokens::from_e8s(4)));
+        assert_eq!(hist.get_at(10), Ok(Tokens::from_e8s(10)));
+        assert_eq!(hist.get_at(100), Ok(Tokens::from_e8s(10)));
         assert_eq!(hist.get_history(Some(100)).len(), 4);
         assert_eq!(hist.get_history(None).len(), 4);
         assert_eq!(hist.get_history(Some(10)).len(), 4);
@@ -245,8 +244,8 @@ mod tests {
         hist.prune_at(2);
         assert!(hist.get_at(0).is_err());
         assert!(hist.get_at(1).is_err());
-        assert_eq!(hist.get_at(2), Ok(ICPTs::from_e8s(2)));
-        assert_eq!(hist.get_at(100), Ok(ICPTs::from_e8s(10)));
+        assert_eq!(hist.get_at(2), Ok(Tokens::from_e8s(2)));
+        assert_eq!(hist.get_at(100), Ok(Tokens::from_e8s(10)));
         assert_eq!(hist.num_pruned_transactions, 2);
         hist.prune_at(2);
         assert_eq!(hist.num_pruned_transactions, 2);
@@ -255,29 +254,29 @@ mod tests {
 
         hist.prune_at(3);
         assert!(hist.get_at(2).is_err());
-        assert_eq!(hist.get_at(3), Ok(ICPTs::from_e8s(2)));
+        assert_eq!(hist.get_at(3), Ok(Tokens::from_e8s(2)));
         assert_eq!(hist.num_pruned_transactions, 2);
 
         let mut hist = BalanceHistory::default();
-        hist.insert(0, ICPTs::from_e8s(100));
-        hist.insert(4, ICPTs::from_e8s(104));
-        assert_eq!(hist.get_at(1), Ok(ICPTs::from_e8s(100)));
+        hist.insert(0, Tokens::from_e8s(100));
+        hist.insert(4, Tokens::from_e8s(104));
+        assert_eq!(hist.get_at(1), Ok(Tokens::from_e8s(100)));
         assert_eq!(hist.get_history(Some(0)).len(), 1);
 
         hist.prune_at(0);
-        assert_eq!(hist.get_at(0), Ok(ICPTs::from_e8s(100)));
-        assert_eq!(hist.get_at(1), Ok(ICPTs::from_e8s(100)));
+        assert_eq!(hist.get_at(0), Ok(Tokens::from_e8s(100)));
+        assert_eq!(hist.get_at(1), Ok(Tokens::from_e8s(100)));
         assert_eq!(hist.num_pruned_transactions, 1);
         assert_eq!(hist.get_history(Some(0)).len(), 0);
 
         hist.prune_at(1);
         assert!(hist.get_at(0).is_err());
-        assert_eq!(hist.get_at(1), Ok(ICPTs::from_e8s(100)));
+        assert_eq!(hist.get_at(1), Ok(Tokens::from_e8s(100)));
         assert_eq!(hist.num_pruned_transactions, 1);
 
         hist.prune_at(100);
         assert_eq!(hist.num_pruned_transactions, 2);
         assert!(hist.get_at(99).is_err());
-        assert_eq!(hist.get_at(100), Ok(ICPTs::from_e8s(104)));
+        assert_eq!(hist.get_at(100), Ok(Tokens::from_e8s(104)));
     }
 }

@@ -1,4 +1,7 @@
-use crate::{embedders::PersistenceType, subnet_config::MAX_INSTRUCTIONS_PER_MESSAGE};
+use crate::{
+    embedders::PersistenceType, feature_status::FeatureStatus,
+    subnet_config::MAX_INSTRUCTIONS_PER_MESSAGE,
+};
 use ic_base_types::NumSeconds;
 use ic_types::{
     Cycles, NumBytes, NumInstructions, MAX_STABLE_MEMORY_IN_BYTES, MAX_WASM_MEMORY_IN_BYTES,
@@ -26,10 +29,13 @@ const SUBNET_MEMORY_CAPACITY: NumBytes = NumBytes::new(300 * GB);
 /// size can grow above this limit but no new execution will be done if the the
 /// current size is above this limit.
 ///
-/// The gen 1 machines in production will have 3TiB disks. As this is a soft
-/// limit, we do not want to set it too high. The remainder of the storage can
-/// be used for storing other copies of the canister states.
-pub(crate) const SUBNET_HEAP_DELTA_CAPACITY: NumBytes = NumBytes::new(1024 * GB);
+/// Currently heap delta pages are stored in memory and not backed by a file.
+/// The gen 1 machines in production have 500GiB of RAM available to replica.
+/// Set the upper limit to 200GiB to reserve memory for other components and
+/// potential fragmentation. This limit should be larger than the maximum
+/// canister memory size to guarantee that a message that overwrites the whole
+/// memory can succeed.
+pub(crate) const SUBNET_HEAP_DELTA_CAPACITY: NumBytes = NumBytes::new(200 * GB);
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(default)]
@@ -64,15 +70,8 @@ pub struct Config {
     /// Maximum number of controllers a canister can have.
     pub max_controllers: usize,
 
-    /// The stack size of a thread that executes Wasm code.
-    /// It must be set to be sufficiently larger than
-    /// `ic_config::embedders::Config::max_wasm_stack_size` to
-    /// allow space for:
-    /// 1) the Rust function frames that are on the stack when
-    ///    the Wasm engine is invoked.
-    /// 2) the Rust function frames of System API that are called back
-    ///    from Wasm code.
-    pub execution_thread_stack_size: NumBytes,
+    /// Indicates whether canisters sandboxing is enabled or not.
+    pub canister_sandboxing_flag: FeatureStatus,
 }
 
 impl Default for Config {
@@ -95,9 +94,8 @@ impl Default for Config {
             // Maximum number of controllers allowed in a request (specified in the public
             // Spec).
             max_controllers: 10,
-            // If you change this value, please ensure that it is sufficiently larger
-            // than `ic_config::embedders::Config::max_wasm_stack_size`.
-            execution_thread_stack_size: NumBytes::new(8 * 1024 * 1024),
+            // Change this value to enable/disable canister sandboxing by default.
+            canister_sandboxing_flag: FeatureStatus::Disabled,
         }
     }
 }

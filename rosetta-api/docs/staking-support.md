@@ -30,10 +30,15 @@ For now one key can only control a single neuron, but this restriction might be 
     "curve_type": "edwards25519"
   },
   "metadata": {
-    "account_type": "neuron"
+    "account_type": "neuron",
+    "neuron_index": 0
   }
 }
 ```
+
+Note: it's possible to control many neurons using the same key.
+The client can differentiate between neurons it creates using different values of the `neuron_index` metadata field.
+`neuron_index` field is supported by all neuron management operations and is equal to zero if not specified.
 
 ### Response
 
@@ -52,7 +57,7 @@ The only field that should be set for the `STAKE` operation is `account`, which 
 
 NOTE: `STAKE` operation is idempotent. 
 
-### Requst
+### Request
 
 ```json
 {
@@ -91,7 +96,10 @@ NOTE: `STAKE` operation is idempotent.
     {
       "operation_identifier": { "index": 3 },
       "type": "STAKE",
-      "account": { "address": "907ff6c714a545110b42982b72aa39c5b7742d610e234a9d40bf8cf624e7a70d" }
+      "account": { "address": "907ff6c714a545110b42982b72aa39c5b7742d610e234a9d40bf8cf624e7a70d" },
+      "metadata": {
+        "neuron_index": 0
+      }
     }
   ]
 }
@@ -140,7 +148,10 @@ NOTE: `STAKE` operation is idempotent.
         "operation_identifier": { "index": 3 },
         "type": "STAKE",
         "status": "COMPLETED",
-        "account": { "address": "907ff6c714a545110b42982b72aa39c5b7742d610e234a9d40bf8cf624e7a70d" }
+        "account": { "address": "907ff6c714a545110b42982b72aa39c5b7742d610e234a9d40bf8cf624e7a70d" },
+        "metadata": {
+          "neuron_index": 0
+        }
       }
     ]
   }
@@ -162,7 +173,8 @@ NOTE: This operation is idempotent.
     "address": "907ff6c714a545110b42982b72aa39c5b7742d610e234a9d40bf8cf624e7a70d"
   },
   "metadata": {
-    "dissolve_time_utc_seconds": "1879939507"
+    "neuron_index": 0,
+    "dissolve_time_utc_seconds": 1879939507
   }
 }
 ```
@@ -185,6 +197,9 @@ NOTE: This operation is idempotent.
   "type": "START_DISSOLVING",
   "account": {
     "address": "907ff6c714a545110b42982b72aa39c5b7742d610e234a9d40bf8cf624e7a70d" 
+  },
+  "metadata": {
+    "neuron_index": 0
   }
 }
 ```
@@ -207,39 +222,43 @@ NOTE: This operation is idempotent.
   "type": "STOP_DISSOLVING",
   "account": {
     "address": "907ff6c714a545110b42982b72aa39c5b7742d610e234a9d40bf8cf624e7a70d" 
+  },
+  "metadata": {
+    "neuron_index": 0
   }
 }
 ```
 
 ## Accessing neuron attributes
 
-Use `/neuron/info` endpoint to access the staked amount and publicly available neuron metadata.
+Use `/account/balance` endpoint to access the staked amount and publicly available neuron metadata.
 
 Preconditions
   * `public_key` contains the public key of a neuron's controller.
 
-NOTE: This operation is only available in online mode.
+NOTE: This operation is available only in online mode.
 
 ### Request
 
 NOTE: The request should not specify any block identifier because the endpoint always returns the latest state of the neuron.
 
 ```json
-{
+ {
   "network_identifier": {
     "blockchain": "Internet Computer",
-    "network": "00000000000000010101",
+    "network": "00000000000000020101"
   },
-  "public_key": {
-    "hex_bytes": "1b400d60aaf34eaf6dcbab9bba46001a23497886cf11066f7846933d30e5ad3f",
-    "curve_type": "edwards25519"
+  "account_identifier": {
+    "address": "a4ac33c6a25a102756e3aac64fe9d3267dbef25392d031cfb3d2185dba93b4c4"
   },
-  "currencies": [
-    {
-      "symbol": "ICP",
-      "decimals": 8
+  "metadata": {
+    "account_type": "neuron",
+    "neuron_index": 0,
+    "public_key": {
+      "hex_bytes": "ba5242d02642aede88a5f9fe82482a9fd0b6dc25f38c729253116c6865384a9d",
+      "curve_type": "edwards25519"
     }
-  ]
+  }
 }
 ```
 
@@ -248,12 +267,12 @@ NOTE: The request should not specify any block identifier because the endpoint a
 ```json
 {
   "block_identifier": {
-    "index": 1123941,
-    "hash": "1f2cc6c5027d2f201a5453ad1119574d2aed23a392654742ac3c78783c071f85"
+    "index": 1150,
+    "hash": "ca02e34bafa2f58b18a66073deb5f389271ee74bd59a024f9f7b176a890039b2"
   },
   "balances": [
     {
-      "value": "1238089899992",
+      "value": "100000000",
       "currency": {
         "symbol": "ICP",
         "decimals": 8
@@ -261,11 +280,53 @@ NOTE: The request should not specify any block identifier because the endpoint a
     }
   ],
   "metadata": {
-    "state": "NON_DISSOLVING",
-    "dissolve_delay_seconds": "126230400",
-    "age_seconds": "15778800",
-    "voting_power": "1238089899992",
-    "retrieved_at_utc_seconds": "1627506488"
+    "verified_query": false,
+    "retrieved_at_timestamp_seconds": 1639670156,
+    "state": "DISSOLVING",
+    "age_seconds": 0,
+    "dissolve_delay_seconds": 240269355,
+    "voting_power": 195170955,
+    "created_timestamp_seconds": 1638802541
   }
 }
 ```
+
+## Spawn neurons
+
+The `SPAWN` operation creates a new neuron from an existing neuron with enough maturity.
+This operation transfers all the maturity from the existing neuron to the staked amount of the newly spawned neuron.
+
+Preconditions:
+  * `account.address` is a ledger address of a neuron controller.
+  * The parent neuron has at least 1 ICP worth of maturity.
+
+Postconditions:
+  * Parent neuron maturity is set to `0`.
+  * A new neuron is spawned with a balance equals to transferred maturity.
+
+```json
+ {
+  "network_identifier": {
+    "blockchain": "Internet Computer",
+    "network": "00000000000000020101"
+  },
+  "operations": [
+    {
+      "operation_identifier": { "index": 0 },
+      "type": "SPAWN",
+      "account": { "address": "907ff6c714a545110b42982b72aa39c5b7742d610e234a9d40bf8cf624e7a70d" },
+      "metadata": {
+        "neuron_index": 0,
+        "controller": "sp3em-jkiyw-tospm-2huim-jor4p-et4s7-ay35f-q7tnm-hi4k2-pyicb-xae",
+        "spawned_neuron_index": 1
+      }
+    }
+  ]
+}
+```
+
+Notes:
+  * `controller` metadata field is optional and equal to the existing neuron controller by default.
+  * `spawned_neuron_index` metadata field is required.
+    The rosetta node uses this index to compute the sub-account for the spawned neuron.
+    All spawned neurons must have different values of `spawned_neuron_index`.

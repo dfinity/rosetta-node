@@ -2,20 +2,24 @@
 mod errors;
 
 use crate::state_manager::StateManagerError;
-pub use errors::{CanisterHeartbeatError, MessageAcceptanceError};
-pub use errors::{HypervisorError, TrapCode};
+pub use errors::{CanisterHeartbeatError, CanisterOutOfCyclesError, HypervisorError, TrapCode};
 use ic_base_types::NumBytes;
 use ic_registry_provisional_whitelist::ProvisionalWhitelist;
-use ic_types::ComputeAllocation;
+use ic_registry_subnet_type::SubnetType;
+use ic_sys::{PageBytes, PageIndex};
 use ic_types::{
+    canonical_error::CanonicalError,
     ingress::{IngressStatus, WasmResult},
-    messages::{CertificateDelegation, MessageId, SignedIngressContent, UserQuery},
+    messages::{
+        CertificateDelegation, HttpQueryResponse, MessageId, SignedIngressContent, UserQuery,
+    },
     user_error::UserError,
-    Cycles, ExecutionRound, Height, NumInstructions, Randomness, Time,
+    ComputeAllocation, Cycles, ExecutionRound, Height, NumInstructions, Randomness, Time,
 };
 use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
 use std::sync::{Arc, RwLock};
-use tower::util::BoxService;
+use tower::{buffer::Buffer, util::BoxService};
 
 /// Instance execution statistics. The stats are cumulative and
 /// contain measurements from the point in time when the instance was
@@ -34,33 +38,29 @@ pub struct InstanceStats {
 
 /// Errors that can be returned when fetching the available memory on a subnet.
 pub enum SubnetAvailableMemoryError {
-    InsufficientMemory {
-        requested: NumBytes,
-        available: NumBytes,
-    },
+    InsufficientMemory { requested: NumBytes, available: i64 },
 }
 
-/// This struct is used to manage the view of the current amount of memory
-/// available on the subnet between multiple canisters executing in parallel.
-///
-/// The problem is that when canisters with no memory reservations want to
-/// expand their memory consumption, we need to ensure that they do not go over
-/// subnet's capacity. As we execute canisters in parallel, we need to
-/// provide them with a way to view the latest state of memory availble in a
-/// thread safe way. Hence, we use `Arc<RwLock<>>` here.
+/// This struct is used to manage the current amount of memory available on the
+/// subnet.
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct SubnetAvailableMemory(Arc<RwLock<NumBytes>>);
+pub struct SubnetAvailableMemory(
+    /// TODO(EXC-677): Make this just an `i64`.
+    #[serde(serialize_with = "ic_utils::serde_arc::serialize_arc")]
+    #[serde(deserialize_with = "ic_utils::serde_arc::deserialize_arc")]
+    Arc<RwLock<i64>>,
+);
 
 impl SubnetAvailableMemory {
-    pub fn new(amount: NumBytes) -> Self {
+    pub fn new(amount: i64) -> Self {
         Self(Arc::new(RwLock::new(amount)))
     }
 
     /// Try to use some memory capacity and fail if not enough is available
     pub fn try_decrement(&self, requested: NumBytes) -> Result<(), SubnetAvailableMemoryError> {
         let mut available = self.0.write().unwrap();
-        if requested <= *available {
-            *available -= requested;
+        if requested.get() as i64 <= *available {
+            *available -= requested.get() as i64;
             Ok(())
         } else {
             Err(SubnetAvailableMemoryError::InsufficientMemory {
@@ -72,11 +72,15 @@ impl SubnetAvailableMemory {
 
     pub fn increment(&self, amount: NumBytes) {
         let mut available = self.0.write().unwrap();
-        *available += amount;
+        *available += amount.get() as i64;
     }
 
-    pub fn get(self) -> NumBytes {
+    pub fn get(&self) -> i64 {
         *self.0.read().unwrap()
+    }
+
+    pub fn set(&self, val: i64) {
+        *self.0.write().unwrap() = val
     }
 }
 
@@ -87,6 +91,7 @@ pub struct ExecutionParameters {
     pub canister_memory_limit: NumBytes,
     pub subnet_available_memory: SubnetAvailableMemory,
     pub compute_allocation: ComputeAllocation,
+    pub subnet_type: SubnetType,
 }
 
 /// The data structure returned by
@@ -106,8 +111,31 @@ pub struct ExecuteMessageResult<CanisterState> {
 
 pub type HypervisorResult<T> = Result<T, HypervisorError>;
 
-pub type QueryExecutionService =
-    BoxService<(UserQuery, Option<CertificateDelegation>), WasmResult, UserError>;
+/// Interface for the component to filter out ingress messages that
+/// the canister is not willing to accept.
+// Since this service will be shared across many connections we must
+// make it cloneable by introducing a bounded buffer infront of it.
+// https://docs.rs/tower/0.4.10/tower/buffer/index.html
+// The buffer also dampens usage by reducing the risk of
+// spiky traffic when users retry in case failed requests.
+pub type IngressFilterService = Buffer<
+    BoxService<
+        (ProvisionalWhitelist, SignedIngressContent),
+        Result<(), CanonicalError>,
+        Infallible,
+    >,
+    (ProvisionalWhitelist, SignedIngressContent),
+>;
+
+// Since this service will be shared across many connections we must
+// make it cloneable by introducing a bounded buffer infront of it.
+// https://docs.rs/tower/0.4.10/tower/buffer/index.html
+// The buffer also dampens usage by reducing the risk of
+// spiky traffic when users retry in case failed requests.
+pub type QueryExecutionService = Buffer<
+    BoxService<(UserQuery, Option<CertificateDelegation>), HttpQueryResponse, Infallible>,
+    (UserQuery, Option<CertificateDelegation>),
+>;
 
 /// Interface for the component to execute queries on canisters.  It can be used
 /// by the HttpHandler and other system components to execute queries.
@@ -125,25 +153,6 @@ pub trait QueryHandler: Send + Sync {
         state: Arc<Self::State>,
         data_certificate: Vec<u8>,
     ) -> Result<WasmResult, UserError>;
-}
-
-/// Interface for the component to filter out ingress messages that
-/// the canister is not willing to accept.
-pub trait IngressMessageFilter: Send + Sync {
-    /// Type of state managed by StateReader.
-    ///
-    /// Should typically be `ic_replicated_state::ReplicatedState`.
-    // Note [Associated Types in Interfaces]
-    type State;
-
-    /// Asks the canister if it is willing to accept the provided ingress
-    /// message.
-    fn should_accept_ingress_message(
-        &self,
-        state: Arc<Self::State>,
-        provisional_whitelist: &ProvisionalWhitelist,
-        ingress: &SignedIngressContent,
-    ) -> Result<(), MessageAcceptanceError>;
 }
 
 /// Errors that can be returned when reading/writing from/to ingress history.
@@ -203,11 +212,14 @@ pub trait SystemApi {
     /// Returns the reference to the execution error.
     fn get_execution_error(&self) -> Option<&HypervisorError>;
 
-    /// Returns the stable memory delta that the canister produced
-    fn get_stable_memory_delta_pages(&self) -> usize;
-
     /// Returns the amount of instructions needed to copy `num_bytes`.
     fn get_num_instructions_from_bytes(&self, num_bytes: NumBytes) -> NumInstructions;
+
+    /// Returns the indexes of all dirty pages in stable memory.
+    fn stable_memory_dirty_pages(&self) -> Vec<(PageIndex, &PageBytes)>;
+
+    /// Returns the current size of the stable memory in wasm pages.
+    fn stable_memory_size(&self) -> usize;
 
     /// Copies `size` bytes starting from `offset` inside the opaque caller blob
     /// and copies them to heap[dst..dst+size]. The caller is the canister
@@ -523,8 +535,13 @@ pub trait SystemApi {
     /// Traps if current canister balance cannot fit in a 64-bit value.
     fn ic0_canister_cycle_balance(&self) -> HypervisorResult<u64>;
 
-    /// Returns the current balance in cycles.
-    fn ic0_canister_cycles_balance128(&self) -> HypervisorResult<(u64, u64)>;
+    /// This system call indicates the current cycle balance
+    /// of the canister.
+    ///
+    /// The amount of cycles is represented by a 128-bit value
+    /// and is copied in the canister memory starting
+    /// starting at the location `dst`.
+    fn ic0_canister_cycles_balance128(&self, dst: u32, heap: &mut [u8]) -> HypervisorResult<()>;
 
     /// (deprecated) Please use `ic0_msg_cycles_available128` instead.
     /// This API supports only 64-bit values.
@@ -534,8 +551,13 @@ pub trait SystemApi {
     /// Traps if the amount of cycles available cannot fit in a 64-bit value.
     fn ic0_msg_cycles_available(&self) -> HypervisorResult<u64>;
 
-    /// Cycles sent in the current call and still available.
-    fn ic0_msg_cycles_available128(&self) -> HypervisorResult<(u64, u64)>;
+    /// This system call indicates the amount of cycles sent
+    /// in the current call and still available.
+    ///
+    /// The amount of cycles is represented by a 128-bit value
+    /// and is copied in the canister memory starting
+    /// starting at the location `dst`.
+    fn ic0_msg_cycles_available128(&self, dst: u32, heap: &mut [u8]) -> HypervisorResult<()>;
 
     /// (deprecated) Please use `ic0_msg_cycles_refunded128` instead.
     /// This API supports only 64-bit values.
@@ -545,8 +567,13 @@ pub trait SystemApi {
     /// Traps if the amount of refunded cycles cannot fit in a 64-bit value.
     fn ic0_msg_cycles_refunded(&self) -> HypervisorResult<u64>;
 
-    /// Cycles that came back with the response, as a refund.
-    fn ic0_msg_cycles_refunded128(&self) -> HypervisorResult<(u64, u64)>;
+    /// This system call indicates the amount of cycles sent
+    /// that came back with the response as a refund.
+    ///
+    /// The amount of cycles is represented by a 128-bit value
+    /// and is copied in the canister memory starting
+    /// starting at the location `dst`.
+    fn ic0_msg_cycles_refunded128(&self, dst: u32, heap: &mut [u8]) -> HypervisorResult<()>;
 
     /// (deprecated) Please use `ic0_msg_cycles_accept128` instead.
     /// This API supports only 64-bit values.
@@ -589,7 +616,12 @@ pub trait SystemApi {
     /// EXE-117: the last point is not properly handled yet.  In particular, a
     /// refund can come back to the canister after this call finishes which
     /// causes the canister's balance to overflow.
-    fn ic0_msg_cycles_accept128(&mut self, max_amount: Cycles) -> HypervisorResult<(u64, u64)>;
+    fn ic0_msg_cycles_accept128(
+        &mut self,
+        max_amount: Cycles,
+        dst: u32,
+        heap: &mut [u8],
+    ) -> HypervisorResult<()>;
 
     /// Sets the certified data for the canister.
     /// See: https://sdk.dfinity.org/docs/interface-spec/index.html#system-api-certified-data
@@ -681,8 +713,8 @@ pub trait Scheduler: Send {
         &self,
         state: Self::State,
         randomness: Randomness,
-        time_of_previous_batch: Time,
         current_round: ExecutionRound,
         provisional_whitelist: ProvisionalWhitelist,
+        max_number_of_canisters: u64,
     ) -> Self::State;
 }

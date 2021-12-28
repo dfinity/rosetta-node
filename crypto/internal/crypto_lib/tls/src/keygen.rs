@@ -40,6 +40,7 @@ pub enum TlsEd25519CertificateDerBytesParseError {
 
 /// The raw bytes of a DER-encoded Ed25519 secret key.
 #[derive(Clone, Eq, PartialEq, Zeroize, Deserialize, Serialize)]
+#[zeroize(drop)] // TODO (CRP-1251) Use SecretVec in TlsEd25519CertificateDerBytes instead of Vec
 pub struct TlsEd25519SecretKeyDerBytes {
     #[serde(with = "serde_bytes")]
     pub bytes: Vec<u8>,
@@ -117,16 +118,16 @@ fn x509_v3_certificate(
         .set_issuer_name(&cn)
         .expect("unable to set issuer cn");
     builder
-        .set_pubkey(&key_pair)
+        .set_pubkey(key_pair)
         .expect("unable to set public key");
     builder
         .set_not_before(&now)
         .expect("unable to set 'not before'");
     builder
-        .set_not_after(&not_after)
+        .set_not_after(not_after)
         .expect("unable to set 'not after'");
     builder
-        .sign(&key_pair, message_digest)
+        .sign(key_pair, message_digest)
         .expect("unable to sign");
     builder.build()
 }

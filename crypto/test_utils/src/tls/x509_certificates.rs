@@ -14,7 +14,7 @@ const DEFAULT_SERIAL: [u8; 19] = [42u8; 19];
 const DEFAULT_X509_VERSION: i32 = 3;
 const DEFAULT_CN: &str = "Spock";
 const DEFAULT_NOT_BEFORE_DAYS_FROM_NOW: u32 = 0;
-const DEFAULT_VALIDITY_DAYS: u32 = 365;
+const RFC5280_NO_WELL_DEFINED_CERTIFICATE_EXPIRATION_DATE: &str = "99991231235959Z";
 
 /// Generates an ed25519 key pair.
 pub fn ed25519_key_pair() -> PKey<Private> {
@@ -49,7 +49,7 @@ pub fn generate_ed25519_tlscert() -> (PKey<Private>, TlsPublicKeyCert) {
 /// Converts the `cert` into an `X509PublicKeyCert`.
 pub fn x509_public_key_cert(cert: &X509) -> X509PublicKeyCert {
     X509PublicKeyCert {
-        certificate_der: cert_to_der(&cert),
+        certificate_der: cert_to_der(cert),
     }
 }
 
@@ -188,9 +188,7 @@ impl CertBuilder {
             .set_version(version - 1) // OpenSSL uses index origin 0 for version
             .expect("unable to set version");
         builder
-            .set_serial_number(&serial_number(
-                self.serial_number.clone().unwrap_or(DEFAULT_SERIAL),
-            ))
+            .set_serial_number(&serial_number(self.serial_number.unwrap_or(DEFAULT_SERIAL)))
             .expect("unable to set serial number");
         let subject_cn = x509_name_with_cn(
             &self.cn.clone().unwrap_or_else(|| DEFAULT_CN.to_string()),
@@ -219,7 +217,7 @@ impl CertBuilder {
         }
         if let Some((ca_key, issuer)) = &self.ca_signing_data {
             // CA signed cert:
-            let issuer_cn = x509_name_with_cn(&issuer, self.duplicate_issuer_cn);
+            let issuer_cn = x509_name_with_cn(issuer, self.duplicate_issuer_cn);
             builder
                 .set_issuer_name(&issuer_cn)
                 .expect("unable to set issuer cn");
@@ -268,11 +266,14 @@ impl CertBuilder {
     }
 
     fn not_after_asn_1_time(&self) -> Asn1Time {
-        if let Some(not_after) = &self.not_after {
-            return Asn1Time::from_str_x509(not_after).expect("unable to create 'not after'");
+        if let Some(validity_days) = self.validity_days {
+            return Asn1Time::days_from_now(validity_days).expect("unable to create 'not after'");
         }
-        let validity_days = self.validity_days.unwrap_or(DEFAULT_VALIDITY_DAYS);
-        Asn1Time::days_from_now(validity_days).expect("unable to create 'not after'")
+        let not_after = self
+            .not_after
+            .clone()
+            .unwrap_or_else(|| RFC5280_NO_WELL_DEFINED_CERTIFICATE_EXPIRATION_DATE.to_string());
+        Asn1Time::from_str_x509(&not_after).expect("unable to create 'not after'")
     }
 }
 
@@ -321,6 +322,11 @@ impl CertWithPrivateKey {
     /// Returns a PEM encoding of the X.509 certificate.
     pub fn cert_pem(&self) -> Vec<u8> {
         self.x509.to_pem().expect("unable to PEM encode cert")
+    }
+
+    /// Returns a DER encoding of the X.509 certificate.
+    pub fn cert_der(&self) -> Vec<u8> {
+        self.x509.to_der().expect("unable to DER encode cert")
     }
 }
 
